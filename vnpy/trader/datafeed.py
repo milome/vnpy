@@ -44,12 +44,14 @@ def get_datafeed() -> BaseDatafeed:
         return datafeed
 
     # Read datafeed related global setting
-    datafeed_name: str = SETTINGS["datafeed.name"]
+    datafeed_name: str = SETTINGS.get("datafeed.name", "")
 
     if not datafeed_name:
         datafeed = BaseDatafeed()
 
         print(_("没有配置要使用的数据服务，请修改全局配置中的datafeed相关内容"))
+        print(_("提示：可以在代码中设置 SETTINGS['datafeed.name']，或在全局配置文件 vt_setting.json 中配置"))
+        print(_("常见数据服务：rqdata, xt, tushare, wind, ifind, tqsdk, udata 等"))
     else:
         module_name: str = f"vnpy_{datafeed_name}"
 

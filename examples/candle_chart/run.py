@@ -11,11 +11,11 @@ if __name__ == "__main__":
 
     database = get_database()
     bars = database.load_bar_data(
-        "IF888",
-        Exchange.CFFEX,
+        "MHImain",
+        Exchange.HKFE,
         interval=Interval.MINUTE,
-        start=datetime(2019, 7, 1),
-        end=datetime(2019, 7, 17)
+        start=datetime(2025, 11, 1),
+        end=datetime(2025, 11, 18)
     )
 
     widget = ChartWidget()
@@ -25,7 +25,7 @@ if __name__ == "__main__":
     widget.add_item(VolumeItem, "volume", "volume")
     widget.add_cursor()
 
-    n = 1000
+    n = 200000
     history = bars[:n]
     new_data = bars[n:]
 
