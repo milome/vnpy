@@ -64,6 +64,8 @@ class OrderType(Enum):
     """
     LIMIT = _("限价")
     MARKET = _("市价")
+    OPPONENT = _("对手价")    # 新增：对手价（买用卖一，卖用买一）
+    OVER = _("超价")         # 新增：超价（对手价基础上加价）
     STOP = "STOP"
     FAK = "FAK"
     FOK = "FOK"

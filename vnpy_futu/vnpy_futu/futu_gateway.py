@@ -82,16 +82,13 @@ DIRECTION_FUTU2VT: Dict[TrdSide, Tuple] = {
 # 委托类型映射
 ORDERTYPE_VT2FUTU: Dict[VtOrderType, str] = {
     VtOrderType.LIMIT: "NORMAL",       # 限价单
-    VtOrderType.MARKET: "MARKET",      # 市价单
+    VtOrderType.MARKET: "MARKET",      # 市价单（不推荐使用）
+    VtOrderType.OPPONENT: "NORMAL",    # 对手价（买用卖一，卖用买一）
+    VtOrderType.OVER: "NORMAL",        # 超价（对手价基础上加价）
 }
 
-# 特殊价格类型 - OPPONENT price implementation
-class OpponentPriceType:
-    """OPPONENT price type for aggressive pricing"""
-    OPPONENT = "OPPONENT"
-
-# OPPONENT price special marker - 使用高价格值来标识OPPONENT订单
-OPPONENT_PRICE_MARKER = 999999.0
+# 特殊价格类型 - 已重构为对手价和超价订单类型
+# 不再使用特殊价格标记，所有价格均由UI计算并传入
 
 # 追价功能配置类
 class ChaseConfig:
@@ -203,7 +200,7 @@ class FutuGateway(BaseGateway):
         self.thread: Thread = Thread(target=self.query_data)
 
         self.count: int = 0
-        self.interval: int = 3
+        self.interval: int = 1  # 改为1秒间隔，更及时地更新持仓和账户信息
         self.query_funcs: list = [self.query_account, self.query_position]
 
     def connect(self, setting: dict) -> None:
@@ -349,17 +346,29 @@ class FutuGateway(BaseGateway):
         futu_order_type: OrderType = OrderType.NORMAL  # 默认限价单
 
         # 根据VNpy订单类型决定实际执行方式
-        if req.reference == "OPPONENT":
-            # OPPONENT价格订单：UI已计算激进价格，直接使用
+        if req.reference == "OVER":
+            # 超价订单：UI已计算超价，直接使用
             futu_order_type = OrderType.NORMAL
             order_price = req.price
-            self.write_log(f"OPPONENT价格订单：{req.direction.value} -> 使用UI计算的激进价格 {order_price}")
+            self.write_log(f"超价订单：{req.direction.value} -> 使用UI计算的超价 {order_price}")
+
+        elif req.reference == "OPPONENT" or req.type == VtOrderType.OPPONENT:
+            # 对手价订单：UI已计算对手价，直接使用
+            futu_order_type = OrderType.NORMAL
+            order_price = req.price
+            self.write_log(f"对手价订单：{req.direction.value} -> 使用UI计算的对手价 {order_price}")
+
+        elif req.type == VtOrderType.OVER:
+            # 超价类型：UI已计算超价，直接使用
+            futu_order_type = OrderType.NORMAL
+            order_price = req.price
+            self.write_log(f"超价类型：{req.direction.value} -> 使用UI计算的超价 {order_price}")
 
         elif req.type == VtOrderType.MARKET:
-            # 市价单处理：UI已经计算了实际对手价，直接使用
+            # 市价单处理：UI已经计算了实际对手价，直接使用（不推荐使用）
             futu_order_type = OrderType.NORMAL
             order_price = req.price
-            self.write_log(f"市价单处理：使用UI计算的对手价 {order_price}")
+            self.write_log(f"市价单处理（不推荐）：使用UI计算的对手价 {order_price}")
 
         elif req.type == VtOrderType.LIMIT:
             # 限价单：使用用户指定价格
@@ -423,19 +432,6 @@ class FutuGateway(BaseGateway):
 
         if code:
             self.write_log(f"撤单失败：{data}")
-
-    def send_opponent_order(self, symbol: str, exchange: Exchange, direction: Direction, volume: float, reference: str = "") -> str:
-        """发送OPPONENT价格订单的便捷方法"""
-        req = OrderRequest(
-            symbol=symbol,
-            exchange=exchange,
-            direction=direction,
-            type=VtOrderType.LIMIT,  # 使用LIMIT类型
-            volume=volume,
-            price=OPPONENT_PRICE_MARKER,  # 使用特殊标记价格
-            reference=reference or "OPPONENT"
-        )
-        return self.send_order(req)
 
     def start_chase_order(self, orderid: str, vt_symbol: str, direction: Direction) -> None:
         """开始追价订单处理"""
@@ -525,6 +521,12 @@ class FutuGateway(BaseGateway):
     def on_order_update(self, order: OrderData) -> None:
         """订单状态更新处理"""
         orderid = order.orderid
+
+        # 检查订单完全成交时立即更新持仓信息
+        if order.status == Status.ALLTRADED:
+            # 订单完全成交后立即查询最新持仓
+            self.write_log(f"订单 {orderid} 完全成交，立即更新持仓信息")
+            self.query_position()
 
         # 检查是否是追价订单
         if orderid in self.chase_orders:
@@ -622,12 +624,27 @@ class FutuGateway(BaseGateway):
 
         for ix, row in data.iterrows():
             symbol, exchange = convert_symbol_futu2vt(row["code"])
+
+            # 解析持仓量和方向
+            qty = float(row["qty"])
+
+            # Futu API: 正值表示多仓，负值表示空仓
+            if qty > 0:
+                direction = Direction.LONG
+                volume = qty  # 显示实际数量
+            elif qty < 0:
+                direction = Direction.SHORT
+                volume = abs(qty)  # 显示实际数量，去除负号
+            else:
+                # 无持仓时跳过
+                continue
+
             pos: PositionData = PositionData(
                 symbol=symbol,
                 exchange=exchange,
-                direction=Direction.NET,
-                volume=row["qty"],
-                frozen=(float(row["qty"]) - float(row["can_sell_qty"])),
+                direction=direction,  # 明确的多空方向
+                volume=volume,  # 实际持仓数量
+                frozen=abs(float(row["qty"]) - float(row["can_sell_qty"])),  # 冻结数量也取绝对值
                 price=float(row["cost_price"]),
                 pnl=float(row["pl_val"]),
                 gateway_name=self.gateway_name,

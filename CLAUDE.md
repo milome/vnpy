@@ -300,7 +300,151 @@ mypy vnpy        # Type checking (strict mode enabled)
 3. Process data in event handlers (runs in separate thread)
 4. Update UI via thread-safe Qt signals/slots
 
-## Recent Implementation: Market Price & OPPONENT Price Support (Enhanced)
+## Latest Enhancement: Order Type Redesign (November 2024)
+
+### Overview
+Completely redesigned the order type system based on futures trading requirements. The previous market price concept (designed for stocks with price limits) is not applicable to futures like HSI which have no daily limits. This enhancement provides clearer concepts and better user experience.
+
+### Conceptual Redesign
+
+#### **Previous Concepts (Issues)**:
+- **Market Price** = Price limit (涨停/跌停价) → Meaningless for futures without limits
+- **OPPONENT** = English term → Not intuitive for Chinese users
+
+#### **New Concepts (Enhanced)**:
+- **Limit Price (限价)** = User-specified exact price
+- **Opponent Price (对手价)** = Buy uses ask price, sell uses bid price (former market price logic)
+- **Over Price (超价)** = Opponent price + premium for aggressive execution (former OPPONENT logic)
+- **Market Price (市价)** = Temporarily kept but deprecated
+
+### Implementation Changes
+
+#### 1. OrderType Enumeration (`vnpy/trader/constant.py`)
+
+```python
+class OrderType(Enum):
+    """
+    Order type.
+    """
+    LIMIT = _("限价")        # Limit orders with user-specified price
+    MARKET = _("市价")       # Market orders (deprecated for futures)
+    OPPONENT = _("对手价")   # Opponent price (buy=ask, sell=bid)
+    OVER = _("超价")         # Over price (opponent + premium)
+    STOP = "STOP"
+    FAK = "FAK"
+    FOK = "FOK"
+    RFQ = _("询价")
+    ETF = "ETF"
+```
+
+#### 2. Gateway Mapping (`vnpy_futu/vnpy_futu/futu_gateway.py`)
+
+```python
+# Order type mapping
+ORDERTYPE_VT2FUTU: Dict[VtOrderType, str] = {
+    VtOrderType.LIMIT: "NORMAL",       # Limit orders
+    VtOrderType.MARKET: "MARKET",      # Market orders (not recommended)
+    VtOrderType.OPPONENT: "NORMAL",    # Opponent price (buy=ask, sell=bid)
+    VtOrderType.OVER: "NORMAL",        # Over price (opponent + premium)
+}
+```
+
+#### 3. UI Logic Redesign (`vnpy/trader/ui/widget.py`)
+
+**Removed Components**:
+- OPPONENT checkbox (now integrated as order type)
+- Special price section (consolidated into order types)
+
+**Enhanced Components**:
+- Order type dropdown now includes all pricing options
+- Automatic price calculation based on selected type
+- Real-time price updates for all calculated types
+
+#### 4. Price Calculation Logic
+
+**Opponent Price Calculation**:
+```python
+def calculate_and_display_opponent_price(self) -> None:
+    """Calculate opponent price (buy=ask, sell=bid)"""
+    if direction == Direction.LONG:
+        # Buy orders use ask price
+        price = tick_data.ask_price_1 if tick_data.ask_price_1 > 0 else tick_data.last_price
+    else:
+        # Sell orders use bid price
+        price = tick_data.bid_price_1 if tick_data.bid_price_1 > 0 else tick_data.last_price
+```
+
+**Over Price Calculation**:
+```python
+def calculate_and_display_over_price(self) -> None:
+    """Calculate over price (opponent + premium with risk controls)"""
+    # Enhanced risk control logic with spread checking
+    MAX_OVER_PREMIUM = 0.2  # Maximum 0.2% premium
+
+    if direction == Direction.LONG:
+        base_price = tick_data.ask_price_1 if tick_data.ask_price_1 > 0 else tick_data.last_price
+        over_price = base_price * (1 + MAX_OVER_PREMIUM / 100)
+    else:
+        base_price = tick_data.bid_price_1 if tick_data.bid_price_1 > 0 else tick_data.last_price
+        over_price = base_price * (1 - MAX_OVER_PREMIUM / 100)
+```
+
+### Order Type Behavior Matrix
+
+| Order Type | Price Input | Price Display | Execution Strategy | Use Case |
+|------------|-------------|---------------|-------------------|----------|
+| **Limit (限价)** | User-specified | Editable | Exact price | Normal trading, price control |
+| **Opponent (对手价)** | Auto-calculated | Read-only | Real-time opponent price | Quick execution at market |
+| **Over (超价)** | Auto-calculated | Read-only | Opponent + 0.2% premium | Aggressive immediate execution |
+| **Market (市价)** | Auto-calculated | Read-only | **Deprecated** for futures | Legacy support only |
+
+### Benefits of Redesign
+
+#### **Conceptual Clarity**:
+- **对手价 (Opponent Price)**: Clear Chinese terminology
+- **超价 (Over Price)**: Intuitive concept for aggressive pricing
+- **Market Neutral**: No confusion with stock market price limits
+
+#### **User Experience**:
+- **Simplified Interface**: One dropdown for all pricing options
+- **Intuitive Names**: Chinese terms that traders understand
+- **Clear Behavior**: Predictable price calculation for each type
+
+#### **Technical Advantages**:
+- **Cleaner Code**: No special checkbox logic
+- **Better Maintainability**: Unified order type handling
+- **Future Extensible**: Easy to add new pricing strategies
+
+### Usage Examples
+
+#### **Opponent Price Trading**:
+1. Select "对手价" (Opponent) from order type dropdown
+2. Watch price auto-calculate: Buy → Ask price, Sell → Bid price
+3. Price field becomes read-only showing exact execution price
+4. Submit order with real-time calculated price
+
+#### **Over Price Trading**:
+1. Select "超价" (Over) from order type dropdown
+2. Watch aggressive price calculate: Opponent + 0.2% premium
+3. Risk warnings appear if spread too wide (⚠️ icon)
+4. Submit order with enhanced execution probability
+
+#### **Migration from Previous Design**:
+- **Old Market Orders** → Use **Opponent Price** instead
+- **Old OPPONENT Checkbox** → Use **Over Price** order type instead
+- **Limit Orders** → No change, same behavior
+
+### Risk Management Enhancements
+
+The Over Price type includes enhanced risk controls:
+- **Spread Monitoring**: Warns when bid-ask spread > 1%
+- **Premium Limits**: Maximum 0.2% over opponent price
+- **Price Deviation**: Auto-correction when price deviates > 0.5% from mid-price
+- **User Confirmation**: Popup warnings for high-risk conditions
+
+This redesign provides a more intuitive and safer trading experience specifically optimized for futures markets while maintaining all the advanced features of the intelligent chase system.
+
+## Previous Implementation: Market Price & OPPONENT Price Support (Superseded)
 
 ### Overview
 Added comprehensive support for market price and OPPONENT price order types in the Futu gateway with full UI integration and real-time price calculation. This enhancement provides professional-grade order execution capabilities with transparent pricing and eliminates placeholder price issues.

@@ -750,9 +750,7 @@ class TradingWidget(QtWidgets.QWidget):
         self.price_check: QtWidgets.QCheckBox = QtWidgets.QCheckBox()
         self.price_check.setToolTip(_("设置价格随行情更新"))
 
-        self.opponent_check: QtWidgets.QCheckBox = QtWidgets.QCheckBox()
-        self.opponent_check.setToolTip(_("使用OPPONENT价格（激进对手价）"))
-        self.opponent_check.setText(_("OPPONENT"))
+        # 移除OPPONENT复选框，改为订单类型
 
         # 添加追价功能配置
         self.chase_check: QtWidgets.QCheckBox = QtWidgets.QCheckBox()
@@ -781,8 +779,7 @@ class TradingWidget(QtWidgets.QWidget):
         self.chase_step_spin.setDecimals(2)
         self.chase_step_spin.setToolTip(_("每次追价步长"))
 
-        # 当OPPONENT被选中时，自动设置订单类型为限价并清空价格输入
-        self.opponent_check.stateChanged.connect(self.on_opponent_checked)
+        # 移除OPPONENT事件连接，现在通过订单类型下拉框处理
 
         # 追价功能状态变化处理
         self.chase_check.stateChanged.connect(self.on_chase_enabled_changed)
@@ -808,8 +805,6 @@ class TradingWidget(QtWidgets.QWidget):
         grid.addWidget(QtWidgets.QLabel(_("类型")), 5, 0)
         grid.addWidget(QtWidgets.QLabel(_("价格")), 6, 0)
         grid.addWidget(QtWidgets.QLabel(_("数量")), 7, 0)
-        grid.addWidget(QtWidgets.QLabel(_("特殊价格")), 8, 0)
-        grid.addWidget(QtWidgets.QLabel(_("接口")), 9, 0)
         grid.addWidget(self.exchange_combo, 0, 1, 1, 2)
         grid.addWidget(self.symbol_line, 1, 1, 1, 2)
         grid.addWidget(self.name_line, 2, 1, 1, 2)
@@ -819,23 +814,21 @@ class TradingWidget(QtWidgets.QWidget):
         grid.addWidget(self.price_line, 6, 1, 1, 1)
         grid.addWidget(self.price_check, 6, 2, 1, 1)
         grid.addWidget(self.volume_line, 7, 1, 1, 2)
-        grid.addWidget(QtWidgets.QLabel(_("特殊价格")), 8, 0)
-        grid.addWidget(self.opponent_check, 8, 1, 1, 2)
 
         # 追价配置区域
-        grid.addWidget(QtWidgets.QLabel(_("追价设置")), 9, 0)
-        grid.addWidget(self.chase_check, 9, 1, 1, 2)
-        grid.addWidget(QtWidgets.QLabel(_("追价次数")), 10, 0)
-        grid.addWidget(self.chase_times_spin, 10, 1, 1, 2)
-        grid.addWidget(QtWidgets.QLabel(_("最大滑点")), 11, 0)
-        grid.addWidget(self.max_slippage_spin, 11, 1, 1, 2)
-        grid.addWidget(QtWidgets.QLabel(_("追价步长")), 12, 0)
-        grid.addWidget(self.chase_step_spin, 12, 1, 1, 2)
+        grid.addWidget(QtWidgets.QLabel(_("追价设置")), 8, 0)
+        grid.addWidget(self.chase_check, 8, 1, 1, 2)
+        grid.addWidget(QtWidgets.QLabel(_("追价次数")), 9, 0)
+        grid.addWidget(self.chase_times_spin, 9, 1, 1, 2)
+        grid.addWidget(QtWidgets.QLabel(_("最大滑点")), 10, 0)
+        grid.addWidget(self.max_slippage_spin, 10, 1, 1, 2)
+        grid.addWidget(QtWidgets.QLabel(_("追价步长")), 11, 0)
+        grid.addWidget(self.chase_step_spin, 11, 1, 1, 2)
 
-        grid.addWidget(QtWidgets.QLabel(_("接口")), 13, 0)
-        grid.addWidget(self.gateway_combo, 13, 1, 1, 2)
-        grid.addWidget(send_button, 14, 0, 1, 3)
-        grid.addWidget(cancel_button, 15, 0, 1, 3)
+        grid.addWidget(QtWidgets.QLabel(_("接口")), 12, 0)
+        grid.addWidget(self.gateway_combo, 12, 1, 1, 2)
+        grid.addWidget(send_button, 13, 0, 1, 3)
+        grid.addWidget(cancel_button, 14, 0, 1, 3)
 
         # Market depth display area
         bid_color: str = "rgb(255,174,201)"
@@ -959,21 +952,12 @@ class TradingWidget(QtWidgets.QWidget):
         if self.price_check.isChecked():
             self.price_line.setText(f"{tick.last_price:.{price_digits}f}")
 
-        # 实时更新市价单和OPPONENT价格 - 强制刷新确保最新价格
+        # 实时更新对手价和超价的价格显示
         order_type_text = str(self.order_type_combo.currentText())
         current_price_text = str(self.price_line.text())
 
-        if order_type_text == OrderType.MARKET.value and not self.opponent_check.isChecked():
-            # 市价单：强制实时更新价格，特别是当显示"等待行情数据..."时
-            if current_price_text in ["等待行情数据...", "请先输入合约代码", "0.00", ""]:
-                # 立即更新，因为现在有了行情数据
-                self.calculate_and_display_market_price()
-                self.price_line.setEnabled(False)
-            else:
-                # 正常的实时更新
-                self.calculate_and_display_market_price()
-        elif self.opponent_check.isChecked():
-            # OPPONENT订单：强制实时更新激进价格，特别是当显示"等待行情数据..."时
+        if order_type_text == OrderType.OPPONENT.value:
+            # 对手价：强制实时更新价格
             if current_price_text in ["等待行情数据...", "请先输入合约代码", "0.00", ""]:
                 # 立即更新，因为现在有了行情数据
                 self.calculate_and_display_opponent_price()
@@ -981,6 +965,18 @@ class TradingWidget(QtWidgets.QWidget):
             else:
                 # 正常的实时更新
                 self.calculate_and_display_opponent_price()
+        elif order_type_text == OrderType.OVER.value:
+            # 超价：强制实时更新价格
+            if current_price_text in ["等待行情数据...", "请先输入合约代码", "0.00", ""]:
+                # 立即更新，因为现在有了行情数据
+                self.calculate_and_display_over_price()
+                self.price_line.setEnabled(False)
+            else:
+                # 正常的实时更新
+                self.calculate_and_display_over_price()
+        elif order_type_text == OrderType.MARKET.value:
+            # 市价单（不推荐）：使用对手价逻辑
+            self.calculate_and_display_opponent_price()
 
     def set_vt_symbol(self) -> None:
         """
@@ -1025,21 +1021,26 @@ class TradingWidget(QtWidgets.QWidget):
 
         self.main_engine.subscribe(req, gateway_name)
 
-        # 订阅后立即检查并更新价格显示（如果当前是市价单或OPPONENT模式）
+        # 订阅后立即检查并更新价格显示（根据订单类型）
         # 给一个短暂延迟让订阅生效，然后自动计算价格
         from threading import Timer
         def delayed_price_update():
             order_type_text = str(self.order_type_combo.currentText())
-            if order_type_text == OrderType.MARKET.value and not self.opponent_check.isChecked():
-                # 市价单：自动计算并显示实时价格
-                self.calculate_and_display_market_price()
-                # 如果没有数据，延迟重试
-                if self.price_line.text() == "等待行情数据...":
-                    Timer(1.0, self.calculate_and_display_market_price).start()
-            elif self.opponent_check.isChecked():
-                # OPPONENT订单：自动计算并显示激进价格
+            if order_type_text == OrderType.OPPONENT.value:
+                # 对手价：自动计算并显示
                 self.calculate_and_display_opponent_price()
                 # 如果没有数据，延迟重试
+                if self.price_line.text() == "等待行情数据...":
+                    Timer(1.0, self.calculate_and_display_opponent_price).start()
+            elif order_type_text == OrderType.OVER.value:
+                # 超价：自动计算并显示
+                self.calculate_and_display_over_price()
+                # 如果没有数据，延迟重试
+                if self.price_line.text() == "等待行情数据...":
+                    Timer(1.0, self.calculate_and_display_over_price).start()
+            elif order_type_text == OrderType.MARKET.value:
+                # 市价单（不推荐）：使用对手价逻辑
+                self.calculate_and_display_opponent_price()
                 if self.price_line.text() == "等待行情数据...":
                     Timer(1.0, self.calculate_and_display_opponent_price).start()
 
@@ -1077,18 +1078,6 @@ class TradingWidget(QtWidgets.QWidget):
         self.ap4_label.setText("")
         self.ap5_label.setText("")
 
-    def on_opponent_checked(self, state: int) -> None:
-        """处理OPPONENT价格复选框状态变化"""
-        if state == 2:  # Checked
-            # 选中OPPONENT时，强制设置为限价单并显示激进对手价
-            self.order_type_combo.setCurrentText(OrderType.LIMIT.value)
-            self.calculate_and_display_opponent_price()
-            self.price_line.setEnabled(False)
-            self.price_check.setChecked(False)
-        else:  # Unchecked
-            # 取消OPPONENT时，重新启用价格输入
-            self.price_line.setEnabled(True)
-
     def on_chase_enabled_changed(self, state: int) -> None:
         """处理追价功能开关状态变化"""
         enabled = (state == 2)
@@ -1121,11 +1110,14 @@ class TradingWidget(QtWidgets.QWidget):
     def on_direction_changed(self) -> None:
         """处理交易方向改变"""
         order_type_text = str(self.order_type_combo.currentText())
-        if order_type_text == OrderType.MARKET.value and not self.opponent_check.isChecked():
-            # 市价单：重新计算价格
-            self.calculate_and_display_market_price()
-        elif self.opponent_check.isChecked():
-            # OPPONENT订单：重新计算激进价格
+        if order_type_text == OrderType.OPPONENT.value:
+            # 对手价：重新计算价格
+            self.calculate_and_display_opponent_price()
+        elif order_type_text == OrderType.OVER.value:
+            # 超价：重新计算价格
+            self.calculate_and_display_over_price()
+        elif order_type_text == OrderType.MARKET.value:
+            # 市价单（不推荐）：使用对手价逻辑
             self.calculate_and_display_opponent_price()
 
     def on_order_type_changed(self, order_type_text: str) -> None:
@@ -1137,18 +1129,64 @@ class TradingWidget(QtWidgets.QWidget):
             if symbol and exchange_value:
                 self.vt_symbol = f"{symbol}.{exchange_value}"
 
-        if order_type_text == OrderType.MARKET.value and not self.opponent_check.isChecked():
-            # 市价单：立即计算并显示实时对手价，设为只读
-            self.calculate_and_display_market_price()
+        if order_type_text == OrderType.OPPONENT.value:
+            # 对手价：买用卖一，卖用买一
+            self.calculate_and_display_opponent_price()
+            self.price_line.setEnabled(False)  # 设为只读
+        elif order_type_text == OrderType.OVER.value:
+            # 超价：对手价基础上加价
+            self.calculate_and_display_over_price()
+            self.price_line.setEnabled(False)  # 设为只读
+        elif order_type_text == OrderType.MARKET.value:
+            # 市价单：暂时保留原逻辑，但不推荐使用
+            self.calculate_and_display_opponent_price()  # 使用对手价逻辑
             self.price_line.setEnabled(False)
-        elif order_type_text == OrderType.LIMIT.value and not self.opponent_check.isChecked():
+        elif order_type_text == OrderType.LIMIT.value:
             # 限价单：启用价格输入
             self.price_line.setEnabled(True)
             if self.price_line.text() == "0.00":  # 如果是系统设置的市价，清空让用户输入
                 self.price_line.clear()
 
     def calculate_and_display_opponent_price(self) -> None:
-        """计算并显示OPPONENT价格的激进对手价"""
+        """计算并显示对手价（买用卖一，卖用买一）"""
+        if not self.vt_symbol:
+            self.price_line.setText("请先输入合约代码")
+            self.price_line.setToolTip("请先输入合约代码和选择交易所")
+            return
+
+        # 获取当前合约的行情数据
+        tick_data = self.main_engine.get_tick(self.vt_symbol)
+        if not tick_data:
+            self.price_line.setText("等待行情数据...")
+            self.price_line.setToolTip(f"正在等待 {self.vt_symbol} 的行情数据，请确保已订阅该合约")
+            self.main_engine.write_log(f"对手价: 等待 {self.vt_symbol} 行情数据，请确保已订阅该合约")
+            return
+
+        # 根据方向计算对手价
+        direction_text = str(self.direction_combo.currentText())
+        direction = Direction(direction_text)
+
+        if direction == Direction.LONG:
+            # 买单使用卖一价
+            opponent_price = tick_data.ask_price_1 if tick_data.ask_price_1 > 0 else tick_data.last_price
+        else:
+            # 卖单使用买一价
+            opponent_price = tick_data.bid_price_1 if tick_data.bid_price_1 > 0 else tick_data.last_price
+
+        if opponent_price > 0:
+            # 显示对手价
+            self.price_line.setText(f"{opponent_price:.3f}")
+            # 设置工具提示显示更新时间
+            import datetime
+            update_time = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            price_source = "ask" if direction == Direction.LONG else "bid"
+            self.price_line.setToolTip(f"对手价({price_source}) - 更新: {update_time}")
+        else:
+            self.price_line.setText("0.00")
+            self.price_line.setToolTip("无有效对手价")
+
+    def calculate_and_display_over_price(self) -> None:
+        """计算并显示超价（对手价基础上加价，原OPPONENT逻辑，增强风险控制）"""
         if not self.vt_symbol:
             self.price_line.setText("请先输入合约代码")
             self.price_line.setToolTip("请先输入合约代码和选择交易所")
@@ -1160,33 +1198,85 @@ class TradingWidget(QtWidgets.QWidget):
             self.price_line.setText("等待行情数据...")
             self.price_line.setToolTip(f"正在等待 {self.vt_symbol} 的行情数据，请确保已订阅该合约")
             # 记录提示信息
-            self.main_engine.write_log(f"OPPONENT价格: 等待 {self.vt_symbol} 行情数据，请确保已订阅该合约")
+            self.main_engine.write_log(f"超价: 等待 {self.vt_symbol} 行情数据，请确保已订阅该合约")
             return
 
-        # 根据方向计算激进对手价
+        # 根据方向计算超价（对手价基础上加价）
         direction_text = str(self.direction_combo.currentText())
         direction = Direction(direction_text)
 
-        if direction == Direction.LONG:
-            # 买单使用卖一价，更激进一些
-            base_price = tick_data.ask_price_1 if tick_data.ask_price_1 > 0 else tick_data.last_price
-            opponent_price = base_price * 1.001  # 增加0.1%
-        else:
-            # 卖单使用买一价，更激进一些
-            base_price = tick_data.bid_price_1 if tick_data.bid_price_1 > 0 else tick_data.last_price
-            opponent_price = base_price * 0.999  # 减少0.1%
+        # 🛡️ 增强风险控制：检查价差和流动性
+        bid_ask_spread = abs(tick_data.ask_price_1 - tick_data.bid_price_1) if (tick_data.ask_price_1 > 0 and tick_data.bid_price_1 > 0) else 0
+        mid_price = (tick_data.ask_price_1 + tick_data.bid_price_1) / 2 if (tick_data.ask_price_1 > 0 and tick_data.bid_price_1 > 0) else tick_data.last_price
 
-        if opponent_price > 0:
-            # 显示实时OPPONENT价格
-            self.price_line.setText(f"{opponent_price:.3f}")
-            # 设置工具提示显示更新时间和计算详情
+        # 风险控制参数
+        MAX_SPREAD_PCT = 1.0  # 最大买卖价差比例 1%
+        MAX_OVER_PREMIUM = 0.2  # 最大超价溢价 0.2%
+        MIN_VOLUME = 1  # 最小盘口数量要求
+
+        # 检查市场流动性风险
+        risk_warnings = []
+
+        if mid_price > 0:
+            spread_pct = (bid_ask_spread / mid_price) * 100
+            if spread_pct > MAX_SPREAD_PCT:
+                risk_warnings.append(f"价差过大({spread_pct:.2f}%)")
+
+        if direction == Direction.LONG:
+            # 买单检查卖盘流动性
+            if tick_data.ask_volume_1 < MIN_VOLUME:
+                risk_warnings.append(f"卖盘不足({tick_data.ask_volume_1})")
+        else:
+            # 卖单检查买盘流动性
+            if tick_data.bid_volume_1 < MIN_VOLUME:
+                risk_warnings.append(f"买盘不足({tick_data.bid_volume_1})")
+
+        if direction == Direction.LONG:
+            # 买单使用卖一价，超价加价
+            base_price = tick_data.ask_price_1 if tick_data.ask_price_1 > 0 else tick_data.last_price
+            over_price = base_price * (1 + MAX_OVER_PREMIUM / 100)  # 最大0.2%溢价
+        else:
+            # 卖单使用买一价，超价减价
+            base_price = tick_data.bid_price_1 if tick_data.bid_price_1 > 0 else tick_data.last_price
+            over_price = base_price * (1 - MAX_OVER_PREMIUM / 100)  # 最大0.2%折扣
+
+        # 🛡️ 额外安全检查：确保价格合理性
+        if mid_price > 0:
+            price_deviation_pct = abs(over_price - mid_price) / mid_price * 100
+            if price_deviation_pct > 0.5:  # 超过0.5%偏离中间价
+                risk_warnings.append(f"价格偏离过大({price_deviation_pct:.2f}%)")
+                # 修正到更安全的价格
+                if direction == Direction.LONG:
+                    over_price = mid_price * 1.002  # 中间价+0.2%
+                else:
+                    over_price = mid_price * 0.998  # 中间价-0.2%
+
+        if over_price > 0:
+            # 显示超价（带风险提示）
+            price_display = f"{over_price:.3f}"
+            if risk_warnings:
+                price_display += "⚠️"
+
+            self.price_line.setText(price_display)
+
+            # 设置详细的工具提示（包含风险信息）
             import datetime
             update_time = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
-            price_source = "ask+0.1%" if direction == Direction.LONG else "bid-0.1%"
-            self.price_line.setToolTip(f"OPPONENT激进价({price_source}) 基准:{base_price:.3f} - 最后更新: {update_time}")
+            price_source = f"ask+{MAX_OVER_PREMIUM}%" if direction == Direction.LONG else f"bid-{MAX_OVER_PREMIUM}%"
+
+            tooltip_text = f"超价({price_source}) 基准:{base_price:.3f} - 更新: {update_time}"
+            if risk_warnings:
+                tooltip_text += f"\n⚠️ 风险提示: {', '.join(risk_warnings)}"
+                tooltip_text += "\n🛡️ 已应用保守定价保护"
+
+            self.price_line.setToolTip(tooltip_text)
+
+            # 记录风险警告到日志
+            if risk_warnings:
+                self.main_engine.write_log(f"🛡️ 超价风险控制: {', '.join(risk_warnings)} - 已调整为保守定价")
         else:
             self.price_line.setText("0.00")
-            self.price_line.setToolTip("无有效OPPONENT价格")
+            self.price_line.setToolTip("无有效超价")
 
     def calculate_and_display_market_price(self) -> None:
         """计算并显示市价单的实时对手价"""
@@ -1279,36 +1369,94 @@ class TradingWidget(QtWidgets.QWidget):
 
         direction = Direction(str(self.direction_combo.currentText()))
 
-        if self.opponent_check.isChecked():
-            # OPPONENT价格：必须使用最新计算的激进价格
+        # 根据订单类型确定价格
+        if order_type == OrderType.OVER.value:
+            # 超价：必须使用最新计算的超价（带风险控制）
             if not tick_data:
-                QtWidgets.QMessageBox.critical(self, _("委托失败"), _("无法获取实时行情，无法计算OPPONENT价格"))
+                QtWidgets.QMessageBox.critical(self, _("委托失败"), _("无法获取实时行情，无法计算超价"))
                 return
 
-            # 重新计算最新OPPONENT价格
+            # 🛡️ 应用与UI相同的风险控制逻辑
+            bid_ask_spread = abs(tick_data.ask_price_1 - tick_data.bid_price_1) if (tick_data.ask_price_1 > 0 and tick_data.bid_price_1 > 0) else 0
+            mid_price = (tick_data.ask_price_1 + tick_data.bid_price_1) / 2 if (tick_data.ask_price_1 > 0 and tick_data.bid_price_1 > 0) else tick_data.last_price
+
+            # 风险控制参数（与UI保持一致）
+            MAX_SPREAD_PCT = 1.0  # 最大买卖价差比例 1%
+            MAX_OVER_PREMIUM = 0.2  # 最大超价溢价 0.2%
+
+            # 检查流动性风险
+            if mid_price > 0:
+                spread_pct = (bid_ask_spread / mid_price) * 100
+                if spread_pct > MAX_SPREAD_PCT:
+                    # 价差过大，询问用户是否继续
+                    reply = QtWidgets.QMessageBox.question(
+                        self,
+                        "风险提示",
+                        f"当前买卖价差较大({spread_pct:.2f}%)，可能存在流动性风险。\n是否继续提交超价订单？",
+                        QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No
+                    )
+                    if reply == QtWidgets.QMessageBox.StandardButton.No:
+                        return
+
+            # 计算保守的超价
             if direction == Direction.LONG:
                 base_price = tick_data.ask_price_1 if tick_data.ask_price_1 > 0 else tick_data.last_price
-                price = base_price * 1.001  # +0.1%
+                price = base_price * (1 + MAX_OVER_PREMIUM / 100)  # 最大0.2%溢价
             else:
                 base_price = tick_data.bid_price_1 if tick_data.bid_price_1 > 0 else tick_data.last_price
-                price = base_price * 0.999  # -0.1%
+                price = base_price * (1 - MAX_OVER_PREMIUM / 100)  # 最大0.2%折扣
+
+            # 🛡️ 最终安全检查：限制价格偏离
+            if mid_price > 0:
+                price_deviation_pct = abs(price - mid_price) / mid_price * 100
+                if price_deviation_pct > 0.5:  # 超过0.5%偏离中间价
+                    # 修正到更安全的价格
+                    if direction == Direction.LONG:
+                        price = mid_price * 1.002  # 中间价+0.2%
+                    else:
+                        price = mid_price * 0.998  # 中间价-0.2%
 
             if price <= 0:
-                QtWidgets.QMessageBox.critical(self, _("委托失败"), _("OPPONENT价格计算失败"))
+                QtWidgets.QMessageBox.critical(self, _("委托失败"), _("超价计算失败"))
+                return
+
+            # 记录风险控制应用
+            ui_price = self.extract_price_from_text(price_text)
+            if ui_price > 0 and abs(price - ui_price) / ui_price > 0.001:
+                self.main_engine.write_log(f"🛡️ 超价风控: UI显示{ui_price:.3f} -> 安全价格{price:.3f}")
+            else:
+                self.main_engine.write_log(f"🛡️ 超价已通过风控检查: {price:.3f}")
+
+        elif order_type == OrderType.OPPONENT.value:
+            # 对手价：买用卖一，卖用买一
+            if not tick_data:
+                QtWidgets.QMessageBox.critical(self, _("委托失败"), _("无法获取实时行情，无法计算对手价"))
+                return
+
+            # 计算对手价
+            if direction == Direction.LONG:
+                price = tick_data.ask_price_1 if tick_data.ask_price_1 > 0 else tick_data.last_price
+            else:
+                price = tick_data.bid_price_1 if tick_data.bid_price_1 > 0 else tick_data.last_price
+
+            if price <= 0:
+                QtWidgets.QMessageBox.critical(self, _("委托失败"), _("无法获取有效的对手价"))
                 return
 
             # 记录价格对比
             ui_price = self.extract_price_from_text(price_text)
-            if ui_price > 0 and abs(price - ui_price) / ui_price > 0.001:  # 超过0.1%差异
-                self.main_engine.write_log(f"OPPONENT价格已更新: UI显示{ui_price:.3f} -> 最新计算{price:.3f}")
+            if ui_price > 0 and abs(price - ui_price) / ui_price > 0.001:
+                self.main_engine.write_log(f"对手价已更新: UI显示{ui_price:.3f} -> 最新计算{price:.3f}")
+            else:
+                self.main_engine.write_log(f"对手价确认: {price:.3f}")
 
-        elif order_type == OrderType.MARKET:
-            # 市价单：必须使用最新计算的对手价
+        elif order_type == OrderType.MARKET.value:
+            # 市价单：暂时保留但不推荐，使用对手价逻辑
             if not tick_data:
                 QtWidgets.QMessageBox.critical(self, _("委托失败"), _("无法获取实时行情，无法执行市价单"))
                 return
 
-            # 重新计算最新市价
+            # 使用对手价逻辑
             if direction == Direction.LONG:
                 price = tick_data.ask_price_1 if tick_data.ask_price_1 > 0 else tick_data.last_price
             else:
@@ -1320,7 +1468,7 @@ class TradingWidget(QtWidgets.QWidget):
 
             # 记录价格对比
             ui_price = self.extract_price_from_text(price_text)
-            if ui_price > 0 and abs(price - ui_price) / ui_price > 0.001:  # 超过0.1%差异
+            if ui_price > 0 and abs(price - ui_price) / ui_price > 0.001:
                 self.main_engine.write_log(f"市价已更新: UI显示{ui_price:.2f} -> 最新计算{price:.2f}")
 
         else:
@@ -1335,9 +1483,11 @@ class TradingWidget(QtWidgets.QWidget):
                 return
 
         # 设置订单引用标识和追价配置
-        if self.opponent_check.isChecked():
+        if order_type == OrderType.OVER.value:
+            reference = "OVER"
+        elif order_type == OrderType.OPPONENT.value:
             reference = "OPPONENT"
-        elif order_type == OrderType.MARKET:
+        elif order_type == OrderType.MARKET.value:
             reference = "MarketPrice"
         else:
             reference = "ManualTrading"

@@ -14,7 +14,7 @@ if __name__ == "__main__":
         "MHImain",
         Exchange.HKFE,
         interval=Interval.MINUTE,
-        start=datetime(2025, 11, 1),
+        start=datetime(2017, 11, 14),
         end=datetime(2025, 11, 18)
     )
 
@@ -25,7 +25,7 @@ if __name__ == "__main__":
     widget.add_item(VolumeItem, "volume", "volume")
     widget.add_cursor()
 
-    n = 200000
+    n = 1000000
     history = bars[:n]
     new_data = bars[n:]
 

@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find \"d:\\Dev\\vnpy\\vnpy_futu\" -name \"__pycache__\" -exec rm -rf {} +)",
+      "Bash(pip uninstall vnpy_futu -y)",
+      "Bash(pip install -e .)",
+      "Bash(pip install -e . --no-deps)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

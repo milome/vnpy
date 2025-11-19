@@ -1,4 +1,6 @@
-from vnpy_futu import FutuGateway
+import sys
+sys.path.insert(0, 'D:/Dev/vnpy/vnpy_futu')
+from vnpy_futu.futu_gateway import FutuGateway
 from vnpy.event import EventEngine
 
 from vnpy.trader.engine import MainEngine
