@@ -2,7 +2,7 @@ import pandas as pd
 from copy import copy
 from datetime import datetime
 from threading import Thread
-from time import sleep
+from time import sleep, time
 from typing import Any, Dict, List, Set, Tuple, Union
 
 from futu import (
@@ -29,6 +29,7 @@ from vnpy.trader.constant import (
     Direction,
     Exchange,
     Offset,
+    OrderType as VtOrderType,
     Product,
     Status,
     Interval
@@ -77,6 +78,59 @@ DIRECTION_FUTU2VT: Dict[TrdSide, Tuple] = {
     TrdSide.BUY_BACK: (Direction.LONG, Offset.CLOSE),
     TrdSide.SELL_SHORT: (Direction.SHORT, Offset.CLOSE),
 }
+
+# 委托类型映射
+ORDERTYPE_VT2FUTU: Dict[VtOrderType, str] = {
+    VtOrderType.LIMIT: "NORMAL",       # 限价单
+    VtOrderType.MARKET: "MARKET",      # 市价单
+}
+
+# 特殊价格类型 - OPPONENT price implementation
+class OpponentPriceType:
+    """OPPONENT price type for aggressive pricing"""
+    OPPONENT = "OPPONENT"
+
+# OPPONENT price special marker - 使用高价格值来标识OPPONENT订单
+OPPONENT_PRICE_MARKER = 999999.0
+
+# 追价功能配置类
+class ChaseConfig:
+    """智能追价配置"""
+    def __init__(self, reference: str):
+        """从reference字符串解析追价配置"""
+        self.enabled = False
+        self.max_chase_times = 3
+        self.max_slippage_pct = 0.5
+        self.chase_step_pct = 0.05
+        self.chase_interval = 0.5
+
+        # 解析reference中的追价配置
+        if "_Chase" in reference:
+            try:
+                parts = reference.split("_")
+                for part in parts:
+                    if part.startswith("Chase"):
+                        self.enabled = True
+                        self.max_chase_times = int(part.replace("Chase", ""))
+                    elif part.startswith("Slip"):
+                        self.max_slippage_pct = float(part.replace("Slip", ""))
+                    elif part.startswith("Step"):
+                        self.chase_step_pct = float(part.replace("Step", ""))
+            except:
+                # 解析失败，使用默认值
+                self.enabled = True
+
+# 追价订单状态追踪
+class ChaseOrder:
+    """追价订单状态"""
+    def __init__(self, orderid: str, original_price: float, config: ChaseConfig):
+        self.orderid = orderid
+        self.original_price = original_price
+        self.current_price = original_price
+        self.chase_count = 0
+        self.config = config
+        self.last_chase_time = 0.0
+        self.is_chasing = False
 
 # 交易所映射
 EXCHANGE_VT2FUTU: Dict[Exchange, str] = {
@@ -133,6 +187,18 @@ class FutuGateway(BaseGateway):
         self.ticks: Dict[str, TickData] = {}
         self.trades: Set = set()
         self.contracts: Dict[str, ContractData] = {}
+
+        # 追价功能相关
+        self.chase_orders: Dict[str, ChaseOrder] = {}  # 追价订单追踪
+        self.chase_enabled: bool = True  # 全局追价开关
+
+        # 追价统计
+        self.chase_stats = {
+            "total_orders": 0,          # 总追价订单数
+            "successful_chases": 0,     # 成功追价次数
+            "failed_chases": 0,         # 失败追价次数
+            "total_slippage": 0.0,      # 累计滑点
+        }
 
         self.thread: Thread = Thread(target=self.query_data)
 
@@ -277,9 +343,36 @@ class FutuGateway(BaseGateway):
     def send_order(self, req: OrderRequest) -> str:
         """委托下单"""
         side: TrdSide = DIRECTION_VT2FUTU[req.direction]
-        futu_order_type: OrderType = OrderType.NORMAL  # 只支持限价单
 
-        # 设置调整价格限制
+        # 确定订单价格和类型
+        order_price = req.price
+        futu_order_type: OrderType = OrderType.NORMAL  # 默认限价单
+
+        # 根据VNpy订单类型决定实际执行方式
+        if req.reference == "OPPONENT":
+            # OPPONENT价格订单：UI已计算激进价格，直接使用
+            futu_order_type = OrderType.NORMAL
+            order_price = req.price
+            self.write_log(f"OPPONENT价格订单：{req.direction.value} -> 使用UI计算的激进价格 {order_price}")
+
+        elif req.type == VtOrderType.MARKET:
+            # 市价单处理：UI已经计算了实际对手价，直接使用
+            futu_order_type = OrderType.NORMAL
+            order_price = req.price
+            self.write_log(f"市价单处理：使用UI计算的对手价 {order_price}")
+
+        elif req.type == VtOrderType.LIMIT:
+            # 限价单：使用用户指定价格
+            futu_order_type = OrderType.NORMAL
+            order_price = req.price
+            self.write_log(f"限价单处理：使用用户价格 {order_price}")
+
+        else:
+            # 其他订单类型暂不支持
+            self.write_log(f"不支持的订单类型：{req.type}")
+            return ""
+
+        # 设置调整价格限制（用于风控）
         if req.direction is Direction.LONG:
             adjust_limit: float = 0.05
         else:
@@ -287,7 +380,7 @@ class FutuGateway(BaseGateway):
 
         futu_symbol: str = convert_symbol_vt2futu(req.symbol, req.exchange)
         code, data = self.trade_ctx.place_order(
-            req.price,
+            order_price,  # 使用计算后的价格
             req.volume,
             futu_symbol,
             side,
@@ -303,8 +396,23 @@ class FutuGateway(BaseGateway):
         for ix, row in data.iterrows():
             orderid: str = str(row["order_id"])
 
+        # 创建订单对象
         order: OrderData = req.create_order_data(orderid, self.gateway_name)
         self.on_order(order)
+
+        # 检查是否需要启用追价功能
+        chase_config = ChaseConfig(req.reference)
+        if chase_config.enabled and self.chase_enabled:
+            # 创建追价订单追踪
+            chase_order = ChaseOrder(orderid, req.price, chase_config)
+            self.chase_orders[orderid] = chase_order
+            self.chase_stats["total_orders"] += 1
+
+            self.write_log(f"启用智能追价: {req.symbol} 订单{orderid} - "
+                          f"追价{chase_config.max_chase_times}次, "
+                          f"最大滑点{chase_config.max_slippage_pct}%, "
+                          f"步长{chase_config.chase_step_pct}%")
+
         return order.vt_orderid
 
     def cancel_order(self, req: CancelRequest) -> None:
@@ -315,6 +423,140 @@ class FutuGateway(BaseGateway):
 
         if code:
             self.write_log(f"撤单失败：{data}")
+
+    def send_opponent_order(self, symbol: str, exchange: Exchange, direction: Direction, volume: float, reference: str = "") -> str:
+        """发送OPPONENT价格订单的便捷方法"""
+        req = OrderRequest(
+            symbol=symbol,
+            exchange=exchange,
+            direction=direction,
+            type=VtOrderType.LIMIT,  # 使用LIMIT类型
+            volume=volume,
+            price=OPPONENT_PRICE_MARKER,  # 使用特殊标记价格
+            reference=reference or "OPPONENT"
+        )
+        return self.send_order(req)
+
+    def start_chase_order(self, orderid: str, vt_symbol: str, direction: Direction) -> None:
+        """开始追价订单处理"""
+        if orderid not in self.chase_orders:
+            return
+
+        chase_order = self.chase_orders[orderid]
+        if chase_order.is_chasing or chase_order.chase_count >= chase_order.config.max_chase_times:
+            return
+
+        # 获取当前市场价格
+        current_tick = self.ticks.get(vt_symbol)
+        if not current_tick:
+            return
+
+        # 计算新的追价
+        new_price = self.calculate_chase_price(chase_order, current_tick, direction)
+        if new_price <= 0:
+            return
+
+        # 检查滑点限制
+        slippage_pct = abs(new_price - chase_order.original_price) / chase_order.original_price * 100
+        if slippage_pct > chase_order.config.max_slippage_pct:
+            self.write_log(f"订单{orderid}滑点超过限制: {slippage_pct:.2f}% > {chase_order.config.max_slippage_pct}%")
+            self.chase_stats["failed_chases"] += 1
+            return
+
+        # 检查追价间隔
+        current_time = time()
+        if current_time - chase_order.last_chase_time < chase_order.config.chase_interval:
+            return
+
+        # 执行追价
+        self.execute_chase_order(orderid, new_price, chase_order)
+
+    def calculate_chase_price(self, chase_order: ChaseOrder, tick: TickData, direction: Direction) -> float:
+        """计算追价的新价格"""
+        step_pct = chase_order.config.chase_step_pct / 100.0
+
+        if direction == Direction.LONG:
+            # 买单：使用ask价格 + 步长
+            base_price = tick.ask_price_1 if tick.ask_price_1 > 0 else tick.last_price
+            new_price = base_price * (1 + step_pct)
+        else:
+            # 卖单：使用bid价格 - 步长
+            base_price = tick.bid_price_1 if tick.bid_price_1 > 0 else tick.last_price
+            new_price = base_price * (1 - step_pct)
+
+        return new_price
+
+    def execute_chase_order(self, orderid: str, new_price: float, chase_order: ChaseOrder) -> None:
+        """执行追价操作"""
+        try:
+            chase_order.is_chasing = True
+            chase_order.chase_count += 1
+            chase_order.last_chase_time = time()
+
+            # 修改订单价格
+            code, data = self.trade_ctx.modify_order(
+                ModifyOrderOp.MODIFY,
+                orderid,
+                new_price,
+                0,  # 不修改数量
+                trd_env=self.env
+            )
+
+            if code == 0:  # 成功
+                chase_order.current_price = new_price
+                chase_order.is_chasing = False
+                self.chase_stats["successful_chases"] += 1
+
+                slippage = abs(new_price - chase_order.original_price)
+                self.chase_stats["total_slippage"] += slippage
+
+                self.write_log(f"追价成功: 订单{orderid} 价格 {chase_order.current_price} -> {new_price} "
+                              f"(第{chase_order.chase_count}次追价, 滑点{slippage:.3f})")
+            else:
+                chase_order.is_chasing = False
+                self.chase_stats["failed_chases"] += 1
+                self.write_log(f"追价失败: 订单{orderid} - {data}")
+
+        except Exception as e:
+            chase_order.is_chasing = False
+            self.chase_stats["failed_chases"] += 1
+            self.write_log(f"追价异常: 订单{orderid} - {str(e)}")
+
+    def on_order_update(self, order: OrderData) -> None:
+        """订单状态更新处理"""
+        orderid = order.orderid
+
+        # 检查是否是追价订单
+        if orderid in self.chase_orders:
+            chase_order = self.chase_orders[orderid]
+
+            # 如果订单被拒绝且还能继续追价，则启动追价
+            if (order.status in [Status.REJECTED, Status.CANCELLED] and
+                not chase_order.is_chasing and
+                chase_order.chase_count < chase_order.config.max_chase_times):
+
+                # 延迟一下再追价
+                def delayed_chase():
+                    sleep(chase_order.config.chase_interval)
+                    self.start_chase_order(orderid, order.vt_symbol, order.direction)
+
+                Thread(target=delayed_chase).start()
+
+            # 如果订单完全成交或取消，清除追价记录
+            elif order.status in [Status.ALLTRADED, Status.CANCELLED]:
+                if orderid in self.chase_orders:
+                    del self.chase_orders[orderid]
+
+    def get_chase_statistics(self) -> dict:
+        """获取追价统计信息"""
+        stats = self.chase_stats.copy()
+        stats["active_chase_orders"] = len(self.chase_orders)
+
+        if stats["total_orders"] > 0:
+            stats["chase_success_rate"] = stats["successful_chases"] / stats["total_orders"] * 100
+            stats["average_slippage"] = stats["total_slippage"] / stats["successful_chases"] if stats["successful_chases"] > 0 else 0
+
+        return stats
 
     def query_contract(self) -> None:
         """查询合约"""
@@ -565,6 +807,9 @@ class FutuGateway(BaseGateway):
             )
 
             self.on_order(order)
+
+            # 追价逻辑处理
+            self.on_order_update(order)
 
     def process_deal(self, data) -> None:
         """成交信息处理推送"""
