@@ -20,6 +20,7 @@ from ..event import (
     EVENT_TRADE,
     EVENT_ORDER,
     EVENT_POSITION,
+    EVENT_POSITION_VIEW,
     EVENT_ACCOUNT,
     EVENT_LOG
 )
@@ -533,6 +534,52 @@ class PositionMonitor(BaseMonitor):
         "pnl": {"display": _("盈亏"), "cell": PnlCell, "update": True},
         "gateway_name": {"display": _("接口"), "cell": BaseCell, "update": False},
     }
+
+    def register_event(self) -> None:
+        """
+        Register position events (view + legacy) to monitor.
+        """
+        self.signal.connect(self.process_event)
+        self.event_engine.register(EVENT_POSITION, self.signal.emit)
+
+        if SETTINGS.get("position.view.enabled", False):
+            self.event_engine.register(EVENT_POSITION_VIEW, self.signal.emit)
+
+    def process_event(self, event: Event) -> None:
+        """
+        Process position event and remove row if volume is zero.
+        """
+        position: PositionData = event.data
+        key: str = position.vt_positionid
+        
+        # If volume is zero, remove the row and don't process further
+        if position.volume <= 0:
+            if key in self.cells:
+                row_cells = self.cells[key]
+                # Get the row number from any cell
+                if row_cells:
+                    first_cell = next(iter(row_cells.values()))
+                    row: int = self.row(first_cell)
+                    if row >= 0:
+                        self.removeRow(row)
+                    del self.cells[key]
+            else:
+                # Key not in cells, but volume is 0 - try to find and remove by searching all rows
+                for row in range(self.rowCount()):
+                    item = self.item(row, 0)  # Get first column item
+                    if item and isinstance(item, BaseCell):
+                        cell_data = item.get_data()
+                        if cell_data and hasattr(cell_data, 'vt_positionid') and cell_data.vt_positionid == key:
+                            self.removeRow(row)
+                            # Also remove from cells if it exists
+                            if key in self.cells:
+                                del self.cells[key]
+                            break
+            # Don't call parent's process_event to avoid inserting/updating zero-volume positions
+            return
+        
+        # Otherwise, use parent's process_event
+        super().process_event(event)
 
 
 class AccountMonitor(BaseMonitor):

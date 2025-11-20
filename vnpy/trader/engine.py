@@ -1,5 +1,6 @@
 import smtplib
 import os
+import time
 import traceback
 from abc import ABC, abstractmethod
 from email.message import EmailMessage
@@ -7,14 +8,18 @@ from queue import Empty, Queue
 from threading import Thread
 from typing import TypeVar
 from collections.abc import Callable
+from collections import deque
+from copy import copy
+import time
 
-from vnpy.event import Event, EventEngine
+from vnpy.event import Event, EventEngine, EVENT_TIMER
 from .app import BaseApp
 from .event import (
     EVENT_TICK,
     EVENT_ORDER,
     EVENT_TRADE,
     EVENT_POSITION,
+    EVENT_POSITION_VIEW,
     EVENT_ACCOUNT,
     EVENT_CONTRACT,
     EVENT_LOG,
@@ -38,6 +43,7 @@ from .object import (
     ContractData,
     Exchange
 )
+from .constant import Direction, Offset, Status
 from .setting import SETTINGS
 from .utility import TRADER_DIR
 from .converter import OffsetConverter
@@ -355,8 +361,33 @@ class OmsEngine(BaseEngine):
 
         self.active_orders: dict[str, OrderData] = {}
         self.active_quotes: dict[str, QuoteData] = {}
+        
+        # Track previous order status to detect status changes
+        self.previous_order_status: dict[str, Status] = {}
 
         self.offset_converters: dict[str, OffsetConverter] = {}
+
+        self.refresh_queue: deque[str] = deque()
+        self.refresh_symbols: set[str] = set()
+        self.last_view_emit: dict[str, float] = {}
+        self.refresh_batch_size: int = 5
+        self.refresh_interval: float = 0.0
+        self.close_offsets: set[Offset] = {
+            Offset.CLOSE,
+            Offset.CLOSETODAY,
+            Offset.CLOSEYESTERDAY,
+        }
+        self.position_view_enabled: bool = SETTINGS.get("position.view.enabled", False)
+        self.position_view_emit_legacy: bool = SETTINGS.get("position.view.emit_legacy", True)
+        self.position_view_debug: bool = SETTINGS.get("position.view.debug", False)
+        
+        # Track removed positions to avoid processing gateway's repeated zero-volume events
+        self.removed_positions: set[str] = set()
+        
+        # Low-frequency tick logging (every N seconds per symbol, only when position exists)
+        self.tick_log_interval: float = 30.0  # Increased to 30 seconds to reduce log spam
+        self.last_tick_log: dict[str, float] = {}
+        self._last_timer_log: float = 0.0
 
         self.register_event()
 
@@ -369,16 +400,123 @@ class OmsEngine(BaseEngine):
         self.event_engine.register(EVENT_ACCOUNT, self.process_account_event)
         self.event_engine.register(EVENT_CONTRACT, self.process_contract_event)
         self.event_engine.register(EVENT_QUOTE, self.process_quote_event)
+        if self.position_view_enabled:
+            self.event_engine.register(EVENT_TIMER, self.process_timer_event)
 
     def process_tick_event(self, event: Event) -> None:
         """"""
         tick: TickData = event.data
         self.ticks[tick.vt_symbol] = tick
 
+        # Low-frequency tick logging (only when position exists, every N seconds per symbol)
+        if self.position_view_enabled:
+            has_position: bool = self._has_position_for_symbol(tick.vt_symbol)
+            # Also check continuous contract mapping
+            if not has_position:
+                for position in self.positions.values():
+                    if (position.volume > 0 and 
+                        position.exchange == tick.exchange and
+                        position.vt_symbol != tick.vt_symbol):
+                        common_prefix_len = min(len(tick.symbol), len(position.symbol), 3)
+                        if (tick.symbol[:common_prefix_len] == position.symbol[:common_prefix_len] and
+                            (tick.symbol.startswith(position.symbol[:3]) or 
+                             position.symbol.startswith(tick.symbol[:3]))):
+                            has_position = True
+                            break
+            
+            if has_position:
+                current_time: float = time.time()
+                last_log_time: float = self.last_tick_log.get(tick.vt_symbol, 0.0)
+                if current_time - last_log_time >= self.tick_log_interval:
+                    self.last_tick_log[tick.vt_symbol] = current_time
+                    self.main_engine.write_log(
+                        f"[Tick] {tick.vt_symbol} last={tick.last_price} ask1={tick.ask_price_1} bid1={tick.bid_price_1} volume={tick.volume}",
+                        "OmsEngine"
+                    )
+
+        if not self.position_view_enabled:
+            return
+
+        # Check direct match
+        if self._has_position_for_symbol(tick.vt_symbol):
+            self._enqueue_refresh_symbol(tick.vt_symbol)
+        
+        # Check continuous contract mapping (bidirectional)
+        # Case 1: MHI2511 tick -> MHImain position (tick is specific, position is continuous)
+        # Case 2: MHImain tick -> MHI2511 position (tick is continuous, position is specific)
+        for position in self.positions.values():
+            if (position.volume > 0 and 
+                position.exchange == tick.exchange and
+                position.vt_symbol != tick.vt_symbol):
+                # Check if symbols share common prefix (at least 3 characters)
+                common_prefix_len = min(len(tick.symbol), len(position.symbol), 3)
+                if (tick.symbol[:common_prefix_len] == position.symbol[:common_prefix_len] and
+                    (tick.symbol.startswith(position.symbol[:3]) or 
+                     position.symbol.startswith(tick.symbol[:3]))):
+                    self._enqueue_refresh_symbol(position.vt_symbol)
+                    if self.position_view_debug:
+                        self.main_engine.write_log(
+                            f"[PositionView] tick {tick.vt_symbol} triggers refresh for position {position.vt_symbol}",
+                            "OmsEngine"
+                        )
+
     def process_order_event(self, event: Event) -> None:
         """"""
         order: OrderData = event.data
+        previous_status: Status | None = self.previous_order_status.get(order.vt_orderid)
         self.orders[order.vt_orderid] = order
+
+        # Check if status changed to "全部成交" (only generate trade event on status change)
+        status_changed_to_filled: bool = (
+            order.status == Status.ALLTRADED and 
+            previous_status is not None and 
+            previous_status != Status.ALLTRADED
+        )
+        
+        # Update previous status
+        self.previous_order_status[order.vt_orderid] = order.status
+
+        # Only log and generate trade event if status just changed to ALLTRADED (not historical orders)
+        if status_changed_to_filled:
+            # Log order status change to fully filled
+            self.main_engine.write_log(
+                f"[OmsEngine] 订单全部成交: {order.vt_symbol} {order.direction} {order.traded}/{order.volume} "
+                f"orderid={order.orderid} status={order.status.value}",
+                "OmsEngine"
+            )
+            
+            # Check if we already have trade records for this order
+            has_trade: bool = False
+            for trade in self.trades.values():
+                if trade.vt_orderid == order.vt_orderid:
+                    has_trade = True
+                    break
+            
+            # If no trade event received, create synthetic trade event
+            if not has_trade and order.traded > 0 and order.direction:
+                from datetime import datetime
+                synthetic_trade: TradeData = TradeData(
+                    symbol=order.symbol,
+                    exchange=order.exchange,
+                    orderid=order.orderid,
+                    tradeid=f"{order.orderid}_filled",  # Synthetic tradeid
+                    direction=order.direction,
+                    offset=order.offset,
+                    price=order.price,  # Use order price as average fill price
+                    volume=order.traded,  # Use traded volume
+                    datetime=order.datetime or datetime.now(),
+                    gateway_name=order.gateway_name,
+                )
+                
+                # Trigger trade event to update position
+                trade_event: Event = Event(EVENT_TRADE, synthetic_trade)
+                self.event_engine.put(trade_event)
+                
+                self.main_engine.write_log(
+                    f"[OmsEngine] 自动生成成交事件: {synthetic_trade.vt_symbol} {synthetic_trade.direction} "
+                    f"{synthetic_trade.volume}@{synthetic_trade.price}",
+                    "OmsEngine"
+                )
 
         # If order is active, then update data in dict.
         if order.is_active():
@@ -397,15 +535,186 @@ class OmsEngine(BaseEngine):
         trade: TradeData = event.data
         self.trades[trade.vt_tradeid] = trade
 
+        # Always log trade event to confirm it's received
+        self.main_engine.write_log(
+            f"[OmsEngine] 收到成交事件: {trade.vt_symbol} {trade.direction} {trade.volume}@{trade.price} "
+            f"orderid={trade.orderid} tradeid={trade.tradeid}",
+            "OmsEngine"
+        )
+
         # Update to offset converter
         converter: OffsetConverter | None = self.offset_converters.get(trade.gateway_name, None)
         if converter:
             converter.update_trade(trade)
 
+        if self.position_view_enabled:
+            self._apply_trade_to_position(trade)
+        else:
+            self.main_engine.write_log(
+                f"[OmsEngine] position.view.enabled=False, 跳过持仓合并",
+                "OmsEngine"
+            )
+
     def process_position_event(self, event: Event) -> None:
         """"""
         position: PositionData = event.data
+        
+        old_position: PositionData | None = self.positions.get(position.vt_positionid)
+        
+        # If this position was already removed and gateway keeps pushing zero-volume events, ignore them
+        if position.vt_positionid in self.removed_positions:
+            if position.volume <= 0:
+                # Already removed and still zero volume, ignore to avoid flickering
+                return
+            else:
+                # Position was removed but gateway pushes volume > 0
+                # This is likely a stale gateway update after we closed the position
+                # Ignore it to avoid re-opening closed positions
+                # Only allow if old_position exists and has volume > 0 (meaning it was never actually removed)
+                if old_position and old_position.volume > 0:
+                    # Position still exists with volume > 0, remove from removed set and process normally
+                    self.removed_positions.discard(position.vt_positionid)
+                else:
+                    # This is a stale gateway update, ignore it
+                    self.main_engine.write_log(
+                        f"[OmsEngine] process_position_event: ignoring stale gateway update for {position.vt_positionid} "
+                        f"(removed but gateway pushed volume={position.volume})",
+                        "OmsEngine"
+                    )
+                    return
+        
+        # Update position data
         self.positions[position.vt_positionid] = position
+        
+        if self.position_view_enabled and old_position:
+            # When position view is enabled, preserve our calculated PnL if gateway pushes zero
+            # Gateway may push pnl=0, but we have calculated a non-zero PnL
+            gateway_pnl: float = position.pnl
+            calculated_pnl: float = old_position.pnl
+            
+            # If gateway pushes zero PnL but we have a calculated non-zero PnL, preserve it
+            if abs(gateway_pnl) < 1e-6 and abs(calculated_pnl) > 1e-6:
+                self.positions[position.vt_positionid].pnl = calculated_pnl
+                self.main_engine.write_log(
+                    f"[OmsEngine] process_position_event: preserved calculated pnl={calculated_pnl} for {position.vt_positionid} "
+                    f"(gateway pushed pnl={gateway_pnl})",
+                    "OmsEngine"
+                )
+
+        if self.position_view_debug:
+            self.main_engine.write_log(
+                f"[PositionView] gateway push {position.vt_positionid} "
+                f"volume={position.volume} price={position.price} pnl={position.pnl} frozen={position.frozen}",
+                "OmsEngine"
+            )
+
+        if self.position_view_enabled:
+            # Get the current position (may have preserved PnL)
+            current_position: PositionData = self.positions[position.vt_positionid]
+            
+            # If position is already closed (volume = 0) and we've already processed it, skip to avoid spam
+            if current_position.volume <= 0:
+                # Check if we already removed this position (to avoid duplicate processing)
+                if position.vt_positionid not in self.positions:
+                    # Already removed, skip
+                    return
+                # Remove it and emit zero-volume event (only once)
+                del self.positions[position.vt_positionid]
+                self.removed_positions.add(position.vt_positionid)  # Mark as removed
+                current_position.volume = 0.0
+                current_position.frozen = 0.0  # Also clear frozen to avoid showing as frozen
+                self._emit_position_view(current_position)
+                return
+            
+            # Check if both LONG and SHORT positions exist for the same symbol (shouldn't happen in net position mode)
+            # This might happen if gateway pushes incorrect position data
+            long_positionid: str = f"{position.gateway_name}.{position.vt_symbol}.{Direction.LONG.value}"
+            short_positionid: str = f"{position.gateway_name}.{position.vt_symbol}.{Direction.SHORT.value}"
+            long_pos: PositionData | None = self.positions.get(long_positionid)
+            short_pos: PositionData | None = self.positions.get(short_positionid)
+            
+            if long_pos and short_pos and long_pos.volume > 0 and short_pos.volume > 0:
+                # Both positions exist - this shouldn't happen in net position mode
+                # Check contract to see if it uses net position
+                contract: ContractData | None = self.contracts.get(position.vt_symbol)
+                if contract and contract.net_position:
+                    # Net position mode: merge positions
+                    net_volume: float = long_pos.volume - short_pos.volume
+                    if abs(net_volume) < 1e-6:
+                        # Net position is zero, remove both
+                        if long_positionid in self.positions:
+                            del self.positions[long_positionid]
+                            self.removed_positions.add(long_positionid)
+                        if short_positionid in self.positions:
+                            del self.positions[short_positionid]
+                            self.removed_positions.add(short_positionid)
+                        self.main_engine.write_log(
+                            f"[OmsEngine] process_position_event: removed both positions (net volume=0) for {position.vt_symbol}",
+                            "OmsEngine"
+                        )
+                        # Emit zero-volume events
+                        long_pos.volume = 0.0
+                        long_pos.frozen = 0.0
+                        short_pos.volume = 0.0
+                        short_pos.frozen = 0.0
+                        self._emit_position_view(long_pos)
+                        self._emit_position_view(short_pos)
+                        return
+                    elif net_volume > 0:
+                        # Net long position
+                        long_pos.volume = net_volume
+                        if short_positionid in self.positions:
+                            del self.positions[short_positionid]
+                            self.removed_positions.add(short_positionid)
+                        self.main_engine.write_log(
+                            f"[OmsEngine] process_position_event: merged positions to net LONG {net_volume} for {position.vt_symbol}",
+                            "OmsEngine"
+                        )
+                        short_pos.volume = 0.0
+                        short_pos.frozen = 0.0
+                        self._emit_position_view(short_pos)
+                        current_position = long_pos
+                    else:
+                        # Net short position
+                        short_pos.volume = abs(net_volume)
+                        if long_positionid in self.positions:
+                            del self.positions[long_positionid]
+                            self.removed_positions.add(long_positionid)
+                        self.main_engine.write_log(
+                            f"[OmsEngine] process_position_event: merged positions to net SHORT {abs(net_volume)} for {position.vt_symbol}",
+                            "OmsEngine"
+                        )
+                        long_pos.volume = 0.0
+                        long_pos.frozen = 0.0
+                        self._emit_position_view(long_pos)
+                        current_position = short_pos
+                else:
+                    # Not net position mode, but both exist - log warning
+                    self.main_engine.write_log(
+                        f"[OmsEngine] process_position_event: WARNING - both LONG and SHORT positions exist for {position.vt_symbol} "
+                        f"(LONG={long_pos.volume}, SHORT={short_pos.volume})",
+                        "OmsEngine"
+                    )
+            
+            # Process normal position update (volume > 0)
+                # Only emit view if data actually changed (to avoid flickering)
+                should_emit: bool = True
+                if old_position:
+                    # Check if key fields changed
+                    if (abs(old_position.volume - current_position.volume) < 1e-6 and
+                        abs(old_position.price - current_position.price) < 1e-6 and
+                        abs(old_position.frozen - current_position.frozen) < 1e-6 and
+                        abs(old_position.pnl - current_position.pnl) < 1e-6):
+                        should_emit = False
+                        if self.position_view_debug:
+                            self.main_engine.write_log(
+                                f"[PositionView] skip emit (no change) for {position.vt_positionid}",
+                                "OmsEngine"
+                            )
+                
+                if should_emit:
+                    self._emit_position_view(current_position)
+                self._enqueue_refresh_symbol(position.vt_symbol)
 
         # Update to offset converter
         converter: OffsetConverter | None = self.offset_converters.get(position.gateway_name, None)
@@ -437,6 +746,11 @@ class OmsEngine(BaseEngine):
         # Otherwise, pop inactive quote from in dict
         elif quote.vt_quoteid in self.active_quotes:
             self.active_quotes.pop(quote.vt_quoteid)
+
+    def process_timer_event(self, event: Event) -> None:
+        """"""
+        if self.position_view_enabled:
+            self._refresh_positions()
 
     def get_tick(self, vt_symbol: str) -> TickData | None:
         """
@@ -564,6 +878,444 @@ class OmsEngine(BaseEngine):
         Get offset converter object of specific gateway.
         """
         return self.offset_converters.get(gateway_name, None)
+
+    def _enqueue_refresh_symbol(self, vt_symbol: str) -> None:
+        """
+        Put symbol into refresh queue for deferred pnl calculation.
+        """
+        if (
+            not self.position_view_enabled
+            or not vt_symbol
+            or vt_symbol in self.refresh_symbols
+        ):
+            if self.position_view_debug:
+                self.main_engine.write_log(
+                    f"[PositionView] skip enqueue {vt_symbol} (enabled={self.position_view_enabled}, "
+                    f"in_queue={vt_symbol in self.refresh_symbols})",
+                    "OmsEngine"
+                )
+            return
+
+        self.refresh_symbols.add(vt_symbol)
+        self.refresh_queue.append(vt_symbol)
+        
+        if self.position_view_debug:
+            self.main_engine.write_log(
+                f"[PositionView] enqueued refresh for {vt_symbol} (queue_size={len(self.refresh_queue)})",
+                "OmsEngine"
+            )
+
+    def _refresh_positions(self) -> None:
+        """
+        Batch refresh queued symbols to update position pnl.
+        """
+        if not self.position_view_enabled:
+            return
+            
+        if not self.refresh_queue:
+            return
+
+        count: int = min(self.refresh_batch_size, len(self.refresh_queue))
+        if self.position_view_debug and count > 0:
+            self.main_engine.write_log(
+                f"[PositionView] _refresh_positions processing {count} symbols from queue (total={len(self.refresh_queue)})",
+                "OmsEngine"
+            )
+            
+        for _ in range(count):
+            vt_symbol: str = self.refresh_queue.popleft()
+            self.refresh_symbols.discard(vt_symbol)
+            self._refresh_symbol_positions(vt_symbol)
+
+    def _find_tick_for_position(self, position: PositionData) -> TickData | None:
+        """
+        Find matching tick for position, supporting continuous contract mapping.
+        Supports bidirectional mapping:
+        - MHI2511.SEHK position -> MHImain.SEHK tick (specific to continuous)
+        - MHImain.SEHK position -> MHI2511.SEHK tick (continuous to specific)
+        """
+        # First try direct match
+        tick: TickData | None = self.ticks.get(position.vt_symbol)
+        if tick:
+            return tick
+        
+        # Try to find tick by product code prefix (bidirectional)
+        symbol: str = position.symbol
+        exchange: Exchange = position.exchange
+        
+        # Try to find tick that shares common prefix (at least 3 characters)
+        # Case 1: position is specific (MHI2511), tick is continuous (MHImain)
+        # Case 2: position is continuous (MHImain), tick is specific (MHI2511)
+        for tick_vt_symbol, candidate_tick in self.ticks.items():
+            if (candidate_tick.exchange == exchange and
+                candidate_tick.vt_symbol != position.vt_symbol):
+                # Check if symbols share common prefix
+                common_prefix_len = min(len(symbol), len(candidate_tick.symbol), 3)
+                prefix_match = symbol[:common_prefix_len] == candidate_tick.symbol[:common_prefix_len]
+                startswith_match = (candidate_tick.symbol.startswith(symbol[:3]) or
+                                   symbol.startswith(candidate_tick.symbol[:3]))
+                
+                if prefix_match and startswith_match:
+                    if self.position_view_debug:
+                        self.main_engine.write_log(
+                            f"[PositionView] mapped {position.vt_symbol} -> {tick_vt_symbol}",
+                            "OmsEngine"
+                        )
+                    return candidate_tick
+        
+        return None
+
+    def _refresh_symbol_positions(self, vt_symbol: str) -> None:
+        """
+        Recalculate pnl for positions under specific symbol.
+        Supports continuous contract mapping (e.g., MHImain -> MHI2511).
+        """
+        # Get tick that triggered this refresh
+        trigger_tick: TickData | None = self.ticks.get(vt_symbol)
+        
+        if self.position_view_debug:
+            self.main_engine.write_log(
+                f"[PositionView] _refresh_symbol_positions called for {vt_symbol}, trigger_tick={trigger_tick.vt_symbol if trigger_tick else None}",
+                "OmsEngine"
+            )
+        
+        # Refresh all positions that match this symbol or can be mapped to the tick
+        positions_checked: int = 0
+        positions_matched: int = 0
+        for vt_positionid, position in list(self.positions.items()):
+            positions_checked += 1
+            if position.volume <= 0:
+                continue
+                
+            # Check if this position should be refreshed
+            tick: TickData | None = None
+            
+            if position.vt_symbol == vt_symbol:
+                # Direct match: use trigger tick if available, otherwise try to find mapped tick
+                if trigger_tick:
+                    tick = trigger_tick
+                    positions_matched += 1
+                else:
+                    # No direct tick, try to find mapped tick (e.g., MHI2511 position -> MHImain tick)
+                    tick = self._find_tick_for_position(position)
+                    if not tick:
+                        if self.position_view_debug:
+                            self.main_engine.write_log(
+                                f"[PositionView] no tick found for position {vt_positionid}, skipping",
+                                "OmsEngine"
+                            )
+                        continue
+                    positions_matched += 1
+            elif trigger_tick:
+                # Check if position symbol maps to trigger tick (continuous contract)
+                # e.g., MHImain position with MHI2511 tick, or MHI2511 position with MHImain tick
+                if (position.exchange == trigger_tick.exchange and
+                    (trigger_tick.symbol.startswith(position.symbol[:3]) or
+                     position.symbol.startswith(trigger_tick.symbol[:3]))):
+                    tick = trigger_tick
+                    positions_matched += 1
+                else:
+                    continue
+            else:
+                # No trigger tick, try to find tick for this position (e.g., MHI2511 position -> MHImain tick)
+                tick = self._find_tick_for_position(position)
+                if not tick:
+                    if self.position_view_debug:
+                        self.main_engine.write_log(
+                            f"[PositionView] no tick found for position {vt_positionid}, skipping",
+                            "OmsEngine"
+                        )
+                    continue
+                positions_matched += 1
+            
+            if not tick:
+                if self.position_view_debug:
+                    self.main_engine.write_log(
+                        f"[PositionView] no tick for position {vt_positionid} (symbol={position.vt_symbol})",
+                        "OmsEngine"
+                    )
+                continue
+            
+            # Log that we found a matching position and tick
+            self.main_engine.write_log(
+                f"[OmsEngine] _refresh_symbol_positions: processing position {vt_positionid} (symbol={position.vt_symbol}, volume={position.volume}, price={position.price}) with tick {tick.vt_symbol} (last={tick.last_price})",
+                "OmsEngine"
+            )
+
+            # Get contract size
+            contract: ContractData | None = self.contracts.get(position.vt_symbol)
+            if not contract:
+                contract = self.contracts.get(tick.vt_symbol)
+            size: float = contract.size if contract else 1
+            
+            if not contract:
+                if self.position_view_debug:
+                    self.main_engine.write_log(
+                        f"[PositionView] WARNING - no contract found for {position.vt_symbol} or {tick.vt_symbol}, using default size=1",
+                        "OmsEngine"
+                    )
+
+            pnl: float | None = self._calculate_position_pnl(position, tick, size)
+            if pnl is None:
+                if self.position_view_debug:
+                    self.main_engine.write_log(
+                        f"[PositionView] pnl calculation returned None for {vt_positionid}, "
+                        f"volume={position.volume} price={position.price} tick_price={tick.last_price}",
+                        "OmsEngine"
+                    )
+                continue
+
+            if abs(pnl - position.pnl) < 1e-6:
+                if self.position_view_debug:
+                    self.main_engine.write_log(
+                        f"[PositionView] pnl unchanged for {vt_positionid} (pnl={pnl})",
+                        "OmsEngine"
+                    )
+                continue
+
+            new_position: PositionData = copy(position)
+            new_position.pnl = pnl
+            self.positions[vt_positionid] = new_position
+
+            self.last_view_emit[vt_positionid] = time.time()
+
+            # Always log before emitting
+            self.main_engine.write_log(
+                f"[OmsEngine] _refresh_symbol_positions: updating position {vt_positionid} pnl={pnl}, calling _emit_position_view",
+                "OmsEngine"
+            )
+
+            if self.position_view_debug:
+                self.main_engine.write_log(
+                    f"[PositionView] refresh {vt_positionid} pnl={pnl} "
+                    f"tick={tick.vt_symbol} price={tick.last_price} ask1={tick.ask_price_1} bid1={tick.bid_price_1}",
+                    "OmsEngine"
+                )
+
+            self._emit_position_view(new_position, copy_data=False)
+        
+        if self.position_view_debug:
+            self.main_engine.write_log(
+                f"[PositionView] _refresh_symbol_positions completed for {vt_symbol}: checked={positions_checked}, matched={positions_matched}",
+                "OmsEngine"
+            )
+
+    def _calculate_position_pnl(self, position: PositionData, tick: TickData, size: float) -> float | None:
+        """
+        Calculate pnl based on position direction and tick data.
+        """
+        if position.volume <= 0 or position.price <= 0:
+            if self.position_view_debug:
+                self.main_engine.write_log(
+                    f"[PositionView] _calculate_position_pnl: invalid position data "
+                    f"volume={position.volume} price={position.price}",
+                    "OmsEngine"
+                )
+            return None
+
+        price_src: float = 0.0
+
+        if position.direction == Direction.LONG:
+            price_src = tick.ask_price_1 or tick.last_price or 0.0
+            if not price_src:
+                if self.position_view_debug:
+                    self.main_engine.write_log(
+                        f"[PositionView] _calculate_position_pnl: no price for LONG position "
+                        f"ask1={tick.ask_price_1} last={tick.last_price}",
+                        "OmsEngine"
+                    )
+                return None
+            pnl = (price_src - position.price) * position.volume * size
+            if self.position_view_debug:
+                self.main_engine.write_log(
+                    f"[PositionView] _calculate_position_pnl LONG: price_src={price_src} "
+                    f"position_price={position.price} volume={position.volume} size={size} "
+                    f"pnl=({price_src} - {position.price}) * {position.volume} * {size} = {pnl}",
+                    "OmsEngine"
+                )
+            return pnl
+
+        if position.direction == Direction.SHORT:
+            price_src = tick.bid_price_1 or tick.last_price or 0.0
+            if not price_src:
+                if self.position_view_debug:
+                    self.main_engine.write_log(
+                        f"[PositionView] _calculate_position_pnl: no price for SHORT position "
+                        f"bid1={tick.bid_price_1} last={tick.last_price}",
+                        "OmsEngine"
+                    )
+                return None
+            pnl = (position.price - price_src) * position.volume * size
+            if self.position_view_debug:
+                self.main_engine.write_log(
+                    f"[PositionView] _calculate_position_pnl SHORT: price_src={price_src} "
+                    f"position_price={position.price} volume={position.volume} size={size} "
+                    f"pnl=({position.price} - {price_src}) * {position.volume} * {size} = {pnl}",
+                    "OmsEngine"
+                )
+            return pnl
+
+        return None
+
+    def _has_position_for_symbol(self, vt_symbol: str) -> bool:
+        """
+        Check if any position exists for given symbol.
+        """
+        for position in self.positions.values():
+            if position.vt_symbol == vt_symbol and position.volume > 0:
+                return True
+        return False
+
+    def _apply_trade_to_position(self, trade: TradeData) -> None:
+        """
+        Merge trade result into position snapshot for symbols without immediate gateway push.
+        """
+        if not trade.direction:
+            if self.position_view_debug:
+                self.main_engine.write_log(
+                    f"[PositionView] _apply_trade_to_position: no direction, skipping",
+                    "OmsEngine"
+                )
+            return
+
+        # Check if contract uses net position mode
+        contract: ContractData | None = self.contracts.get(trade.vt_symbol)
+        is_net_position: bool = contract.net_position if contract else False
+        
+        target_direction: Direction = trade.direction
+        sign: float = 1.0
+
+        if is_net_position:
+            # For net position mode (like Futu futures), ignore offset field
+            # Determine target direction and sign based on existing positions and trade direction
+            long_positionid: str = f"{trade.gateway_name}.{trade.vt_symbol}.{Direction.LONG.value}"
+            short_positionid: str = f"{trade.gateway_name}.{trade.vt_symbol}.{Direction.SHORT.value}"
+            long_pos: PositionData | None = self.positions.get(long_positionid)
+            short_pos: PositionData | None = self.positions.get(short_positionid)
+            long_volume: float = long_pos.volume if long_pos and long_pos.volume > 0 else 0.0
+            short_volume: float = short_pos.volume if short_pos and short_pos.volume > 0 else 0.0
+            
+            if trade.direction == Direction.LONG:
+                # BUY: increases long or decreases short
+                if short_volume > 0:
+                    # Decrease short position (closing short)
+                    target_direction = Direction.SHORT
+                    sign = -1.0
+                else:
+                    # Increase long position (opening long)
+                    target_direction = Direction.LONG
+                    sign = 1.0
+            else:  # trade.direction == Direction.SHORT
+                # SELL: increases short or decreases long
+                if long_volume > 0:
+                    # Decrease long position (closing long)
+                    target_direction = Direction.LONG
+                    sign = -1.0
+                else:
+                    # Increase short position (opening short)
+                    target_direction = Direction.SHORT
+                    sign = 1.0
+            
+            if self.position_view_debug:
+                self.main_engine.write_log(
+                    f"[PositionView] NET POSITION mode - "
+                    f"trade.direction={trade.direction}, existing long={long_volume}, short={short_volume}, "
+                    f"target_direction={target_direction}, sign={sign}",
+                    "OmsEngine"
+                )
+        else:
+            # For non-net position mode, use offset field
+            if trade.offset in self.close_offsets:
+                if trade.direction == Direction.LONG:
+                    target_direction = Direction.SHORT
+                elif trade.direction == Direction.SHORT:
+                    target_direction = Direction.LONG
+                sign = -1.0
+                if self.position_view_debug:
+                    self.main_engine.write_log(
+                        f"[PositionView] CLOSE trade detected - "
+                        f"trade.direction={trade.direction}, target_direction={target_direction}, sign={sign}",
+                        "OmsEngine"
+                    )
+
+        vt_positionid: str = f"{trade.gateway_name}.{trade.vt_symbol}.{target_direction.value}"
+        position: PositionData | None = self.positions.get(vt_positionid)
+
+        if not position:
+            position = PositionData(
+                symbol=trade.symbol,
+                exchange=trade.exchange,
+                direction=target_direction,
+                gateway_name=trade.gateway_name,
+            )
+        self.positions[vt_positionid] = position
+
+        new_volume: float = max(position.volume + sign * trade.volume, 0.0)
+
+        if sign > 0:
+            total_cost: float = position.price * position.volume + trade.price * trade.volume
+            if new_volume > 0:
+                position.price = total_cost / new_volume
+        else:
+            if new_volume == 0:
+                position.price = 0.0
+
+        position.volume = new_volume
+        position.pnl = 0.0
+
+        if self.position_view_debug:
+            self.main_engine.write_log(
+                f"[PositionView] apply trade {trade.vt_symbol} dir={trade.direction} "
+                f"offset={trade.offset} volume={position.volume} price={position.price} pnl={position.pnl}",
+                "OmsEngine"
+            )
+
+        # If position is closed (volume = 0), remove it from positions dict
+        if new_volume <= 0:
+            if vt_positionid in self.positions:
+                del self.positions[vt_positionid]
+            self.removed_positions.add(vt_positionid)  # Mark as removed
+            # Emit a zero-volume position event to notify UI to remove it
+            position.volume = 0.0
+            position.frozen = 0.0  # Clear frozen to avoid showing as frozen
+            self._emit_position_view(position)
+        else:
+            # Only emit and refresh if position still exists
+            self._emit_position_view(position)
+            
+            # Enqueue refresh for both trade symbol and position symbol (for continuous contract mapping)
+            self._enqueue_refresh_symbol(trade.vt_symbol)
+            self._enqueue_refresh_symbol(position.vt_symbol)
+        
+        if self.position_view_debug:
+            self.main_engine.write_log(
+                f"[PositionView] applied trade, enqueued refresh for {trade.vt_symbol} and {position.vt_symbol}",
+                "OmsEngine"
+            )
+
+    def _emit_position_view(self, position: PositionData, copy_data: bool = True) -> None:
+        """
+        Emit position view event (and optional legacy event).
+        """
+        if not self.position_view_enabled:
+            return
+
+        data: PositionData = copy(position) if copy_data else position
+        self.last_view_emit[position.vt_positionid] = time.time()
+
+        if self.position_view_debug:
+            self.main_engine.write_log(
+                f"[PositionView] emit vt_positionid={position.vt_positionid} "
+                f"volume={position.volume} price={position.price} pnl={position.pnl}",
+                "OmsEngine"
+            )
+
+        view_event: Event = Event(EVENT_POSITION_VIEW, data)
+        self.event_engine.put(view_event)
+
+        if self.position_view_emit_legacy:
+            legacy_event: Event = Event(EVENT_POSITION, data)
+            self.event_engine.put(legacy_event)
 
 
 class EmailEngine(BaseEngine):

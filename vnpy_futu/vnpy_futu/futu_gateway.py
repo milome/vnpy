@@ -579,12 +579,28 @@ class FutuGateway(BaseGateway):
 
             for ix, row in data.iterrows():
                 symbol, exchange = convert_symbol_futu2vt(row["code"])
+                
+                # Determine contract size based on symbol
+                # For Hong Kong futures:
+                # - MHI (小恒指): 10 HKD per point
+                # - HSI (大恒指): 50 HKD per point
+                # - MCH (小国指): 10 HKD per point
+                # - HHI (大国指): 50 HKD per point
+                # Default to 1 for other contracts
+                size = 1
+                if exchange == Exchange.SEHK:
+                    symbol_upper = symbol.upper()
+                    if symbol_upper.startswith("MHI") or symbol_upper.startswith("MCH"):
+                        size = 10  # 小恒指/小国指：每跳 10 港币
+                    elif symbol_upper.startswith("HSI") or symbol_upper.startswith("HHI"):
+                        size = 50  # 大恒指/大国指：每跳 50 港币
+                
                 contract: ContractData = ContractData(
                     symbol=symbol,
                     exchange=exchange,
                     name=row["name"],
                     product=product,
-                    size=1,
+                    size=size,
                     pricetick=0.001,
                     history_data=True,
                     net_position=True,

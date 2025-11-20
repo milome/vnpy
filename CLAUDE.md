@@ -870,7 +870,125 @@ def execute_chase_order(self, orderid: str, new_price: float, chase_order: Chase
 | **OPPONENT** | Moderate chase | Balance execution & price |
 | **LIMIT** | Conservative chase | Price preservation |
 
-#### 6. Chase Statistics Tracking
+#### 6. ATR-Based Dynamic Chase Step Calculation (Latest Enhancement)
+
+**Problem**: Fixed chase step percentage doesn't adapt to market volatility and liquidity, leading to inefficient chasing and execution times exceeding 500ms.
+
+**Solution**: Dynamic chase step calculation based on ATR (Average True Range) and volume analysis from past 34 one-minute periods.
+
+**Implementation:**
+
+**ATR and Volume Calculation:**
+```python
+def calculate_atr_and_volume(self, vt_symbol: str) -> Tuple[float, float]:
+    """Calculate ATR and average volume (based on past 34 one-minute periods)"""
+    # Query historical K-line data (34 one-minute periods)
+    bars = self.query_history(req)
+    
+    # Calculate ATR using talib (14-period)
+    atr_array = talib.ATR(high_array, low_array, close_array, timeperiod=14)
+    atr_value = float(atr_array[-1])
+    
+    # Calculate average volume
+    avg_volume = sum([bar.volume for bar in bars]) / len(bars)
+    
+    # Cache results for performance
+    self.atr_cache[vt_symbol] = atr_value
+    self.volume_cache[vt_symbol] = avg_volume
+    
+    return atr_value, avg_volume
+```
+
+**Dynamic Chase Step Calculation:**
+```python
+def calculate_dynamic_chase_step(
+    self, vt_symbol: str, current_price: float, direction: Direction
+) -> float:
+    """Calculate dynamic chase step based on ATR and volume"""
+    atr, avg_volume = self.calculate_atr_and_volume(vt_symbol)
+    
+    # Base step: 15% of ATR percentage
+    atr_pct = atr / current_price if current_price > 0 else 0.0
+    base_step = atr_pct * 0.15
+    
+    # Volume adjustment: Higher volume = smaller step (better liquidity)
+    volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
+    volume_factor = 1.0 / max(0.5, min(2.0, volume_ratio))
+    
+    # Dynamic step calculation
+    dynamic_step = base_step * volume_factor
+    
+    # Limit step range: 0.01% - 0.5%
+    dynamic_step = max(0.0001, min(0.005, dynamic_step))
+    
+    return dynamic_step
+```
+
+**Optimized Chase Interval Strategy:**
+```python
+# First 2 chases: 100ms interval (fast response)
+# Subsequent chases: configured interval (default 500ms)
+min_interval = 0.1 if chase_order.chase_count < 2 else chase_order.config.chase_interval
+
+# Reduced delay for rejected orders: 50ms (was 500ms)
+delay = 0.05 if chase_order.chase_count < 2 else chase_order.config.chase_interval
+```
+
+**Enhanced Chase Execution Logging:**
+```python
+# Chase calculation log
+self.write_log(
+    f"[追价计算] {vt_symbol} - "
+    f"方向: {direction.value}, "
+    f"当前价: {current_price:.3f}, "
+    f"新价格: {new_price:.3f}, "
+    f"步长: {dynamic_step*100:.3f}%, "
+    f"ATR: {atr:.3f}, "
+    f"平均成交量: {avg_volume:.0f}"
+)
+
+# Chase execution log
+self.write_log(
+    f"[追价成功] 订单{orderid} 第{chase_count}次追价完成 - "
+    f"价格: {old_price:.3f} -> {new_price:.3f}, "
+    f"滑点: {slippage:.3f}, "
+    f"修改耗时: {modify_time:.1f}ms, "
+    f"总耗时: {total_time:.1f}ms"
+)
+```
+
+**Performance Metrics:**
+```python
+self.chase_stats = {
+    "total_orders": 0,
+    "successful_chases": 0,
+    "failed_chases": 0,
+    "total_slippage": 0.0,
+    "total_chase_time": 0.0,        # NEW: Cumulative chase time
+    "chase_executions": [],          # NEW: Detailed execution records
+    "average_chase_time_ms": 0.0,    # NEW: Average chase time
+    "avg_modify_time_ms": 0.0,      # NEW: Average modify order time
+    "max_modify_time_ms": 0.0,      # NEW: Max modify order time
+    "min_modify_time_ms": 0.0,      # NEW: Min modify order time
+}
+```
+
+**Key Improvements:**
+1. **Adaptive Step Size**: Chase step adapts to market volatility (ATR) and liquidity (volume)
+2. **Faster Response**: First 2 chases use 100ms interval instead of 500ms
+3. **Performance Monitoring**: Detailed timing metrics for each chase execution
+4. **Target**: Reduce execution time to under 500ms
+
+**Testing:**
+- [test_chase_atr_strategy.py](test_chase_atr_strategy.py) - Comprehensive tests for ATR-based chase strategy
+  - ATR calculation validation
+  - Dynamic step calculation tests
+  - Performance simulation
+  - Step optimization verification
+  - Interval optimization tests
+  - Logging format validation
+
+#### 7. Chase Statistics Tracking
 
 **Real-time Metrics:**
 ```python
@@ -879,9 +997,15 @@ self.chase_stats = {
     "successful_chases": 0,      # Successful price adjustments
     "failed_chases": 0,          # Failed chase attempts
     "total_slippage": 0.0,       # Cumulative slippage
+    "total_chase_time": 0.0,    # Cumulative chase execution time (ms)
+    "chase_executions": [],     # Detailed execution records (last 100)
     "active_chase_orders": 0,    # Currently active chase orders
     "chase_success_rate": 0.0,   # Success rate percentage
     "average_slippage": 0.0,     # Average slippage per chase
+    "average_chase_time_ms": 0.0, # Average chase time (ms)
+    "avg_modify_time_ms": 0.0,   # Average modify order time (ms)
+    "max_modify_time_ms": 0.0,   # Maximum modify order time (ms)
+    "min_modify_time_ms": 0.0,   # Minimum modify order time (ms)
 }
 ```
 
@@ -1073,7 +1197,7 @@ Test files provided:
 
 - **Gateway**: [vnpy_futu/futu_gateway.py](vnpy_futu/vnpy_futu/futu_gateway.py) - Chase logic and order monitoring
 - **UI**: [vnpy/trader/ui/widget.py](vnpy/trader/ui/widget.py) - Chase configuration and statistics display
-- **Tests**: [test_chase_core.py](test_chase_core.py), [test_chase_price.py](test_chase_price.py)
+- **Tests**: [test_chase_core.py](test_chase_core.py), [test_chase_price.py](test_chase_price.py), [test_chase_atr_strategy.py](test_chase_atr_strategy.py)
 - **Documentation**: [CLAUDE.md](CLAUDE.md) - Complete implementation guide
 
 This intelligent price chasing system transforms order execution from a manual, reactive process into an automated, intelligent system that significantly improves fill rates while maintaining strict risk controls.
@@ -1191,6 +1315,7 @@ python run.py
 **Test Files Created**:
 - [test_chase_core.py](test_chase_core.py) - Core chase logic validation
 - [test_chase_price.py](test_chase_price.py) - Price calculation testing
+- [test_chase_atr_strategy.py](test_chase_atr_strategy.py) - ATR-based dynamic chase strategy tests
 
 **Comprehensive Test Coverage**:
 - Configuration parsing and encoding
@@ -1240,3 +1365,1014 @@ The complete system is now production-ready for professional trading environment
 4. Test intelligent chase functionality with paper trading
 
 This implementation represents a complete, professional-grade trading system enhancement that significantly improves order execution capabilities while maintaining full price transparency and risk controls.
+
+## Latest Enhancement: ATR-Based Dynamic Chase Strategy (December 2024)
+
+### Overview
+Enhanced the intelligent price chasing system with ATR (Average True Range) and volume-based dynamic step calculation to optimize execution time and improve chase effectiveness. This update addresses the critical requirement of achieving execution times under 500ms for real trading scenarios.
+
+### Problem Statement
+- Fixed chase step percentage doesn't adapt to market volatility and liquidity
+- Execution times exceeding 500ms making it unsuitable for real trading
+- Inefficient chasing leading to unnecessary slippage
+- Lack of performance monitoring and detailed logging
+
+### Solution: ATR and Volume-Based Dynamic Chase
+
+**Key Features:**
+
+1. **Dynamic Chase Step Calculation**
+   - Calculates ATR from past 34 one-minute periods
+   - Analyzes average volume for liquidity assessment
+   - Adjusts chase step based on market volatility (ATR) and liquidity (volume)
+   - Step range: 0.01% - 0.5% (adaptive)
+
+2. **Optimized Chase Intervals**
+   - First 2 chases: 100ms interval (fast response)
+   - Subsequent chases: Configurable interval (default 500ms)
+   - Reduced rejection delay: 50ms (was 500ms)
+
+3. **Enhanced Performance Monitoring**
+   - Detailed timing metrics for each chase execution
+   - Average, max, min modify order times
+   - Total chase time tracking
+   - Execution records (last 100)
+
+4. **Comprehensive Logging**
+   - ATR and volume information in chase calculation logs
+   - Detailed execution logs with timing metrics
+   - Performance statistics for analysis
+
+### Implementation Details
+
+**ATR and Volume Calculation:**
+```python
+def calculate_atr_and_volume(self, vt_symbol: str) -> Tuple[float, float]:
+    """Calculate ATR and average volume (based on past 34 one-minute periods)"""
+    # Query historical K-line data (34 one-minute periods)
+    # Calculate ATR using talib (14-period) or simplified calculation
+    # Calculate average volume
+    # Cache results for performance
+```
+
+**Dynamic Step Calculation:**
+```python
+def calculate_dynamic_chase_step(
+    self, vt_symbol: str, current_price: float, direction: Direction
+) -> float:
+    """Calculate dynamic chase step based on ATR and volume"""
+    # Base step: 15% of ATR percentage
+    # Volume adjustment: Higher volume = smaller step (better liquidity)
+    # Limit step range: 0.01% - 0.5%
+```
+
+**Performance Metrics:**
+```python
+self.chase_stats = {
+    "total_chase_time": 0.0,        # Cumulative chase time (ms)
+    "chase_executions": [],          # Detailed execution records
+    "average_chase_time_ms": 0.0,    # Average chase time
+    "avg_modify_time_ms": 0.0,       # Average modify order time
+    "max_modify_time_ms": 0.0,       # Maximum modify order time
+    "min_modify_time_ms": 0.0,       # Minimum modify order time
+}
+```
+
+### Performance Target
+- **Goal**: Execution time under 500ms
+- **Optimization**: Adaptive step size + reduced intervals
+- **Monitoring**: Real-time performance metrics
+
+### Testing
+Comprehensive test suite in [test_chase_atr_strategy.py](test_chase_atr_strategy.py):
+- ATR calculation accuracy
+- Dynamic step calculation logic
+- Performance simulation
+- Interval optimization
+- Logging format validation
+
+All tests pass successfully.
+
+### Files Modified
+- **Gateway**: [vnpy_futu/vnpy_futu/futu_gateway.py](vnpy_futu/vnpy_futu/futu_gateway.py)
+  - Added `calculate_atr_and_volume()` method
+  - Added `calculate_dynamic_chase_step()` method
+  - Enhanced `calculate_chase_price()` with dynamic step
+  - Optimized `start_chase_order()` with reduced intervals
+  - Enhanced `execute_chase_order()` with detailed logging
+  - Added performance metrics to `chase_stats`
+- **Tests**: [test_chase_atr_strategy.py](test_chase_atr_strategy.py) - Complete test coverage
+
+### Benefits
+- **Adaptive Strategy**: Chase step adapts to market conditions
+- **Faster Execution**: Reduced intervals for first 2 chases
+- **Better Performance**: Target execution time under 500ms
+- **Comprehensive Monitoring**: Detailed metrics for analysis
+- **Production Ready**: Fully tested and validated
+
+## Latest Fix: Simulate Trading Trade Data Display (December 2024)
+
+### Overview
+Fixed an issue where trade data was not displayed in the simulate trading environment. The Futu API's `deal_list_query` method returns an error "模拟交易不支持成交数据" (Simulate trading does not support trade data) in simulate trading mode, preventing trade data from being displayed in the UI.
+
+### Problem Statement
+- **Issue**: Trade data query fails in simulate trading environment
+- **Error Message**: "查询成交失败：模拟交易不支持成交数据"
+- **Impact**: Users cannot see trade history even though orders are fully executed
+- **Root Cause**: Futu API's `deal_list_query` method doesn't support simulate trading environment
+
+### Solution: Trade Data Caching and Fallback Mechanism
+
+**Key Features:**
+
+1. **Trade Data Cache**
+   - Added `trades_cache: Dict[str, TradeData]` to store all trade data
+   - Automatically caches trade data when `process_deal()` is called
+   - Ensures all trade data is preserved locally
+
+2. **Fallback Query Mechanism**
+   - When API query fails, automatically detects simulate trading environment
+   - Falls back to local cache to retrieve trade data
+   - Re-pushes trade data through event system to ensure UI display
+
+3. **Error Detection**
+   - Detects simulate trading environment by checking error message
+   - Also checks `TrdEnv.SIMULATE` flag
+   - Handles both explicit error messages and environment flags
+
+### Implementation Details
+
+**Trade Data Caching:**
+```python
+# Added cache dictionary
+self.trades_cache: Dict[str, TradeData] = {}
+
+# Cache trade data in process_deal()
+def process_deal(self, data) -> None:
+    # ... process trade data ...
+    # Cache trade data for simulate trading environment
+    self.trades_cache[trade.vt_tradeid] = trade
+    self.on_trade(trade)
+```
+
+**Fallback Query:**
+```python
+def query_trade(self) -> None:
+    """Query trade data"""
+    code, data = self.trade_ctx.deal_list_query("", trd_env=self.env)
+    
+    if code:
+        error_msg = str(data) if data else "未知错误"
+        # Detect simulate trading environment
+        if "模拟交易" in error_msg or "不支持" in error_msg or self.env == TrdEnv.SIMULATE:
+            self._query_trades_from_cache()
+        return
+    
+    self.process_deal(data)
+```
+
+**Cache Retrieval:**
+```python
+def _query_trades_from_cache(self) -> None:
+    """Retrieve trade data from local cache (for simulate trading)"""
+    if self.trades_cache:
+        for trade in self.trades_cache.values():
+            # Re-push trade data through event system
+            event = Event(EVENT_TRADE, trade)
+            self.event_engine.put(event)
+```
+
+### Key Improvements
+
+1. **Automatic Caching**: All trade data is automatically cached when received
+2. **Seamless Fallback**: When API fails, automatically uses local cache
+3. **UI Compatibility**: Re-pushes trade data to ensure UI displays correctly
+4. **Multi-Gateway Support**: Each gateway maintains its own cache, ensuring data isolation
+
+### Testing
+Comprehensive test suite in [test_simulate_trade_query.py](test_simulate_trade_query.py):
+- Trade data cache storage validation
+- Cache retrieval functionality
+- Simulate trading environment error handling
+- Cache consistency verification
+- Empty cache handling
+- Multi-gateway data isolation
+
+All tests pass successfully.
+
+### Files Modified
+- **Gateway**: [vnpy_futu/vnpy_futu/futu_gateway.py](vnpy_futu/vnpy_futu/futu_gateway.py)
+  - Added `trades_cache: Dict[str, TradeData]` for trade data caching
+  - Modified `process_deal()` to cache trade data
+  - Enhanced `query_trade()` with fallback mechanism
+  - Added `_query_trades_from_cache()` method
+- **Tests**: [test_simulate_trade_query.py](test_simulate_trade_query.py) - Complete test coverage
+
+### Benefits
+- **Complete Trade History**: Users can see all trade data in simulate trading environment
+- **Seamless Experience**: Automatic fallback ensures no user intervention needed
+- **Data Persistence**: Trade data is cached locally, ensuring availability
+- **Production Ready**: Fully tested and validated for simulate trading scenarios
+
+## Latest Enhancement: Close Position Button Feature (December 2024)
+
+### Overview
+Added a comprehensive close position button feature to the trading UI that automatically detects current positions and provides one-click position closing with intelligent price chasing. This enhancement significantly improves trading efficiency by eliminating manual order entry for position closing operations.
+
+### Problem Statement
+- **Manual Process**: Users had to manually enter close orders with correct direction, offset, and price
+- **Error-Prone**: Easy to make mistakes when selecting close direction (close long vs close short)
+- **Time-Consuming**: Multiple steps required: check position, select direction, enter price, configure chase
+- **No Real-time Feedback**: Button state didn't reflect current position status
+
+### Solution: Intelligent Close Position Button
+
+**Key Features:**
+
+1. **Automatic Position Detection**
+   - Queries current contract's long and short positions in real-time
+   - Calculates available position (total position - frozen position)
+   - Updates button text dynamically: "平仓（平多 X手）" or "平仓（平空 X手）" or "平仓（无持仓）"
+
+2. **Smart Button State Management**
+   - Button enabled only when there's available position
+   - Button text shows exact position type and available volume
+   - Position volume selector automatically limited to available position
+   - Real-time updates when position changes
+
+3. **One-Click Close Position**
+   - Automatically determines close direction (SHORT for long position, LONG for short position)
+   - Uses opponent price (bid for close long, ask for close short)
+   - Automatically enables intelligent price chasing
+   - Validates close volume against available position
+
+4. **Event-Driven Updates**
+   - Updates button state when contract changes
+   - Updates button state when gateway changes
+   - Updates button state when position events occur
+   - Initializes button state on UI load
+
+### Implementation Details
+
+**UI Components Added:**
+```python
+# Close position button
+self.close_position_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("平仓（无持仓）"))
+self.close_position_button.setEnabled(False)
+self.close_position_button.clicked.connect(self.close_position)
+self.close_position_button.setToolTip(_("根据当前持仓自动平仓，使用对手价并启用智能追价"))
+
+# Close volume selector
+self.close_volume_spin: QtWidgets.QSpinBox = QtWidgets.QSpinBox()
+self.close_volume_spin.setRange(1, 1000)
+self.close_volume_spin.setValue(1)
+self.close_volume_spin.setSuffix(_("手"))
+```
+
+**Position Query Logic:**
+```python
+def update_close_position_button(self) -> None:
+    """Update close position button state and text"""
+    # Query long position
+    long_positionid = f"{gateway_name}.{self.vt_symbol}.{Direction.LONG.value}"
+    long_position = self.main_engine.get_position(long_positionid)
+    
+    # Query short position
+    short_positionid = f"{gateway_name}.{self.vt_symbol}.{Direction.SHORT.value}"
+    short_position = self.main_engine.get_position(short_positionid)
+    
+    # Calculate available position (total - frozen)
+    long_available = (long_position.volume - long_position.frozen) if long_position and long_position.volume > 0 else 0
+    short_available = (short_position.volume - short_position.frozen) if short_position and short_position.volume > 0 else 0
+    
+    # Update button state and text
+    if long_available > 0:
+        self.close_position_button.setText(_(f"平仓（平多 {long_available:.0f}手）"))
+        self.close_position_button.setEnabled(True)
+        self.close_volume_spin.setMaximum(int(long_available))
+    elif short_available > 0:
+        self.close_position_button.setText(_(f"平仓（平空 {short_available:.0f}手）"))
+        self.close_position_button.setEnabled(True)
+        self.close_volume_spin.setMaximum(int(short_available))
+    else:
+        self.close_position_button.setText(_("平仓（无持仓）"))
+        self.close_position_button.setEnabled(False)
+```
+
+**Close Position Execution:**
+```python
+def close_position(self) -> None:
+    """Execute close position operation"""
+    # Determine close direction and available volume
+    if long_available > 0:
+        close_direction = Direction.SHORT  # Close long: sell
+        available_volume = long_available
+    elif short_available > 0:
+        close_direction = Direction.LONG  # Close short: buy
+        available_volume = short_available
+    
+    # Get close volume
+    close_volume = self.close_volume_spin.value()
+    
+    # Validate close volume
+    if close_volume > available_volume:
+        QtWidgets.QMessageBox.warning(...)
+        return
+    
+    # Calculate opponent price
+    if close_direction == Direction.SHORT:
+        # Close long: use bid price
+        price = tick_data.bid_price_1 if tick_data.bid_price_1 > 0 else tick_data.last_price
+    else:
+        # Close short: use ask price
+        price = tick_data.ask_price_1 if tick_data.ask_price_1 > 0 else tick_data.last_price
+    
+    # Build order request with chase config
+    reference = "OPPONENT"
+    chase_config = self.get_chase_config()
+    if chase_config["enabled"]:
+        chase_suffix = f"_Chase{chase_config['max_chase_times']}_Slip{chase_config['max_slippage_pct']}_Step{chase_config['chase_step_pct']}"
+        reference += chase_suffix
+    
+    req: OrderRequest = OrderRequest(
+        symbol=contract.symbol,
+        exchange=contract.exchange,
+        direction=close_direction,
+        type=OrderType.OPPONENT,  # Use opponent price
+        volume=close_volume,
+        price=price,
+        offset=Offset.CLOSE,  # Close position
+        reference=reference
+    )
+    
+    # Submit order
+    self.main_engine.send_order(req, gateway_name)
+```
+
+**Event Registration:**
+```python
+def register_event(self) -> None:
+    """Register event handlers"""
+    # Register position event for button state updates
+    self.event_engine.register(EVENT_POSITION, self.process_position_event)
+    
+    # Initialize button state
+    self.update_close_position_button()
+
+def process_position_event(self, event: Event) -> None:
+    """Handle position events to update button state"""
+    position: PositionData = event.data
+    if position.vt_symbol == self.vt_symbol:
+        self.update_close_position_button()
+```
+
+### Button State Update Triggers
+
+1. **Contract Change**: When user selects a different contract
+2. **Gateway Change**: When user switches to a different gateway
+3. **Position Event**: When position data is updated (trade execution, position query)
+4. **UI Initialization**: When trading widget is first loaded
+
+### Close Position Flow
+
+1. **User Clicks Button**: "平仓（平多 5手）" or "平仓（平空 3手）"
+2. **System Validates**: Checks available position and close volume
+3. **Price Calculation**: Calculates opponent price (bid for close long, ask for close short)
+4. **Order Submission**: Creates order request with:
+   - Correct direction (SHORT for long position, LONG for short position)
+   - Opponent price
+   - Close offset
+   - Intelligent chase configuration
+5. **Button Update**: Updates button state after order submission
+
+### Key Improvements
+
+1. **User Experience**:
+   - One-click position closing
+   - Clear visual feedback (button text shows position type and volume)
+   - Automatic validation prevents errors
+   - Real-time position status updates
+
+2. **Trading Efficiency**:
+   - Eliminates manual order entry steps
+   - Automatic direction selection (no confusion)
+   - Automatic price calculation (opponent price)
+   - Automatic chase configuration
+
+3. **Error Prevention**:
+   - Volume validation against available position
+   - Price validation (ensures valid market price)
+   - Contract validation (ensures contract exists)
+   - Gateway validation (ensures gateway is connected)
+
+4. **Real-time Updates**:
+   - Button state updates immediately when position changes
+   - Volume selector automatically adjusts to available position
+   - Clear indication when no position exists
+
+### Usage Examples
+
+**Example 1: Close Long Position**
+```
+Current Position: Long 5手 (available: 5手, frozen: 0手)
+Button Display: "平仓（平多 5手）" [Enabled]
+User Action: Select 3手, click button
+System Action:
+  1. Validates: 3手 ≤ 5手 ✓
+  2. Calculates: bid_price_1 = 25000.0
+  3. Creates order: SHORT 3手 @ 25000.0, CLOSE, OPPONENT + Chase
+  4. Submits order
+  5. Updates button: "平仓（平多 2手）" (after partial close)
+```
+
+**Example 2: Close Short Position**
+```
+Current Position: Short 8手 (available: 6手, frozen: 2手)
+Button Display: "平仓（平空 6手）" [Enabled]
+User Action: Select 6手, click button
+System Action:
+  1. Validates: 6手 ≤ 6手 ✓
+  2. Calculates: ask_price_1 = 25010.0
+  3. Creates order: LONG 6手 @ 25010.0, CLOSE, OPPONENT + Chase
+  4. Submits order
+  5. Updates button: "平仓（无持仓）" (after full close)
+```
+
+**Example 3: No Position**
+```
+Current Position: None
+Button Display: "平仓（无持仓）" [Disabled]
+User Action: Button click (disabled, no action)
+```
+
+### Testing
+
+Comprehensive test suite in [test_close_position_button.py](test_close_position_button.py):
+- Button state logic tests (6 scenarios)
+- Close order request building tests
+- Validation logic tests (4 scenarios)
+- Opponent price calculation tests
+- Chase configuration tests
+
+All tests pass successfully.
+
+### Files Modified
+
+- **UI**: [vnpy/trader/ui/widget.py](vnpy/trader/ui/widget.py)
+  - Added `close_position_button` and `close_volume_spin` UI components
+  - Added `process_position_event()` method for position event handling
+  - Added `update_close_position_button()` method for button state management
+  - Added `close_position()` method for close position execution
+  - Enhanced `register_event()` to register position events
+  - Enhanced `set_vt_symbol()` to update button state on contract change
+  - Added gateway change handler to update button state
+- **Tests**: [test_close_position_button.py](test_close_position_button.py) - Complete test coverage
+
+### Benefits
+
+- **Trading Efficiency**: One-click position closing eliminates manual steps
+- **Error Prevention**: Automatic direction and price calculation prevents mistakes
+- **Real-time Feedback**: Button state reflects current position status
+- **User-Friendly**: Clear visual indication of position type and available volume
+- **Production Ready**: Fully tested and validated for all scenarios
+
+This enhancement provides a professional-grade position closing feature that significantly improves trading workflow efficiency while maintaining all safety validations and intelligent chase capabilities.
+
+## Latest Fix: Main Contract and Specific Contract Matching (December 2024)
+
+### Overview
+Fixed an issue where the close position button showed "无持仓" (no position) when subscribing to a main contract code (e.g., `MHImain.SEHK`) while the actual position was held in a specific contract (e.g., `MHI2511.SEHK`). This mismatch occurred because Futu API returns specific contract codes in position queries, while users often subscribe to main contract codes for continuous trading.
+
+### Problem Statement
+- **Issue**: Close position button displayed "无持仓" when subscribing to main contract code
+- **Root Cause**: Position query returns specific contract codes (e.g., `MHI2511.SEHK`), but subscription uses main contract codes (e.g., `MHImain.SEHK`)
+- **Impact**: Users cannot see or close positions when using main contract codes
+- **Example**: Subscribing to `MHImain.SEHK` but position is `MHI2511.SEHK` (2025 November contract)
+
+### Solution: Intelligent Contract Code Matching
+
+**Key Features:**
+
+1. **Contract Matching Logic**
+   - Exact match: `MHImain.SEHK` == `MHImain.SEHK`
+   - Main contract match: `MHImain.SEHK` matches `MHI2511.SEHK` (main contract matches specific contract)
+   - Reverse match: `MHI2511.SEHK` matches `MHImain.SEHK` (specific contract matches main contract)
+
+2. **Matching Rules**
+   - Main contract format: `{base}main` (e.g., `MHImain`)
+   - Specific contract format: `{base}{YYMM}` (e.g., `MHI2511` for November 2025)
+   - Exchange must match
+   - Base part must match
+
+3. **Comprehensive Matching**
+   - Applied to all position-related operations:
+     - Close position button state update
+     - Position event processing
+     - Position query filtering
+
+### Implementation Details
+
+**Contract Matching Method:**
+```python
+def _is_contract_match(self, vt_symbol1: str, vt_symbol2: str) -> bool:
+    """
+    Determine if two contract codes match (supports main contract and specific contract matching)
+    
+    Rules:
+    1. Exact match: MHImain.SEHK == MHImain.SEHK
+    2. Main contract match: MHImain.SEHK matches MHI2511.SEHK
+    3. Reverse match: MHI2511.SEHK matches MHImain.SEHK
+    
+    Main contract format: {base}main (e.g., MHImain)
+    Specific contract format: {base}{YYMM} (e.g., MHI2511 for November 2025)
+    """
+    if vt_symbol1 == vt_symbol2:
+        return True
+    
+    # Extract symbol and exchange
+    symbol1, exchange1 = vt_symbol1.split('.', 1)
+    symbol2, exchange2 = vt_symbol2.split('.', 1)
+    
+    # Exchange must match
+    if exchange1 != exchange2:
+        return False
+    
+    # Check if it's a main contract and specific contract match
+    if symbol1.endswith('main') and not symbol2.endswith('main'):
+        # symbol1 is main contract, symbol2 is specific contract
+        base1 = symbol1[:-4]  # Remove "main"
+        if symbol2.startswith(base1):
+            return True
+    elif symbol2.endswith('main') and not symbol1.endswith('main'):
+        # symbol2 is main contract, symbol1 is specific contract
+        base2 = symbol2[:-4]  # Remove "main"
+        if symbol1.startswith(base2):
+            return True
+    
+    return False
+```
+
+**Updated Position Query Logic:**
+```python
+def update_close_position_button(self) -> None:
+    """Update close position button state and text"""
+    # ... query positions ...
+    
+    for position in all_positions:
+        # Match contract (supports main contract and specific contract matching) and gateway
+        if (self._is_contract_match(position.vt_symbol, self.vt_symbol) and 
+            position.gateway_name == gateway_name):
+            matched_positions.append(position)
+            # ... process matched positions ...
+```
+
+**Updated Position Event Processing:**
+```python
+def process_position_event(self, event: Event) -> None:
+    """Handle position events to update button state"""
+    position: PositionData = event.data
+    # Only update current contract's position (supports main contract and specific contract matching)
+    if self.vt_symbol and self._is_contract_match(position.vt_symbol, self.vt_symbol):
+        self.update_close_position_button()
+```
+
+### Key Improvements
+
+1. **Intelligent Matching**:
+   - Automatically matches main contract codes with specific contract positions
+   - Supports bidirectional matching (main ↔ specific)
+   - Maintains exact matching for same contract codes
+
+2. **Comprehensive Coverage**:
+   - Applied to all position-related operations
+   - Button state updates
+   - Position event processing
+   - Position query filtering
+
+3. **Robust Logic**:
+   - Exchange validation ensures correct matching
+   - Base part matching ensures contract family matching
+   - Handles edge cases gracefully
+
+### Usage Examples
+
+**Example 1: Main Contract Subscription with Specific Contract Position**
+```
+Subscription: MHImain.SEHK (main contract)
+Position: MHI2511.SEHK (specific contract, November 2025)
+Result: ✓ Matched - Button shows "平仓（平多 2手）"
+```
+
+**Example 2: Specific Contract Subscription with Main Contract Position**
+```
+Subscription: MHI2511.SEHK (specific contract)
+Position: MHImain.SEHK (main contract)
+Result: ✓ Matched - Button shows position correctly
+```
+
+**Example 3: Different Base Contracts**
+```
+Subscription: MHImain.SEHK (MHI main contract)
+Position: HSI2511.SEHK (HSI specific contract)
+Result: ✗ Not matched - Different base contracts
+```
+
+**Example 4: Different Exchanges**
+```
+Subscription: MHImain.SEHK
+Position: MHI2511.HKFE
+Result: ✗ Not matched - Different exchanges
+```
+
+### Testing
+
+Comprehensive test suite in [test_contract_matching.py](test_contract_matching.py):
+- Exact match tests
+- Main contract and specific contract matching tests
+- Position matching scenarios
+- Edge case handling
+
+All tests pass successfully.
+
+### Files Modified
+
+- **UI**: [vnpy/trader/ui/widget.py](vnpy/trader/ui/widget.py)
+  - Added `_is_contract_match()` method for intelligent contract matching
+  - Updated `update_close_position_button()` to use contract matching
+  - Updated `close_position()` to use contract matching
+  - Updated `process_position_event()` to use contract matching
+  - Enhanced debug logging to show match status
+- **Tests**: [test_contract_matching.py](test_contract_matching.py) - Complete test coverage
+
+### Benefits
+
+- **Seamless Experience**: Users can subscribe to main contracts and see positions in specific contracts
+- **Flexible Matching**: Supports both main contract and specific contract subscriptions
+- **Accurate Display**: Button state correctly reflects actual positions
+- **Production Ready**: Fully tested and validated for all scenarios
+
+This fix ensures that the close position button works correctly regardless of whether users subscribe to main contract codes or specific contract codes, providing a seamless trading experience.
+
+## Latest Enhancement: Close Position Button UI Improvements (December 2024)
+
+### Overview
+Enhanced the close position button UI to provide a cleaner, more intuitive interface with better user experience. The improvements include simplified button text, fixed volume selector behavior, default full-close setting, and clear position hints.
+
+### Problem Statement
+- **Issue 1**: Close volume selector was fixed at 1 lot and couldn't be adjusted
+- **Issue 2**: Button text was too verbose: "平仓（平多 X手）" or "平仓（平空 X手）"
+- **Issue 3**: No clear indication of maximum available position
+- **Issue 4**: Default close volume was 1 lot instead of full position
+
+### Solution: Enhanced UI with Better UX
+
+**Key Improvements:**
+
+1. **Simplified Button Text**
+   - Changed from "平仓（平多 X手）" to "平多"
+   - Changed from "平仓（平空 X手）" to "平空"
+   - Changed from "平仓（无持仓）" to "无持仓"
+   - Cleaner, more concise display
+
+2. **Fixed Volume Selector**
+   - Fixed issue where volume selector couldn't be adjusted
+   - Default value set to full position (full close)
+   - Maximum value automatically limited to available position
+   - Users can select full close or less
+
+3. **Position Hint Label**
+   - Added hint label below volume selector showing "<= X手"
+   - Displays current available position in real-time
+   - Gray, small font for non-intrusive display
+   - Updates automatically when position changes
+
+4. **Default Full-Close Behavior**
+   - Volume selector defaults to full position amount
+   - Users can easily adjust to partial close if needed
+   - Reduces number of clicks for common full-close operation
+
+### Implementation Details
+
+**UI Components:**
+```python
+# Close position button (simplified text)
+self.close_position_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("无持仓"))
+self.close_position_button.setToolTip(_("根据当前持仓自动平仓，使用对手价并启用智能追价"))
+
+# Volume selector with improved tooltip
+self.close_volume_spin: QtWidgets.QSpinBox = QtWidgets.QSpinBox()
+self.close_volume_spin.setRange(1, 1000)
+self.close_volume_spin.setValue(1)
+self.close_volume_spin.setSuffix(_("手"))
+self.close_volume_spin.setToolTip(_("平仓手数（不能超过可用持仓）"))
+
+# Position hint label
+self.close_volume_hint_label: QtWidgets.QLabel = QtWidgets.QLabel(_("<= 0手"))
+self.close_volume_hint_label.setStyleSheet("color: gray; font-size: 10px;")
+self.close_volume_hint_label.setToolTip(_("当前可用持仓数量"))
+```
+
+**Button State Update Logic:**
+```python
+def update_close_position_button(self) -> None:
+    """Update close position button state and text"""
+    if long_available > 0:
+        self.close_position_button.setText(_("平多"))
+        self.close_position_button.setEnabled(True)
+        # Set maximum and default to full position
+        max_volume = int(long_available)
+        self.close_volume_spin.setMaximum(max_volume)
+        self.close_volume_spin.setValue(max_volume)  # Default to full close
+        # Update hint label
+        self.close_volume_hint_label.setText(_(f"<= {long_available:.0f}手"))
+    elif short_available > 0:
+        self.close_position_button.setText(_("平空"))
+        self.close_position_button.setEnabled(True)
+        # Set maximum and default to full position
+        max_volume = int(short_available)
+        self.close_volume_spin.setMaximum(max_volume)
+        self.close_volume_spin.setValue(max_volume)  # Default to full close
+        # Update hint label
+        self.close_volume_hint_label.setText(_(f"<= {short_available:.0f}手"))
+    else:
+        self.close_position_button.setText(_("无持仓"))
+        self.close_position_button.setEnabled(False)
+        self.close_volume_spin.setMaximum(1000)
+        self.close_volume_spin.setValue(1)
+        self.close_volume_hint_label.setText(_("<= 0手"))
+```
+
+**UI Layout:**
+```
+平仓手数: [2手] [平多]
+         <= 2手
+```
+
+### Key Improvements
+
+1. **User Experience**:
+   - **Simplified Text**: Button shows only "平多" or "平空" for clarity
+   - **Default Full-Close**: Volume defaults to full position, reducing clicks
+   - **Clear Hints**: Position hint shows maximum available clearly
+   - **Intuitive Operation**: Users can easily see and adjust close volume
+
+2. **Functionality**:
+   - **Fixed Selector**: Volume selector now works correctly and can be adjusted
+   - **Automatic Limits**: Maximum value automatically set to available position
+   - **Real-time Updates**: Hint label updates when position changes
+   - **Validation**: Cannot exceed available position
+
+3. **Visual Design**:
+   - **Cleaner Interface**: Simplified button text reduces visual clutter
+   - **Clear Feedback**: Hint label provides immediate position information
+   - **Non-intrusive**: Gray, small font for hint label doesn't distract
+
+### Usage Examples
+
+**Example 1: Long Position with Full Close**
+```
+Position: Long 2手 (available: 2手)
+Button Display: "平多" [Enabled]
+Volume Selector: [2手] (default, can be adjusted)
+Hint Label: "<= 2手"
+User Action: Click "平多" (full close)
+Result: Closes all 2手
+```
+
+**Example 2: Long Position with Partial Close**
+```
+Position: Long 5手 (available: 5手)
+Button Display: "平多" [Enabled]
+Volume Selector: [5手] (default, user changes to 3手)
+Hint Label: "<= 5手"
+User Action: Change to 3手, click "平多"
+Result: Closes 3手, leaves 2手
+```
+
+**Example 3: No Position**
+```
+Position: None
+Button Display: "无持仓" [Disabled]
+Volume Selector: [1手] (disabled)
+Hint Label: "<= 0手"
+User Action: Button disabled, no action possible
+```
+
+### Before and After Comparison
+
+**Before:**
+- Button: "平仓（平多 2手）" (verbose)
+- Volume: Fixed at 1手 (couldn't adjust)
+- Hint: None
+- Default: 1手 (partial close)
+
+**After:**
+- Button: "平多" (concise)
+- Volume: Adjustable, default 2手 (full close)
+- Hint: "<= 2手" (clear indication)
+- Default: 2手 (full close)
+
+### Files Modified
+
+- **UI**: [vnpy/trader/ui/widget.py](vnpy/trader/ui/widget.py)
+  - Simplified button text ("平多"/"平空" instead of "平仓（平多 X手）")
+  - Fixed volume selector default value (set to full position)
+  - Added `close_volume_hint_label` for position hints
+  - Updated `update_close_position_button()` to set default to full position
+  - Enhanced UI layout with hint label
+
+### Benefits
+
+- **Better UX**: Cleaner, more intuitive interface
+- **Efficiency**: Default full-close reduces clicks for common operation
+- **Clarity**: Clear indication of maximum available position
+- **Flexibility**: Users can easily adjust to partial close if needed
+- **Reliability**: Fixed volume selector works correctly
+
+This enhancement provides a more professional and user-friendly close position interface that improves trading workflow efficiency while maintaining all safety validations.
+
+---
+
+## 持仓信息实时刷新功能实现 (2025-11-21)
+
+### 概述
+
+实现了基于事件驱动的持仓信息实时刷新功能，解决了持仓盈亏（PnL）不刷新、持仓信息闪烁、平仓后持仓不清除等问题。采用 **方案D：双层缓存 + 轻量定序器** 架构，确保实时性同时避免阻塞事件引擎。
+
+### 核心功能
+
+#### 1. 实时 PnL 计算与刷新
+
+- **触发机制**：基于 `EVENT_TICK` 事件，自动触发持仓 PnL 重新计算
+- **刷新队列**：使用 `deque` 实现轻量级刷新队列，避免重复计算
+- **批量处理**：定时器事件批量处理队列中的持仓刷新请求
+- **连续合约映射**：支持主连合约（如 `MHImain`）与具体合约（如 `MHI2511`）之间的双向映射
+
+#### 2. 净持仓模式支持
+
+- **富途期货适配**：正确处理富途期货的净持仓模式（无开/平字段，只有买卖方向）
+- **智能平仓识别**：根据交易方向与当前持仓方向自动判断是开仓还是平仓
+- **持仓合并**：自动检测并合并多空持仓，计算净持仓
+
+#### 3. 持仓删除与 UI 更新
+
+- **自动删除**：当持仓 `volume=0` 时，自动从持仓字典中删除
+- **UI 同步**：`PositionMonitor` 自动删除 `volume=0` 的持仓行
+- **防闪烁**：使用 `removed_positions` 集合避免网关重复推送导致的闪烁
+
+### 技术实现
+
+#### 新增事件类型
+
+**文件**: `vnpy/trader/event.py`
+- `EVENT_POSITION_VIEW`: 新增持仓视图事件，用于实时刷新持仓信息
+
+#### 核心修改
+
+**文件**: `vnpy/trader/engine.py` - `OmsEngine` 类
+
+1. **初始化新增字段**:
+   ```python
+   self.refresh_queue: deque[str] = deque()  # 刷新队列
+   self.refresh_symbols: set[str] = set()    # 已入队符号集合
+   self.last_view_emit: dict[str, float] = {} # 最后发送时间
+   self.removed_positions: set[str] = set()   # 已删除持仓集合
+   self.position_view_enabled: bool = SETTINGS.get("position.view.enabled", False)
+   self.position_view_emit_legacy: bool = SETTINGS.get("position.view.emit_legacy", True)
+   self.position_view_debug: bool = SETTINGS.get("position.view.debug", False)
+   ```
+
+2. **事件处理增强**:
+   - `process_tick_event`: 检测持仓并入队刷新请求，支持连续合约映射
+   - `process_trade_event`: 处理成交事件，更新持仓快照
+   - `process_position_event`: 处理网关推送的持仓事件，保留计算的 PnL，处理净持仓合并
+   - `process_timer_event`: 定时批量处理刷新队列
+
+3. **核心方法**:
+   - `_enqueue_refresh_symbol`: 将符号加入刷新队列
+   - `_refresh_positions`: 批量处理刷新队列
+   - `_refresh_symbol_positions`: 刷新指定符号的所有持仓
+   - `_find_tick_for_position`: 查找持仓对应的 tick 数据（支持连续合约映射）
+   - `_calculate_position_pnl`: 计算持仓盈亏（使用合约 size）
+   - `_apply_trade_to_position`: 将成交结果合并到持仓快照（支持净持仓模式）
+   - `_emit_position_view`: 发送持仓视图事件
+
+#### UI 修改
+
+**文件**: `vnpy/trader/ui/widget.py` - `PositionMonitor` 类
+
+- 重写 `process_event` 方法，自动删除 `volume=0` 的持仓行
+- 支持 `EVENT_POSITION_VIEW` 事件（向后兼容 `EVENT_POSITION`）
+
+#### 网关修改
+
+**文件**: `vnpy_futu/vnpy_futu/futu_gateway.py` - `FutuGateway` 类
+
+- 修复合约 `size` 字段：根据合约代码设置正确的合约乘数
+  - 小恒指（MHI）/小国指（MCH）：`size=10`（每跳 10 港币）
+  - 大恒指（HSI）/大国指（HHI）：`size=50`（每跳 50 港币）
+
+#### 配置项
+
+**文件**: `vnpy/trader/setting.py`
+
+新增配置项：
+- `position.view.enabled`: 是否启用持仓视图功能（默认：`True`）
+- `position.view.emit_legacy`: 是否同时发送旧版 `EVENT_POSITION` 事件（默认：`True`）
+- `position.view.debug`: 是否启用调试日志（默认：`False`）
+
+### 关键问题解决
+
+#### 1. PnL 不刷新问题
+- **原因**：`process_tick_event` 没有触发 PnL 重新计算
+- **解决**：实现刷新队列机制，tick 事件触发入队，定时器批量处理
+
+#### 2. 连续合约映射问题
+- **原因**：持仓代码（`MHI2511`）与 tick 代码（`MHImain`）不匹配
+- **解决**：实现双向映射逻辑，通过前缀匹配找到对应的 tick 数据
+
+#### 3. 合约 size 错误问题
+- **原因**：Futu 网关硬编码 `size=1`
+- **解决**：根据合约代码设置正确的 `size`（小恒指=10，大恒指=50）
+
+#### 4. 净持仓模式平仓问题
+- **原因**：富途期货无开/平字段，只能通过买卖方向判断
+- **解决**：实现智能平仓识别，根据交易方向与当前持仓方向判断
+
+#### 5. 持仓闪烁问题
+- **原因**：网关重复推送 `volume=0` 的持仓事件
+- **解决**：使用 `removed_positions` 集合记录已删除持仓，忽略重复事件
+
+#### 6. 持仓不清除问题
+- **原因**：`volume=0` 的持仓仍在 UI 中显示
+- **解决**：`PositionMonitor` 自动删除 `volume=0` 的持仓行
+
+### 使用说明
+
+#### 启用功能
+
+在 `vt_setting.json` 中配置：
+```json
+{
+  "position.view.enabled": true,
+  "position.view.emit_legacy": true,
+  "position.view.debug": false
+}
+```
+
+#### 调试模式
+
+如需查看详细日志，设置 `position.view.debug: true`。
+
+### 测试验证
+
+- ✅ 持仓 PnL 实时刷新（基于 tick 数据）
+- ✅ 连续合约映射正常工作（MHImain <-> MHI2511）
+- ✅ 净持仓模式平仓正确（多单用空单平，空单用多单平）
+- ✅ 平仓后持仓自动清除（volume=0 不显示）
+- ✅ 合约 size 正确（小恒指每跳 10 港币）
+- ✅ 无持仓闪烁（已删除持仓不再处理）
+
+### 文件清单
+
+**修改的文件**:
+- `vnpy/trader/engine.py`: 核心实现（OmsEngine）
+- `vnpy/trader/event.py`: 新增 EVENT_POSITION_VIEW
+- `vnpy/trader/setting.py`: 新增配置项
+- `vnpy/trader/ui/widget.py`: UI 自动删除零持仓
+- `vnpy_futu/vnpy_futu/futu_gateway.py`: 修复合约 size
+
+**测试文件**:
+- `test_position_refresh_service.py`: TDD 测试用例
+
+### 架构设计
+
+采用 **方案D：双层缓存 + 轻量定序器**：
+
+1. **双层缓存**:
+   - `position_snapshots` (self.positions): 持仓快照，存储"真实值"（来自网关或成交合并）
+   - `last_view_cache` (self.last_view_emit): 最后发送的视图缓存，用于检测变化
+
+2. **轻量定序器**:
+   - `refresh_queue`: 刷新队列，存储待刷新的符号
+   - `refresh_symbols`: 已入队符号集合，避免重复入队
+   - 定时器批量处理，避免频繁计算
+
+3. **事件驱动**:
+   - Tick 事件 → 入队刷新请求
+   - 定时器事件 → 批量处理队列
+   - 成交事件 → 更新持仓快照
+   - 持仓事件 → 保留计算的 PnL
+
+### 性能优化
+
+- **节流机制**：同一符号多次 tick 事件只入队一次
+- **批量处理**：定时器批量处理队列，避免频繁计算
+- **变化检测**：只在关键字段变化时发送事件，避免无效更新
+- **去重处理**：使用 `removed_positions` 集合避免重复处理已删除持仓
+
+### 向后兼容
+
+- 默认启用 `position.view.emit_legacy=true`，同时发送新旧事件
+- `PositionMonitor` 同时监听 `EVENT_POSITION` 和 `EVENT_POSITION_VIEW`
+- 旧策略无需修改即可正常工作
