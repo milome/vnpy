@@ -337,6 +337,42 @@ class FutuGateway(BaseGateway):
             if code:
                 self.write_log(f"订阅行情失败：{data}")
 
+    def _resolve_main_contract(self, vt_symbol: str, futu_symbol: str) -> str:
+        """
+        解析主力合约为实际月份合约
+
+        例如：MHImain -> MHI2511
+
+        Args:
+            vt_symbol: VNPy合约代码（如MHImain）
+            futu_symbol: Futu合约代码（如HK_FUTURE.MHImain）
+
+        Returns:
+            实际合约代码（如HK.MHI2511），如果解析失败返回None
+        """
+        try:
+            # 提取基础代码（去掉main后缀）
+            base_symbol = vt_symbol.replace("main", "")  # MHI
+
+            # 尝试通过查询行情快照获取实际合约信息
+            code, data = self.quote_ctx.get_market_snapshot([f"HK.{vt_symbol}"])
+            if code == 0 and not data.empty:
+                # 从名称中提取合约月份：如"小恒指期货 (2511)" -> 2511
+                name = data['name'].values[0]
+                if '(' in name and ')' in name:
+                    month_code = name.split('(')[1].split(')')[0].strip()
+                    if month_code.isdigit() and len(month_code) == 4:
+                        # 构造实际合约代码
+                        actual_code = f"HK.{base_symbol}{month_code}"
+                        return actual_code
+
+            self.write_log(f"无法解析主力合约 {vt_symbol}：查询失败或数据格式异常")
+            return None
+
+        except Exception as e:
+            self.write_log(f"解析主力合约异常 {vt_symbol}: {str(e)}")
+            return None
+
     def send_order(self, req: OrderRequest) -> str:
         """委托下单"""
         side: TrdSide = DIRECTION_VT2FUTU[req.direction]
@@ -387,7 +423,37 @@ class FutuGateway(BaseGateway):
         else:
             adjust_limit: float = -0.05
 
+        # 转换合约代码
         futu_symbol: str = convert_symbol_vt2futu(req.symbol, req.exchange)
+
+        # 处理主力合约：MHImain需要转换为实际月份合约
+        if req.symbol.endswith("main") and req.exchange == Exchange.HKFE:
+            actual_symbol = self._resolve_main_contract(req.symbol, futu_symbol)
+            if actual_symbol:
+                self.write_log(f"主力合约 {req.symbol} 转换为实际合约 {actual_symbol}")
+                futu_symbol = actual_symbol
+            else:
+                self.write_log(f"警告：无法解析主力合约 {req.symbol}，使用原代码")
+
+        self.write_log(f"转换后的富途合约代码: {futu_symbol}")
+        self.write_log(f"当前市场设置: {self.market}")
+        self.write_log(f"交易上下文类型: {type(self.trade_ctx).__name__}")
+        
+        # 尝试查询可用的期货合约
+        if req.symbol == "MHImain":
+            try:
+                ret, contract_data = self.quote_ctx.get_stock_basicinfo("HK", "FUTURE")
+                if ret == 0:
+                    mhi_contracts = contract_data[contract_data['code'].str.contains('MHI', na=False)]
+                    if not mhi_contracts.empty:
+                        self.write_log(f"可用的MHI期货合约: {mhi_contracts['code'].tolist()}")
+                    else:
+                        self.write_log("未找到MHI期货合约")
+                else:
+                    self.write_log(f"查询期货合约失败: {contract_data}")
+            except Exception as e:
+                self.write_log(f"查询期货合约异常: {str(e)}")
+        
         code, data = self.trade_ctx.place_order(
             order_price,  # 使用计算后的价格
             req.volume,
@@ -588,7 +654,8 @@ class FutuGateway(BaseGateway):
                 # - HHI (大国指): 50 HKD per point
                 # Default to 1 for other contracts
                 size = 1
-                if exchange == Exchange.SEHK:
+                # 注意：期货合约使用 Exchange.HKFE（香港期货交易所），不是 Exchange.SEHK（股票交易所）
+                if exchange == Exchange.HKFE:
                     symbol_upper = symbol.upper()
                     if symbol_upper.startswith("MHI") or symbol_upper.startswith("MCH"):
                         size = 10  # 小恒指/小国指：每跳 10 港币
@@ -792,8 +859,6 @@ class FutuGateway(BaseGateway):
 
     def on_tick(self, tick: TickData) -> None:
         super().on_tick(tick)
-        if tick.symbol == "MHImain" and tick.exchange == Exchange.HKFE:
-            self.write_log(f"[{tick.datetime}] MHImain last={tick.last_price} volume={tick.volume}")
 
     def process_orderbook(self, data) -> None:
         """行情信息处理推送"""
@@ -908,7 +973,7 @@ def convert_symbol_futu2vt(code) -> str:
 
 def convert_symbol_vt2futu(symbol, exchange) -> str:
     """veighna合约名称转换"""
-    futu_exchange: Exchange = EXCHANGE_VT2FUTU[exchange]
+    futu_exchange: str = EXCHANGE_VT2FUTU[exchange]
     return f"{futu_exchange}.{symbol}"
 
 
