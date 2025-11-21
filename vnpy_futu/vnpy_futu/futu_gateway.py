@@ -214,6 +214,12 @@ class FutuGateway(BaseGateway):
         self.connect_quote()
         self.connect_trade()
 
+        # 如果线程已经启动过，创建新的线程对象
+        if self.thread.is_alive():
+            self.thread = Thread(target=self.query_data)
+        elif hasattr(self.thread, '_started') and self.thread._started.is_set():
+            self.thread = Thread(target=self.query_data)
+            
         self.thread.start()
 
 
@@ -363,8 +369,8 @@ class FutuGateway(BaseGateway):
                 if '(' in name and ')' in name:
                     month_code = name.split('(')[1].split(')')[0].strip()
                     if month_code.isdigit() and len(month_code) == 4:
-                        # 构造实际合约代码，使用HK_FUTURE前缀以保持一致性
-                        actual_code = f"HK_FUTURE.{base_symbol}{month_code}"
+                        # 构造实际合约代码，使用HK前缀（富途API期望格式）
+                        actual_code = f"HK.{base_symbol}{month_code}"
                         return actual_code
 
             self.write_log(f"无法解析主力合约 {vt_symbol}：查询失败或数据格式异常")
@@ -765,6 +771,14 @@ class FutuGateway(BaseGateway):
 
         if self.trade_ctx:
             self.trade_ctx.close()
+            
+        # 等待线程结束并重置线程对象
+        if self.thread and self.thread.is_alive():
+            # 线程会在查询循环中自然结束，因为连接已关闭
+            self.thread.join(timeout=5.0)  # 最多等待5秒
+        
+        # 重置线程对象，为下次连接做准备
+        self.thread = Thread(target=self.query_data)
 
     def get_tick(self, code) -> TickData:
         """查询Tick数据"""
@@ -792,7 +806,9 @@ class FutuGateway(BaseGateway):
         # 映射VNPy周期到富途API周期
         interval_mapping = {
             Interval.MINUTE: KLType.K_1M,
+            Interval.HOUR: KLType.K_60M,
             Interval.DAILY: KLType.K_DAY,
+            Interval.WEEKLY: KLType.K_WEEK,
         }
 
         if req.interval not in interval_mapping:
