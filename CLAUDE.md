@@ -2634,3 +2634,883 @@ def _calculate_position_pnl(self, position: PositionData, tick: TickData, size: 
 ### 结论
 
 我们的实时计算PnL比网关推送的PnL更准确、更及时，能够更好地反映市场实时情况。通过5秒时间窗口保护机制，我们既保证了实时性，又避免了网关数据的干扰，为交易决策提供了更可靠的参考依据。
+
+---
+
+## DataManager历史数据更新UI修复 (2025-11-21)
+
+### 问题背景
+
+DataManager的"更新数据"功能存在以下问题：
+1. **缺少完成提示**：数据更新完成后没有弹窗显示总下载数据量
+2. **进度对话框空白**：由于UI线程阻塞，进度对话框无法实时更新显示内容
+3. **返回值被忽略**：`update_data()` 方法调用 `download_bar_data()` 但忽略了返回值
+
+### 根本原因
+
+`update_data()` 方法的原始实现：
+- ✅ 显示进度对话框（`QProgressDialog`）
+- ✅ 遍历并更新所有合约数据
+- ❌ **忽略了 `download_bar_data()` 的返回值**
+- ❌ **没有累计和显示总下载数据量**
+- ❌ **未调用 `QApplication.processEvents()` 导致UI无法刷新**
+
+### 解决方案
+
+#### 1. 修复 ManagerEngine 日志调用
+
+**问题**：使用了不存在的 `self.write_log()` 方法导致 `AttributeError`
+
+**修复**（`D:\veighna_studio\Lib\site-packages\vnpy_datamanager\engine.py`）：
+```python
+def download_bar_data(self, symbol: str, exchange: Exchange, interval: str,
+                      start: datetime, output: Callable) -> int:
+    # 修改前：self.write_log(...)  # AttributeError!
+    # 修改后：
+    self.main_engine.write_log(f"[调试] 开始查询历史数据：{vt_symbol}，网关：{contract.gateway_name}")
+    data: list[BarData] = self.main_engine.query_history(req, contract.gateway_name)
+    self.main_engine.write_log(f"[调试] 查询返回数据量：{len(data) if data else 0} 条")
+
+    if data:
+        self.main_engine.write_log(f"[调试] 开始保存 {len(data)} 条数据到数据库")
+        self.database.save_bar_data(data)
+        count = len(data)
+        self.main_engine.write_log(f"[调试] 数据保存完成，准备返回count={count}")
+        return count
+
+    return 0
+```
+
+#### 2. 增强 update_data() 方法
+
+**修复**（`D:\veighna_studio\Lib\site-packages\vnpy_datamanager\ui\widget.py`）：
+
+**添加数据量累计和完成弹窗**：
+```python
+def update_data(self) -> None:
+    overviews: list[BarOverview] = self.engine.get_bar_overview()
+    total: int = len(overviews)
+    count: int = 0
+    total_bars: int = 0  # 新增：累计下载的K线数量
+
+    # 检查是否有数据需要更新
+    if total == 0:
+        QtWidgets.QMessageBox.information(
+            self, "更新数据", "没有找到需要更新的合约数据"
+        )
+        return
+
+    # 创建进度对话框
+    dialog: QtWidgets.QProgressDialog = QtWidgets.QProgressDialog(
+        "历史数据更新中", "取消", 0, 100
+    )
+    dialog.setWindowTitle("更新进度")
+    dialog.setWindowModality(QtCore.Qt.WindowModal)
+    dialog.setMinimumDuration(0)  # 立即显示
+    dialog.setValue(0)
+    dialog.show()
+    QtWidgets.QApplication.processEvents()  # 关键：处理事件确保对话框显示
+
+    for overview in overviews:
+        if dialog.wasCanceled():
+            break
+
+        # 更新进度文本
+        dialog.setLabelText(f"正在更新: {overview.symbol}.{overview.exchange.value}")
+        QtWidgets.QApplication.processEvents()  # 关键：刷新进度文本
+
+        # 使用返回值
+        bar_count = self.engine.download_bar_data(
+            overview.symbol, overview.exchange, overview.interval,
+            overview.end, self.output
+        )
+        total_bars += bar_count  # 累加每次下载的数据量
+        count += 1
+        progress = int(round(count / total * 100, 0))
+        dialog.setValue(progress)
+        QtWidgets.QApplication.processEvents()  # 关键：刷新进度条
+
+    dialog.close()
+
+    # 显示完成弹窗
+    msg_box = QtWidgets.QMessageBox(self)
+    msg_box.setWindowTitle("下载结束")
+    msg_box.setText(f"更新完成，下载总数据量：{total_bars}条")
+    msg_box.setIcon(QtWidgets.QMessageBox.Information)
+    msg_box.setStandardButtons(QtWidgets.QMessageBox.Ok)
+    msg_box.setWindowModality(QtCore.Qt.ApplicationModal)
+    msg_box.exec_()
+```
+
+### 关键改进点
+
+#### 1. QApplication.processEvents() 的作用
+
+在耗时的同步操作中调用 `processEvents()` 让Qt事件循环有机会处理pending事件：
+- **对话框显示**：确保进度对话框立即显示
+- **UI刷新**：更新进度文本和进度条
+- **用户交互**：处理取消按钮点击事件
+
+**调用位置**：
+1. 对话框创建后立即调用 - 确保对话框显示
+2. 更新进度文本后调用 - 刷新显示内容
+3. 更新进度条后调用 - 刷新进度显示
+
+#### 2. 数据量统计
+
+```python
+total_bars: int = 0  # 累计器
+
+for overview in overviews:
+    bar_count = self.engine.download_bar_data(...)  # 获取返回值
+    total_bars += bar_count  # 累加
+```
+
+#### 3. 完成弹窗显示
+
+使用显式的 `QMessageBox` 创建和 `exec_()` 调用，确保模态显示：
+```python
+msg_box = QtWidgets.QMessageBox(self)
+msg_box.setWindowTitle("下载结束")
+msg_box.setText(f"更新完成，下载总数据量：{total_bars}条")
+msg_box.setIcon(QtWidgets.QMessageBox.Information)
+msg_box.setWindowModality(QtCore.Qt.ApplicationModal)
+result = msg_box.exec_()  # 模态显示，阻塞直到用户点击
+```
+
+### 修复效果
+
+**修复前**：
+- ❌ 进度对话框一片空白
+- ❌ 快速闪过后关闭
+- ❌ 没有完成提示弹窗
+- ❌ 不知道下载了多少数据
+
+**修复后**：
+- ✅ 进度对话框正常显示
+- ✅ 实时更新当前处理的合约
+- ✅ 进度条正常更新
+- ✅ 显示完成弹窗："更新完成，下载总数据量：908条"
+
+### 调试日志输出
+
+完整的数据流追踪：
+```
+[UI调试] update_data() 方法被调用
+[UI调试] 找到 1 个合约需要更新
+[UI调试] 进度对话框已创建并显示
+[UI调试] 正在更新: MHImain.HKFE
+[调试] 开始查询历史数据：MHImain.HKFE，网关：FUTU
+[FUTU] 查询历史数据：主力合约 MHImain 转换为实际合约 HK_FUTURE.MHI2511
+[FUTU] 首次查询成功，获取 908 条数据，page_req_key=None
+[FUTU] K线数据查询成功，返回 908 条K线数据
+[调试] 查询返回数据量：908 条
+[调试] 开始保存 908 条数据到数据库
+[调试] 数据保存完成，准备返回count=908
+[UI调试] 已完成 1/1，本次下载 908 条，累计 908 条
+[UI调试] 准备显示完成弹窗，总数据量: 908
+[UI调试] QMessageBox已创建，准备显示...
+[UI调试] QMessageBox已显示并关闭，返回值: 1024
+[UI调试] 完成弹窗流程结束
+```
+
+### 技术要点
+
+#### Qt UI 线程阻塞问题
+
+**问题**：在主线程执行耗时同步操作时，Qt事件循环被阻塞，导致：
+- UI无法刷新
+- 对话框显示空白
+- 用户交互无响应
+
+**解决**：在耗时操作的关键点调用 `QApplication.processEvents()`：
+```python
+# 创建对话框后
+dialog.show()
+QtWidgets.QApplication.processEvents()  # 让对话框有机会显示
+
+# 更新UI后
+dialog.setLabelText("正在处理...")
+QtWidgets.QApplication.processEvents()  # 让UI有机会刷新
+
+# 长时间操作中
+for item in items:
+    process(item)
+    dialog.setValue(progress)
+    QtWidgets.QApplication.processEvents()  # 保持UI响应
+```
+
+#### BaseEngine 继承结构
+
+`ManagerEngine` 继承自 `BaseEngine`，`BaseEngine` 只提供 `main_engine` 属性，不提供 `write_log()` 方法。
+
+因此必须使用：
+```python
+self.main_engine.write_log(message)  # ✅ 正确
+# 而不是：
+self.write_log(message)  # ❌ AttributeError
+```
+
+### 文件修改列表
+
+1. **D:\veighna_studio\Lib\site-packages\vnpy_datamanager\engine.py**
+   - 修复 `write_log()` 调用方式
+   - 添加详细调试日志
+
+2. **D:\veighna_studio\Lib\site-packages\vnpy_datamanager\ui\widget.py**
+   - 添加 `total_bars` 累计器
+   - 使用 `download_bar_data()` 返回值
+   - 添加 `QApplication.processEvents()` 调用
+   - 添加完成弹窗显示
+   - 添加详细调试日志
+   - 添加零数据检查和提示
+
+### 适用场景
+
+这个修复方案适用于所有在Qt应用中执行耗时同步操作的场景：
+- 网络请求
+- 数据库操作
+- 文件读写
+- 数据处理
+
+**核心原则**：在耗时操作的循环中周期性调用 `processEvents()` 保持UI响应。
+
+### 性能考虑
+
+`processEvents()` 会处理所有pending事件，可能影响性能。建议：
+- 不要在紧密循环中频繁调用（如每次迭代都调用）
+- 在合适的粒度调用（如每处理一个文件、每完成一个步骤）
+- 本例中每个合约调用一次是合理的（通常不会有太多合约）
+
+### 总结
+
+通过这次修复：
+1. ✅ **解决了UI弹窗缺失问题** - 显示总下载数据量
+2. ✅ **解决了进度对话框空白问题** - 实时更新显示内容
+3. ✅ **增强了用户体验** - 提供清晰的进度反馈
+4. ✅ **完善了调试能力** - 详细的日志追踪
+
+用户现在可以清楚地看到：
+- 正在处理哪个合约
+- 实时进度条
+- 最终下载了多少条数据
+
+这为后续的MHI策略交易系统开发提供了可靠的数据基础。
+
+---
+
+## 开发环境迁移方案设计 (2025-11-21)
+
+### 背景
+
+为了快速验证FUTU_GATEWAY，最初选择直接安装VN Studio，快速搭建了依赖环境。随后克隆了vnpy和vnpy_futu的仓库进行本地开发，但这带来了以下问题：
+
+**当前环境状态**：
+- VN Studio安装在 `D:\veighna_studio\`，所有依赖包都在其site-packages中
+- 克隆的开发仓库在 `D:\Dev\vnpy\` 和 `D:\Dev\vnpy\vnpy_futu\`
+- 部分模块（如vnpy_datamanager）未克隆到本地，只存在于site-packages
+- 修改site-packages中的代码无法用git管理
+
+**问题分析**：
+1. **混合环境**：本地开发repo与site-packages模块混在一起
+2. **Git管理缺失**：未克隆的模块修改无法版本控制
+3. **依赖混乱**：不清楚哪些包来自VN Studio，哪些是本地开发版本
+4. **测试困难**：无法确保使用的是本地修改的代码还是已安装的版本
+
+### 解决方案
+
+#### 方案A：完全虚拟环境隔离（推荐）
+
+**架构设计**：
+
+```
+D:\Dev\vnpy-dev\                    # 开发环境根目录
+├── venv\                           # Python虚拟环境
+│   ├── Scripts\                    # 虚拟环境脚本
+│   └── Lib\site-packages\          # 虚拟环境依赖
+├── repos\                          # 所有开发仓库
+│   ├── vnpy\                       # VNPy核心框架（git克隆）
+│   ├── vnpy_futu\                  # Futu网关（git克隆）
+│   ├── vnpy_ctastrategy\           # CTA策略引擎（git克隆）
+│   ├── vnpy_datamanager\           # 数据管理（git克隆）
+│   ├── vnpy_datarecorder\          # 数据录制（git克隆）
+│   └── ...                         # 其他需要修改的模块
+└── scripts\                        # 开发脚本
+    ├── install_all.bat             # 批量安装所有本地模块
+    ├── update_and_run.bat          # 更新并运行
+    └── test_env.bat                # 环境验证脚本
+```
+
+**实施步骤**：
+
+1. **创建虚拟环境**：
+```bash
+# 在D:\Dev\vnpy-dev目录下
+python -m venv venv
+
+# 激活虚拟环境
+venv\Scripts\activate
+```
+
+2. **克隆所有需要修改的模块**：
+```bash
+cd D:\Dev\vnpy-dev\repos
+
+# 克隆核心框架（已有）
+git clone https://github.com/vnpy/vnpy.git
+
+# 克隆Futu网关（已有）
+git clone https://github.com/vnpy/vnpy_futu.git
+
+# 克隆其他需要修改的模块
+git clone https://github.com/vnpy/vnpy_ctastrategy.git
+git clone https://github.com/vnpy/vnpy_datamanager.git
+git clone https://github.com/vnpy/vnpy_datarecorder.git
+git clone https://github.com/vnpy/vnpy_chartwizard.git
+# ... 根据需要继续克隆
+```
+
+3. **安装依赖和本地模块**：
+```bash
+# 激活虚拟环境
+D:\Dev\vnpy-dev\venv\Scripts\activate
+
+# 安装核心框架（editable模式）
+cd D:\Dev\vnpy-dev\repos\vnpy
+pip install -e .[alpha,dev]
+
+# 安装各个模块（editable模式）
+cd D:\Dev\vnpy-dev\repos\vnpy_futu
+pip install -e .
+
+cd D:\Dev\vnpy-dev\repos\vnpy_ctastrategy
+pip install -e .
+
+cd D:\Dev\vnpy-dev\repos\vnpy_datamanager
+pip install -e .
+
+cd D:\Dev\vnpy-dev\repos\vnpy_datarecorder
+pip install -e .
+
+# ... 其他模块同理
+```
+
+4. **创建批量安装脚本** (`install_all.bat`):
+```batch
+@echo off
+echo ========================================
+echo VNPy 开发环境安装脚本
+echo ========================================
+
+REM 激活虚拟环境
+call D:\Dev\vnpy-dev\venv\Scripts\activate.bat
+
+echo.
+echo [1/6] 安装 VNPy 核心框架...
+cd /d "D:\Dev\vnpy-dev\repos\vnpy"
+pip install -e .[alpha,dev]
+if errorlevel 1 goto error
+
+echo.
+echo [2/6] 安装 vnpy_futu...
+cd /d "D:\Dev\vnpy-dev\repos\vnpy_futu"
+pip install -e .
+if errorlevel 1 goto error
+
+echo.
+echo [3/6] 安装 vnpy_ctastrategy...
+cd /d "D:\Dev\vnpy-dev\repos\vnpy_ctastrategy"
+pip install -e .
+if errorlevel 1 goto error
+
+echo.
+echo [4/6] 安装 vnpy_datamanager...
+cd /d "D:\Dev\vnpy-dev\repos\vnpy_datamanager"
+pip install -e .
+if errorlevel 1 goto error
+
+echo.
+echo [5/6] 安装 vnpy_datarecorder...
+cd /d "D:\Dev\vnpy-dev\repos\vnpy_datarecorder"
+pip install -e .
+if errorlevel 1 goto error
+
+echo.
+echo [6/6] 验证安装...
+python -c "import vnpy; print(f'VNPy version: {vnpy.__version__}')"
+python -c "import vnpy_futu; print('vnpy_futu: OK')"
+python -c "import vnpy_ctastrategy; print('vnpy_ctastrategy: OK')"
+python -c "import vnpy_datamanager; print('vnpy_datamanager: OK')"
+python -c "import vnpy_datarecorder; print('vnpy_datarecorder: OK')"
+
+echo.
+echo ========================================
+echo 安装完成！
+echo ========================================
+goto end
+
+:error
+echo.
+echo ========================================
+echo 安装失败，请检查错误信息
+echo ========================================
+pause
+exit /b 1
+
+:end
+pause
+```
+
+5. **创建更新和运行脚本** (`update_and_run.bat`):
+```batch
+@echo off
+echo ========================================
+echo VNPy 开发环境 - 更新并运行
+echo ========================================
+
+REM 激活虚拟环境
+call D:\Dev\vnpy-dev\venv\Scripts\activate.bat
+
+echo.
+echo [1/3] 重新安装本地修改的模块...
+cd /d "D:\Dev\vnpy-dev\repos\vnpy_futu"
+pip install -e . --no-deps
+if errorlevel 1 goto error
+
+cd /d "D:\Dev\vnpy-dev\repos\vnpy"
+pip install -e . --no-deps
+if errorlevel 1 goto error
+
+echo.
+echo [2/3] 验证环境...
+python -c "import vnpy_futu; print('vnpy_futu 路径:', vnpy_futu.__file__)"
+python -c "import vnpy; print('vnpy 路径:', vnpy.__file__)"
+
+echo.
+echo [3/3] 启动 VNPy Trader...
+cd /d "D:\Dev\vnpy-dev\repos\vnpy\examples\veighna_trader"
+python run.py
+
+goto end
+
+:error
+echo.
+echo ========================================
+echo 执行失败，请检查错误信息
+echo ========================================
+pause
+exit /b 1
+
+:end
+```
+
+6. **创建环境验证脚本** (`test_env.bat`):
+```batch
+@echo off
+echo ========================================
+echo VNPy 开发环境验证
+echo ========================================
+
+REM 激活虚拟环境
+call D:\Dev\vnpy-dev\venv\Scripts\activate.bat
+
+echo.
+echo [验证] Python版本：
+python --version
+
+echo.
+echo [验证] 已安装的VNPy相关包：
+pip list | findstr vnpy
+
+echo.
+echo [验证] 模块路径（确保是本地开发版本）：
+python -c "import vnpy; print('vnpy:', vnpy.__file__)"
+python -c "import vnpy_futu; print('vnpy_futu:', vnpy_futu.__file__)"
+python -c "import vnpy_datamanager; print('vnpy_datamanager:', vnpy_datamanager.__file__)"
+
+echo.
+echo [验证] Futu网关功能：
+python -c "from vnpy_futu.futu_gateway import FutuGateway; print('FutuGateway导入成功')"
+
+echo.
+echo [验证] 自定义功能（合约size修复）：
+python -c "from vnpy_futu.futu_gateway import convert_symbol_futu2vt; from vnpy.trader.constant import Exchange; symbol, exchange = convert_symbol_futu2vt('HK.MHImain'); print(f'MHImain转换: symbol={symbol}, exchange={exchange.value}')"
+
+echo.
+echo ========================================
+echo 验证完成
+echo ========================================
+pause
+```
+
+**优点**：
+- ✅ **完全隔离**：开发环境与VN Studio完全独立
+- ✅ **版本控制**：所有修改的代码都在git管理下
+- ✅ **依赖清晰**：虚拟环境中只有开发需要的包
+- ✅ **可重现**：可以随时重建虚拟环境
+- ✅ **测试可靠**：确保使用的是本地修改的代码
+
+**缺点**：
+- ❌ 需要克隆更多仓库（约500MB-1GB）
+- ❌ 需要重新安装依赖（一次性工作）
+- ❌ 虚拟环境占用空间（约1-2GB）
+
+---
+
+#### 方案B：Editable安装覆盖（轻量）
+
+**适用场景**：只修改少数几个模块，不需要完全隔离。
+
+**实施步骤**：
+
+1. **保持VN Studio作为基础环境**
+2. **只克隆需要修改的模块到D:\Dev\vnpy\**
+3. **使用editable模式覆盖安装**：
+
+```batch
+# 已有的模块
+cd D:\Dev\vnpy\vnpy_futu
+pip install -e .
+
+cd D:\Dev\vnpy
+pip install -e .
+
+# 新克隆需要修改的模块
+cd D:\Dev\vnpy
+git clone https://github.com/vnpy/vnpy_datamanager.git
+cd vnpy_datamanager
+pip install -e .
+```
+
+4. **验证覆盖成功**：
+```python
+import vnpy_futu
+print(vnpy_futu.__file__)  # 应该显示 D:\Dev\vnpy\vnpy_futu\...
+
+import vnpy_datamanager
+print(vnpy_datamanager.__file__)  # 应该显示 D:\Dev\vnpy\vnpy_datamanager\...
+```
+
+**优点**：
+- ✅ **轻量级**：不需要重建整个环境
+- ✅ **快速**：只克隆需要修改的模块
+- ✅ **兼容**：可以继续使用VN Studio的其他功能
+
+**缺点**：
+- ❌ **部分隔离**：仍然依赖VN Studio的基础环境
+- ❌ **可能冲突**：VN Studio更新可能覆盖本地修改
+- ❌ **不够清晰**：难以区分哪些是本地版本
+
+---
+
+#### 方案C：混合方案（推荐用于当前阶段）
+
+**设计思路**：
+1. **保留VN Studio**作为生产环境和快速测试环境
+2. **创建独立开发环境**用于开发和调试
+3. **使用git管理所有修改的代码**
+
+**目录结构**：
+```
+D:\Dev\vnpy\                        # 开发环境根目录
+├── venv-dev\                       # 开发专用虚拟环境
+├── vnpy\                           # VNPy核心（已克隆）
+├── vnpy_futu\                      # Futu网关（已克隆）
+├── vnpy_datamanager\               # 数据管理（新克隆）
+├── vnpy_ctastrategy\               # CTA策略（新克隆）
+└── scripts\
+    ├── dev_env.bat                 # 切换到开发环境
+    ├── prod_env.bat                # 切换到生产环境
+    └── sync_changes.bat            # 同步修改到生产环境
+```
+
+**实施步骤**：
+
+1. **创建开发虚拟环境**：
+```bash
+cd D:\Dev\vnpy
+python -m venv venv-dev
+venv-dev\Scripts\activate
+```
+
+2. **安装开发环境**：
+```batch
+REM dev_env.bat
+@echo off
+echo 切换到开发环境...
+call D:\Dev\vnpy\venv-dev\Scripts\activate.bat
+
+echo 安装/更新本地模块...
+cd /d "D:\Dev\vnpy\vnpy"
+pip install -e . --no-deps
+
+cd /d "D:\Dev\vnpy\vnpy_futu"
+pip install -e . --no-deps
+
+cd /d "D:\Dev\vnpy\vnpy_datamanager"
+pip install -e . --no-deps
+
+echo 开发环境已激活
+cmd /k
+```
+
+3. **同步到生产环境**：
+```batch
+REM sync_changes.bat
+@echo off
+echo ========================================
+echo 同步开发修改到生产环境
+echo ========================================
+
+echo [1/3] 同步 vnpy_futu...
+cd /d "D:\Dev\vnpy\vnpy_futu"
+python -m pip install -e . --target "D:\veighna_studio\Lib\site-packages" --upgrade
+
+echo [2/3] 同步 vnpy...
+cd /d "D:\Dev\vnpy\vnpy"
+python -m pip install -e . --target "D:\veighna_studio\Lib\site-packages" --upgrade
+
+echo [3/3] 同步 vnpy_datamanager...
+cd /d "D:\Dev\vnpy\vnpy_datamanager"
+python -m pip install -e . --target "D:\veighna_studio\Lib\site-packages" --upgrade
+
+echo 同步完成！
+pause
+```
+
+**优点**：
+- ✅ **双环境隔离**：开发和生产环境分离
+- ✅ **快速切换**：通过脚本快速切换环境
+- ✅ **保留VN Studio**：生产环境稳定，开发环境灵活
+- ✅ **Git管理完整**：所有修改都在git管理下
+
+**缺点**：
+- ⚠️ 需要维护两个环境
+- ⚠️ 同步脚本可能需要根据实际情况调整
+
+---
+
+### 推荐方案对比
+
+| 特性 | 方案A（完全隔离） | 方案B（轻量覆盖） | 方案C（混合方案） |
+|------|------------------|------------------|------------------|
+| **环境隔离** | ⭐⭐⭐⭐⭐ 完全隔离 | ⭐⭐ 部分隔离 | ⭐⭐⭐⭐ 双环境隔离 |
+| **Git管理** | ⭐⭐⭐⭐⭐ 完整 | ⭐⭐⭐ 部分 | ⭐⭐⭐⭐⭐ 完整 |
+| **实施难度** | ⭐⭐ 需要重建环境 | ⭐⭐⭐⭐⭐ 最简单 | ⭐⭐⭐ 中等 |
+| **维护成本** | ⭐⭐⭐⭐ 低 | ⭐⭐ 可能有冲突 | ⭐⭐⭐ 中等 |
+| **适用阶段** | 长期开发 | 快速验证 | **当前阶段** |
+
+### 最终推荐：方案C（混合方案）
+
+**理由**：
+1. **保留现有投资**：VN Studio环境不浪费，可作为生产环境
+2. **完整Git管理**：开发环境所有代码都在git管理下
+3. **灵活切换**：可以在开发和生产环境间快速切换
+4. **渐进式迁移**：可以逐步将更多模块纳入开发环境
+5. **风险可控**：生产环境稳定，开发环境随意测试
+
+### 迁移实施计划
+
+#### 第一阶段：搭建开发环境（1-2小时）
+
+1. **创建虚拟环境**：
+```bash
+cd D:\Dev\vnpy
+python -m venv venv-dev
+```
+
+2. **克隆缺失的模块**：
+```bash
+cd D:\Dev\vnpy
+git clone https://github.com/vnpy/vnpy_datamanager.git
+git clone https://github.com/vnpy/vnpy_ctastrategy.git
+git clone https://github.com/vnpy/vnpy_datarecorder.git
+```
+
+3. **安装开发环境**：
+```bash
+venv-dev\Scripts\activate
+cd vnpy
+pip install -e .[alpha,dev]
+cd ..\vnpy_futu
+pip install -e .
+cd ..\vnpy_datamanager
+pip install -e .
+cd ..\vnpy_ctastrategy
+pip install -e .
+cd ..\vnpy_datarecorder
+pip install -e .
+```
+
+4. **创建切换脚本**（见上面的dev_env.bat）
+
+#### 第二阶段：验证环境（30分钟）
+
+1. **运行环境验证脚本**
+2. **测试自定义功能**（合约size、主力合约解析等）
+3. **验证所有修改的代码都在git管理下**
+
+#### 第三阶段：开发工作流（日常）
+
+1. **开发时**：使用`dev_env.bat`激活开发环境
+2. **测试时**：在开发环境中测试
+3. **提交代码**：使用git管理所有修改
+4. **部署时**：使用`sync_changes.bat`同步到生产环境
+
+### Git工作流建议
+
+#### 分支策略
+
+```
+master (或 main)          # 稳定版本，与上游同步
+  ↓
+dev                       # 开发分支，所有自定义修改
+  ↓
+feature/xxx               # 功能分支，具体功能开发
+```
+
+#### 日常工作流
+
+1. **获取上游更新**：
+```bash
+git remote add upstream https://github.com/vnpy/vnpy.git
+git fetch upstream
+git merge upstream/master
+```
+
+2. **创建功能分支**：
+```bash
+git checkout -b feature/mhi-trading
+```
+
+3. **提交修改**：
+```bash
+git add .
+git commit -m "feat: 添加MHI策略交易功能"
+```
+
+4. **合并到开发分支**：
+```bash
+git checkout dev
+git merge feature/mhi-trading
+```
+
+#### 模块依赖管理
+
+在每个开发仓库中维护 `requirements-dev.txt`：
+
+```txt
+# vnpy_futu/requirements-dev.txt
+vnpy>=4.2.0
+futu-api-py>=6.3.2808
+```
+
+这样可以：
+- 明确记录依赖关系
+- 方便重建环境
+- 便于CI/CD集成
+
+### 常见问题处理
+
+#### Q1: 如何确认使用的是本地开发版本？
+
+```python
+import vnpy_futu
+print(vnpy_futu.__file__)
+
+# 应该输出类似：
+# D:\Dev\vnpy\vnpy_futu\vnpy_futu\__init__.py
+# 而不是：
+# D:\veighna_studio\Lib\site-packages\vnpy_futu\__init__.py
+```
+
+#### Q2: pip install -e 和 pip install 的区别？
+
+- `pip install -e .`（editable模式）：
+  - 安装的是开发模式，代码在原位置
+  - 修改源代码立即生效，无需重新安装
+  - 适合开发阶段
+
+- `pip install .`（常规安装）：
+  - 将代码复制到site-packages
+  - 修改源代码不生效，需要重新安装
+  - 适合生产环境
+
+#### Q3: 虚拟环境占用空间太大？
+
+虚拟环境会复制Python解释器和所有依赖包，通常占用1-2GB空间。优化方法：
+
+1. **使用venv而不是conda**：venv更轻量
+2. **只安装必要的依赖**：不要安装`.[alpha]`除非需要AI功能
+3. **定期清理**：删除旧的虚拟环境
+
+#### Q4: 如何处理上游更新和本地修改的冲突？
+
+使用rebase保持提交历史整洁：
+
+```bash
+# 获取上游更新
+git fetch upstream
+
+# Rebase本地修改到最新上游
+git rebase upstream/master
+
+# 如果有冲突，解决后继续
+git add .
+git rebase --continue
+```
+
+### 性能和效率考虑
+
+#### 开发环境启动脚本优化
+
+为了提高日常开发效率，创建快速启动脚本：
+
+```batch
+REM quick_start_dev.bat
+@echo off
+REM 快速启动开发环境，跳过不必要的重新安装
+call D:\Dev\vnpy\venv-dev\Scripts\activate.bat
+cd /d "D:\Dev\vnpy\vnpy\examples\veighna_trader"
+python run.py
+```
+
+#### IDE集成
+
+**VS Code配置** (`.vscode/settings.json`):
+```json
+{
+  "python.defaultInterpreterPath": "D:\\Dev\\vnpy\\venv-dev\\Scripts\\python.exe",
+  "python.terminal.activateEnvironment": true,
+  "python.linting.enabled": true,
+  "python.linting.pylintEnabled": false,
+  "python.linting.ruffEnabled": true,
+  "python.formatting.provider": "black"
+}
+```
+
+### 总结
+
+**当前推荐实施方案C（混合方案）**：
+
+1. ✅ **保留VN Studio**作为生产环境
+2. ✅ **创建独立开发环境**（venv-dev）
+3. ✅ **克隆所有需要修改的模块**到D:\Dev\vnpy\
+4. ✅ **使用editable模式安装**本地模块
+5. ✅ **通过脚本快速切换**开发/生产环境
+6. ✅ **所有修改使用git管理**
+
+**关键优势**：
+- 完整的git版本控制
+- 开发和生产环境隔离
+- 灵活的双环境切换
+- 保留现有VN Studio投资
+- 适合当前MHI策略开发阶段
+
+**下一步行动**：
+1. 创建开发虚拟环境
+2. 克隆缺失模块（vnpy_datamanager, vnpy_ctastrategy, vnpy_datarecorder）
+3. 安装开发环境
+4. 创建切换脚本
+5. 验证环境
+6. 开始MHI策略开发
