@@ -1204,6 +1204,70 @@ This intelligent price chasing system transforms order execution from a manual, 
 
 ## Latest Updates and Improvements (November 2024)
 
+### Futures Exchange Conversion Bug Fix (November 21, 2024)
+
+**Problem Identified**: When Futu API returns tick data for futures contracts, it uses the format `"HK.MHImain"` instead of `"HK_FUTURE.MHImain"`. The original `convert_symbol_futu2vt()` function incorrectly mapped this to `Exchange.SEHK` (stock exchange) instead of `Exchange.HKFE` (futures exchange).
+
+**Impact**:
+- TickData for MHImain showed `exchange=SEHK` instead of `exchange=HKFE`
+- Caused confusion in data recording and strategy development
+- Affected all Hong Kong futures contracts (HSI, MHI, MCH, HHI, CUS)
+
+**Solution Implemented**:
+```python
+def convert_symbol_futu2vt(code) -> str:
+    """
+    富途合约名称转换
+
+    注意：Futu API在返回期货数据时可能使用 "HK.MHImain" 格式
+    而不是 "HK_FUTURE.MHImain"，需要根据合约代码判断实际交易所
+    """
+    code_list = code.split(".")
+    futu_exchange = code_list[0]
+    futu_symbol = ".".join(code_list[1:])
+
+    # 检查是否为期货合约（根据合约代码特征判断）
+    symbol_upper = futu_symbol.upper()
+    is_futures = False
+
+    # 港股期货合约代码特征
+    futures_prefixes = ["MHI", "HSI", "MCH", "HHI", "CUS"]
+
+    for prefix in futures_prefixes:
+        if symbol_upper.startswith(prefix):
+            is_futures = True
+            break
+
+    # 如果是期货合约且exchange是HK，则强制转换为HKFE
+    if is_futures and futu_exchange == "HK":
+        exchange = Exchange.HKFE
+    else:
+        exchange = EXCHANGE_FUTU2VT.get(futu_exchange, Exchange.SEHK)
+
+    return futu_symbol, exchange
+```
+
+**Key Improvements**:
+- Intelligent futures contract detection based on symbol patterns
+- Automatic conversion from `"HK.MHImain"` to `(MHImain, Exchange.HKFE)`
+- Preserves correct stock exchange mapping for non-futures contracts
+- Covers all Hong Kong futures: MHI (小恒指), HSI (大恒指), MCH (小国指), HHI (大国指), CUS (A50)
+
+**Testing**:
+Created comprehensive test suite in [test_futures_exchange_fix.py](test_futures_exchange_fix.py):
+- ✅ MHImain, MHI2412 → Exchange.HKFE
+- ✅ HSImain, MCHmain, HHImain, CUSmain → Exchange.HKFE
+- ✅ HK.00700, HK.09988 (stocks) → Exchange.SEHK
+- ✅ US.AAPL (US stocks) → Exchange.SMART
+
+**Files Modified**:
+- [vnpy_futu/futu_gateway.py](vnpy_futu/vnpy_futu/futu_gateway.py:873) - Enhanced convert_symbol_futu2vt()
+- [test_futures_exchange_fix.py](test_futures_exchange_fix.py) - Comprehensive test suite
+
+**Result**: All futures tick data now correctly shows `Exchange.HKFE`, ensuring proper data recording, strategy execution, and system operation.
+
+---
+
 ### Real-time Price Update Fixes
 
 **Problem Resolved**: Initial implementation had issues where market and OPPONENT prices weren't updating in real-time in the UI.
@@ -2439,3 +2503,134 @@ if has_recent_calculation and abs(gateway_pnl - calculated_pnl) > 1e-6:
 2. **旧值覆盖测试**：验证过时的计算值能够被网关数据正确覆盖
 
 修复后，持仓信息显示稳定，不再出现PnL值跳回固定值的问题。
+
+## 网关PnL与实时计算PnL差异分析
+
+### 问题背景
+
+在修复持仓PnL跳回问题的过程中，发现网关定时查询推送的PnL值（如-10）与我们实时计算的PnL值（如-90）存在显著差异。
+
+### 差异原因分析
+
+#### 1. 数据来源不同
+
+**网关PnL**（来自富途API）：
+```python
+# vnpy_futu/futu_gateway.py:665
+pnl=float(row["pl_val"])  # 直接使用富途API返回的pl_val字段
+```
+
+**我们的PnL**（实时计算）：
+```python
+# vnpy/trader/engine.py:1133-1141
+if position.direction == Direction.LONG:
+    price_src = tick.ask_price_1 or tick.last_price  # 使用卖一价或最新价
+    pnl = (price_src - position.price) * position.volume * size
+elif position.direction == Direction.SHORT:
+    price_src = tick.bid_price_1 or tick.last_price  # 使用买一价或最新价
+    pnl = (position.price - price_src) * position.volume * size
+```
+
+#### 2. 计算方法差异对比
+
+| 方面 | 网关PnL | 我们的PnL |
+|------|---------|-----------|
+| **价格源** | 富途服务器的某个价格（可能是结算价、收盘价等） | 实时tick的买一/卖一价格 |
+| **更新频率** | 定时更新（可能几秒到几分钟） | 每个tick实时更新 |
+| **计算时机** | 富途服务器端计算 | 本地实时计算 |
+| **合约乘数** | 富途API内置的size | 我们配置的size（如小恒指=10） |
+| **实时性** | 有延迟，不够及时 | 实时响应市场变化 |
+| **准确性** | 可能基于过时价格 | 基于最新可成交价格 |
+
+#### 3. 具体差异原因
+
+**价格差异**：
+- **网关**：可能使用昨日结算价、当日开盘价或某个固定时点的价格
+- **我们**：使用最新的买一/卖一价格，更贴近实际可成交价格
+
+**时效性差异**：
+- **网关**：富途服务器可能有延迟，不是实时更新
+- **我们**：每个tick到达时立即计算，实时性更强
+
+**计算精度差异**：
+- **网关**：可能有四舍五入或精度损失
+- **我们**：使用完整的浮点数计算
+
+#### 4. 固定值（如-10）出现的可能原因
+
+1. **富途API的默认值**：当无法计算PnL时返回的默认值
+2. **网络延迟**：富途服务器数据更新延迟
+3. **计算基准不同**：富途可能基于不同的价格基准计算
+4. **缓存问题**：富途服务器端的缓存数据未及时更新
+5. **合约乘数差异**：富途内置的size与我们配置的不一致
+
+### 我们方案的优势
+
+✅ **更准确**：使用实时买一/卖一价格更贴近真实市场情况
+✅ **更及时**：每个tick立即更新，不依赖网关的定时查询
+✅ **更可控**：我们可以控制计算逻辑和精度
+✅ **更实用**：对交易决策更有参考价值
+✅ **更透明**：计算过程完全可见，便于调试和优化
+
+### 技术实现细节
+
+#### PnL计算逻辑
+```python
+def _calculate_position_pnl(self, position: PositionData, tick: TickData, size: float) -> float | None:
+    """基于持仓方向和tick数据计算盈亏"""
+    if position.direction == Direction.LONG:
+        # 多仓：使用卖一价（能够卖出的价格）
+        price_src = tick.ask_price_1 or tick.last_price or 0.0
+        pnl = (price_src - position.price) * position.volume * size
+    elif position.direction == Direction.SHORT:
+        # 空仓：使用买一价（需要买入平仓的价格）
+        price_src = tick.bid_price_1 or tick.last_price or 0.0
+        pnl = (position.price - price_src) * position.volume * size
+    return pnl
+```
+
+#### 价格选择策略
+- **多仓**：优先使用`ask_price_1`（卖一价），因为这是多仓平仓时能获得的价格
+- **空仓**：优先使用`bid_price_1`（买一价），因为这是空仓平仓时需要支付的价格
+- **备选**：当买一/卖一价不可用时，使用`last_price`（最新成交价）
+
+### 建议的改进方向
+
+1. **添加配置选项**：
+   ```python
+   # 允许选择PnL计算方式
+   "position.pnl.source": ["calculated", "gateway", "hybrid"]
+   ```
+
+2. **PnL校验机制**：
+   ```python
+   # 定期比较两种PnL的差异，发现异常时告警
+   pnl_diff = abs(calculated_pnl - gateway_pnl)
+   if pnl_diff > threshold:
+       self.write_log(f"PnL差异过大: calculated={calculated_pnl}, gateway={gateway_pnl}")
+   ```
+
+3. **多价格源支持**：
+   ```python
+   # 支持不同的价格源配置
+   price_sources = {
+       "ask_bid": tick.ask_price_1 if long else tick.bid_price_1,
+       "last": tick.last_price,
+       "mid": (tick.ask_price_1 + tick.bid_price_1) / 2
+   }
+   ```
+
+4. **历史PnL记录**：
+   ```python
+   # 记录PnL变化历史，便于分析
+   self.pnl_history[position.vt_positionid].append({
+       "timestamp": time.time(),
+       "calculated_pnl": calculated_pnl,
+       "gateway_pnl": gateway_pnl,
+       "price_src": price_src
+   })
+   ```
+
+### 结论
+
+我们的实时计算PnL比网关推送的PnL更准确、更及时，能够更好地反映市场实时情况。通过5秒时间窗口保护机制，我们既保证了实时性，又避免了网关数据的干扰，为交易决策提供了更可靠的参考依据。

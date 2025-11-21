@@ -871,11 +871,38 @@ class FutuGateway(BaseGateway):
 
 
 def convert_symbol_futu2vt(code) -> str:
-    """富途合约名称转换"""
+    """
+    富途合约名称转换
+
+    注意：Futu API在返回期货数据时可能使用 "HK.MHImain" 格式
+    而不是 "HK_FUTURE.MHImain"，需要根据合约代码判断实际交易所
+    """
     code_list = code.split(".")
     futu_exchange = code_list[0]
     futu_symbol = ".".join(code_list[1:])
-    exchange = EXCHANGE_FUTU2VT[futu_exchange]
+
+    # 检查是否为期货合约（根据合约代码特征判断）
+    symbol_upper = futu_symbol.upper()
+    is_futures = False
+
+    # 港股期货合约代码特征：
+    # MHI: 小恒指 (Mini HSI)
+    # HSI: 大恒指 (Hang Seng Index)
+    # MCH: 小国指 (Mini H-shares)
+    # HHI: 大国指 (H-shares Index)
+    futures_prefixes = ["MHI", "HSI", "MCH", "HHI", "CUS"]  # CUS = China A50
+
+    for prefix in futures_prefixes:
+        if symbol_upper.startswith(prefix):
+            is_futures = True
+            break
+
+    # 如果是期货合约且exchange是HK，则强制转换为HKFE
+    if is_futures and futu_exchange == "HK":
+        exchange = Exchange.HKFE
+    else:
+        exchange = EXCHANGE_FUTU2VT.get(futu_exchange, Exchange.SEHK)
+
     return futu_symbol, exchange
 
 
