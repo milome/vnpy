@@ -2376,3 +2376,66 @@ This enhancement provides a more professional and user-friendly close position i
 - 默认启用 `position.view.emit_legacy=true`，同时发送新旧事件
 - `PositionMonitor` 同时监听 `EVENT_POSITION` 和 `EVENT_POSITION_VIEW`
 - 旧策略无需修改即可正常工作
+
+## 2025-11-21 持仓PnL跳回问题修复
+
+### 问题描述
+
+持仓信息能够按照tick数据刷新，但每次刷新值之后，在下一个tick刷新前都会跳回显示固定值（如-10），而不是保持上次tick刷新的值。
+
+### 问题分析
+
+**根本原因**：
+- Futu网关每秒定时查询持仓信息（`query_position()`）
+- 网关推送的`PositionData`包含固定的PnL值（如-10）
+- 这些网关数据会覆盖通过tick数据实时计算的正确PnL值
+
+**问题流程**：
+1. Tick数据更新 → 计算正确PnL（如-90） → 发送持仓视图事件
+2. 1秒后，网关定时查询 → 推送固定PnL（-10） → 覆盖计算值
+3. 下一个tick到来前，界面显示网关的固定值-10
+4. 下一个tick到来 → 重新计算正确PnL → 循环往复
+
+### 解决方案
+
+修改 `vnpy/trader/engine.py` 中 `OmsEngine.process_position_event()` 方法的PnL保持逻辑：
+
+**原逻辑问题**：
+```python
+# 只在网关推送 pnl=0 时保持计算值
+if abs(gateway_pnl) < 1e-6 and abs(calculated_pnl) > 1e-6:
+    self.positions[position.vt_positionid].pnl = calculated_pnl
+```
+
+**新逻辑改进**：
+```python
+# 检查是否有最近的计算结果（5秒内）
+last_emit_time: float = self.last_view_emit.get(position.vt_positionid, 0.0)
+current_time: float = time.time()
+has_recent_calculation: bool = (current_time - last_emit_time) < 5.0
+
+# 如果有最近计算且网关PnL不同，保持计算值
+if has_recent_calculation and abs(gateway_pnl - calculated_pnl) > 1e-6:
+    self.positions[position.vt_positionid].pnl = calculated_pnl
+```
+
+### 关键改进点
+
+1. **时间窗口保护**：引入5秒时间窗口，在此期间优先保持计算的PnL值
+2. **智能覆盖**：超过时间窗口后，允许网关数据更新（防止数据过时）
+3. **通用适配**：不再局限于`pnl=0`的情况，适配任何网关固定值
+
+### 修复效果
+
+- ✅ **实时刷新**：持仓PnL能够根据tick数据实时更新
+- ✅ **值保持**：在下一个tick到来前，PnL保持上次计算的正确值
+- ✅ **智能覆盖**：计算时间过久时仍允许网关数据更新
+- ✅ **向后兼容**：不影响现有功能，只改进PnL保持逻辑
+
+### 测试验证
+
+通过单元测试验证了修复方案的有效性：
+1. **PnL保持测试**：验证最近计算的PnL值能够被正确保持
+2. **旧值覆盖测试**：验证过时的计算值能够被网关数据正确覆盖
+
+修复后，持仓信息显示稳定，不再出现PnL值跳回固定值的问题。

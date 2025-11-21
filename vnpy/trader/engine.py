@@ -587,17 +587,22 @@ class OmsEngine(BaseEngine):
         self.positions[position.vt_positionid] = position
         
         if self.position_view_enabled and old_position:
-            # When position view is enabled, preserve our calculated PnL if gateway pushes zero
-            # Gateway may push pnl=0, but we have calculated a non-zero PnL
+            # When position view is enabled, preserve our calculated PnL if it exists
+            # Gateway may push outdated or incorrect PnL values
             gateway_pnl: float = position.pnl
             calculated_pnl: float = old_position.pnl
             
-            # If gateway pushes zero PnL but we have a calculated non-zero PnL, preserve it
-            if abs(gateway_pnl) < 1e-6 and abs(calculated_pnl) > 1e-6:
+            # Check if we have a recently calculated PnL (within last 5 seconds)
+            last_emit_time: float = self.last_view_emit.get(position.vt_positionid, 0.0)
+            current_time: float = time.time()
+            has_recent_calculation: bool = (current_time - last_emit_time) < 5.0
+            
+            # If we have a recent calculation and gateway PnL differs significantly, preserve calculated PnL
+            if has_recent_calculation and abs(gateway_pnl - calculated_pnl) > 1e-6:
                 self.positions[position.vt_positionid].pnl = calculated_pnl
                 self.main_engine.write_log(
                     f"[OmsEngine] process_position_event: preserved calculated pnl={calculated_pnl} for {position.vt_positionid} "
-                    f"(gateway pushed pnl={gateway_pnl})",
+                    f"(gateway pushed pnl={gateway_pnl}, time_since_calc={current_time - last_emit_time:.1f}s)",
                     "OmsEngine"
                 )
 
