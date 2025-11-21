@@ -789,9 +789,17 @@ class FutuGateway(BaseGateway):
         """查询历史数据"""
         bars: List[BarData] = []
 
-        if req.interval != Interval.MINUTE:
+        # 映射VNPy周期到富途API周期
+        interval_mapping = {
+            Interval.MINUTE: KLType.K_1M,
+            Interval.DAILY: KLType.K_DAY,
+        }
+
+        if req.interval not in interval_mapping:
             self.write_log(f"获取K线数据失败，FUTU接口暂不提供{req.interval.value}级别历史数据")
             return bars
+
+        futu_ktype = interval_mapping[req.interval]
 
         symbol: str = convert_symbol_vt2futu(req.symbol, req.exchange)
 
@@ -808,7 +816,12 @@ class FutuGateway(BaseGateway):
         start_date: str = req.start.replace(tzinfo=None).strftime("%Y-%m-%d")
         end_date: str = req.end.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
 
-        ret, history_df, page_req_key = self.quote_ctx.request_history_kline(code=symbol, start=start_date, end=end_date, ktype=KLType.K_1M)  # 每页5个，请求第一页
+        ret, history_df, page_req_key = self.quote_ctx.request_history_kline(
+            code=symbol,
+            start=start_date,
+            end=end_date,
+            ktype=futu_ktype
+        )
         if ret != RET_OK:
             self.write_log(f"获取K线数据失败，原因：{history_df}")
             return bars
@@ -818,7 +831,13 @@ class FutuGateway(BaseGateway):
         page_count = 1
         while page_req_key != None:  # 请求后面的所有结果
             self.write_log(f"正在获取第 {page_count + 1} 页数据...")
-            ret, data, page_req_key = self.quote_ctx.request_history_kline(code=symbol, start=start_date, end=end_date, ktype=KLType.K_1M, page_req_key=page_req_key)   # 请求翻页后的数据
+            ret, data, page_req_key = self.quote_ctx.request_history_kline(
+                code=symbol,
+                start=start_date,
+                end=end_date,
+                ktype=futu_ktype,
+                page_req_key=page_req_key
+            )   # 请求翻页后的数据
             if ret == RET_OK:
                 history_df = history_df.append(data, ignore_index=True)
                 self.write_log(f"第 {page_count + 1} 页获取成功，新增 {len(data)} 条，累计 {len(history_df)} 条，page_req_key={page_req_key}")

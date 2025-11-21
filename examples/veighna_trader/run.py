@@ -102,7 +102,7 @@ def main():
     # main_engine.add_app(RpcServiceApp)
     # main_engine.add_app(ExcelRtdApp)
     main_engine.add_app(DataManagerApp)
-    # main_engine.add_app(DataRecorderApp)
+    main_engine.add_app(DataRecorderApp)
     # main_engine.add_app(RiskManagerApp)
     # main_engine.add_app(WebTraderApp)
     # main_engine.add_app(PortfolioManagerApp)
