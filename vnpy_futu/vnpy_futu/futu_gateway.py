@@ -341,20 +341,21 @@ class FutuGateway(BaseGateway):
         """
         解析主力合约为实际月份合约
 
-        例如：MHImain -> MHI2511
+        例如：MHImain -> HK_FUTURE.MHI2511
 
         Args:
             vt_symbol: VNPy合约代码（如MHImain）
             futu_symbol: Futu合约代码（如HK_FUTURE.MHImain）
 
         Returns:
-            实际合约代码（如HK.MHI2511），如果解析失败返回None
+            实际合约代码（如HK_FUTURE.MHI2511），如果解析失败返回None
         """
         try:
             # 提取基础代码（去掉main后缀）
             base_symbol = vt_symbol.replace("main", "")  # MHI
 
             # 尝试通过查询行情快照获取实际合约信息
+            # 注意：get_market_snapshot使用HK格式，但我们最终返回HK_FUTURE格式
             code, data = self.quote_ctx.get_market_snapshot([f"HK.{vt_symbol}"])
             if code == 0 and not data.empty:
                 # 从名称中提取合约月份：如"小恒指期货 (2511)" -> 2511
@@ -362,8 +363,8 @@ class FutuGateway(BaseGateway):
                 if '(' in name and ')' in name:
                     month_code = name.split('(')[1].split(')')[0].strip()
                     if month_code.isdigit() and len(month_code) == 4:
-                        # 构造实际合约代码
-                        actual_code = f"HK.{base_symbol}{month_code}"
+                        # 构造实际合约代码，使用HK_FUTURE前缀以保持一致性
+                        actual_code = f"HK_FUTURE.{base_symbol}{month_code}"
                         return actual_code
 
             self.write_log(f"无法解析主力合约 {vt_symbol}：查询失败或数据格式异常")
@@ -793,6 +794,17 @@ class FutuGateway(BaseGateway):
             return bars
 
         symbol: str = convert_symbol_vt2futu(req.symbol, req.exchange)
+
+        # 处理主力合约：MHImain需要转换为实际月份合约
+        if req.symbol.endswith("main") and req.exchange == Exchange.HKFE:
+            actual_symbol = self._resolve_main_contract(req.symbol, symbol)
+            if actual_symbol:
+                self.write_log(f"查询历史数据：主力合约 {req.symbol} 转换为实际合约 {actual_symbol}")
+                symbol = actual_symbol
+            else:
+                self.write_log(f"警告：无法解析主力合约 {req.symbol}，历史数据查询可能失败")
+                return bars
+
         start_date: str = req.start.replace(tzinfo=None).strftime("%Y-%m-%d")
         end_date: str = req.end.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -801,12 +813,21 @@ class FutuGateway(BaseGateway):
             self.write_log(f"获取K线数据失败，原因：{history_df}")
             return bars
 
+        self.write_log(f"首次查询成功，获取 {len(history_df)} 条数据，page_req_key={page_req_key}")
+
+        page_count = 1
         while page_req_key != None:  # 请求后面的所有结果
+            self.write_log(f"正在获取第 {page_count + 1} 页数据...")
             ret, data, page_req_key = self.quote_ctx.request_history_kline(code=symbol, start=start_date, end=end_date, ktype=KLType.K_1M, page_req_key=page_req_key)   # 请求翻页后的数据
             if ret == RET_OK:
                 history_df = history_df.append(data, ignore_index=True)
+                self.write_log(f"第 {page_count + 1} 页获取成功，新增 {len(data)} 条，累计 {len(history_df)} 条，page_req_key={page_req_key}")
+                page_count += 1
             else:
-                self.write_log(f"{data}")
+                self.write_log(f"第 {page_count + 1} 页获取失败：{data}")
+                break
+
+        self.write_log(f"K线数据获取完成，共 {len(history_df)} 条，正在转换为BarData...")
 
         history_df["time_key"] = pd.to_datetime(history_df["time_key"])
         history_df["time_key"] = history_df["time_key"] - pd.Timedelta(1, "m")
@@ -829,6 +850,7 @@ class FutuGateway(BaseGateway):
             )
             bars.append(bar)
 
+        self.write_log(f"K线数据查询成功，返回 {len(bars)} 条K线数据")
         return bars
 
     def process_quote(self, data) -> None:
