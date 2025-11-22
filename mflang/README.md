@@ -725,6 +725,506 @@ class MyStrategy(CtaTemplate):
             print("当前数据不足以满足条件出现2次")
 ```
 
+### BARPOS - 返回从第一根K线开始到当前的周期数
+
+返回从第一根K线开始到当前的周期数。
+
+**重要说明**: 
+- 在麦语言中，BARPOS函数**没有参数**，直接使用`BARPOS`即可
+- 在Python实现中，由于技术限制，需要传入一个数组来确定K线数量
+- 本文档中的示例代码使用`BARPOS(close)`等写法是为了Python实现的需要，实际麦语言中应使用`BARPOS`
+
+#### 参数（仅Python实现需要）
+
+- `X`: 时间序列数组（numpy数组或列表），最新的值在数组末尾
+  - 用于确定K线数量，可以是任意K线数据（如close、high、low等）
+  - **注意**: 在麦语言中，BARPOS没有参数，不需要传入任何值
+
+#### 返回值
+
+- 返回一个整数数组，每个元素表示从第一根K线到当前位置的周期数
+- 第一根K线返回1
+- 第二根K线返回2
+- 以此类推
+- 返回值都是整数
+
+#### 规则
+
+1. BARPOS返回本地已有的K线根数，从本机上存在的数据开始算起
+2. 本机已有的第一根K线上返回值为1
+3. 针对每一根K线都能取到第一根K线开始到当前的周期数
+
+#### 使用示例
+
+```python
+import numpy as np
+from mflang import BARPOS
+
+# 示例1: 基本用法
+# 在麦语言中：BARPOS
+# 在Python实现中，由于技术限制需要传入数组来确定K线数量
+close = np.array([100.0, 101.0, 102.0, 103.0, 104.0, 105.0])
+result = BARPOS(close)  # Python实现需要参数，麦语言中为BARPOS
+# 结果: [1., 2., 3., 4., 5., 6.]
+# 第一根K线返回1，第二根返回2，以此类推
+
+# 示例2: 求本地已有数据的最小值（LLV(L, BARPOS)）
+# 在麦语言中：LLV(L, BARPOS)
+low = np.array([99.0, 100.0, 101.0, 102.0, 103.0, 104.0])
+barpos = BARPOS(low)  # Python实现需要参数，麦语言中为BARPOS
+# 使用BARPOS作为周期数，求最小值
+# 等价于: min_value = low.min()
+min_value = low.min()
+print(f"本地已有数据的最小值: {min_value}")
+
+# 示例3: 判断是否为第一根K线（IFELSE(BARPOS=1, H, 0)）
+# 在麦语言中：IFELSE(BARPOS=1, H, 0)
+high = np.array([101.0, 102.0, 103.0, 104.0, 105.0, 106.0])
+barpos = BARPOS(high)  # Python实现需要参数，麦语言中为BARPOS
+# 如果BARPOS=1，取最高值，否则取0
+result = np.where(barpos == 1, high, 0)
+# 结果: [101., 0., 0., 0., 0., 0.]
+print(f"第一根K线的最高值: {result[0]}")
+```
+
+#### 如何获取当前值
+
+`BARPOS` 返回的是 numpy 数组，以下是获取当前值（最后一个元素）的方法：
+
+**方法1: 获取数组最后一个值（当前值）**
+
+```python
+import numpy as np
+from mflang import BARPOS
+
+# 计算 BARPOS
+# 在麦语言中：BARPOS
+# 在Python实现中，由于技术限制需要传入数组来确定K线数量
+close = np.array([100.0, 101.0, 102.0, 103.0, 104.0, 105.0])
+barpos_result = BARPOS(close)  # Python实现需要参数，麦语言中为BARPOS，结果: [1., 2., 3., 4., 5., 6.]
+
+# 获取最后一个值（当前值）
+current_barpos = barpos_result[-1]  # 6.0
+
+# 转换为整数
+current_pos = int(current_barpos)  # 6
+print(f"当前是第 {current_pos} 根K线")
+```
+
+**方法2: 在策略中使用**
+
+```python
+from vnpy_ctastrategy import CtaTemplate, ArrayManager
+from mflang import BARPOS
+import numpy as np
+
+class MyStrategy(CtaTemplate):
+    def __init__(self, cta_engine, strategy_name, vt_symbol, setting):
+        super().__init__(cta_engine, strategy_name, vt_symbol, setting)
+        self.am = ArrayManager()
+    
+    def on_bar(self, bar: BarData):
+        self.am.update_bar(bar)
+        
+        if not self.am.inited:
+            return
+        
+        # 获取收盘价数组
+        close = self.am.close
+        
+        # 计算BARPOS
+        # 在麦语言中：BARPOS
+        # 在Python实现中，由于技术限制需要传入数组来确定K线数量
+        barpos_result = BARPOS(close)  # Python实现需要参数，麦语言中为BARPOS
+        
+        # 获取当前值（最后一个元素）
+        current_barpos = barpos_result[-1]
+        current_pos = int(current_barpos)
+        
+        print(f"当前是第 {current_pos} 根K线")
+        
+        # 判断是否为第一根K线
+        if current_pos == 1:
+            print("这是第一根K线")
+            # 可以执行初始化逻辑
+```
+
+#### 从数据库或parquet文件加载数据使用示例（小恒指期货主连MHImain，交易所HKFE）
+
+```python
+import pandas as pd
+import numpy as np
+from mflang import BARPOS
+from datetime import datetime
+
+# 方式1: 从parquet文件加载1小时K线数据
+def load_hour_data_from_parquet(file_path: str):
+    """从parquet文件加载小恒指期货主连MHImain的1小时K线数据"""
+    df = pd.read_parquet(file_path)
+    
+    # 确保datetime列存在
+    if 'datetime' not in df.columns:
+        df['datetime'] = pd.to_datetime(df['time'])
+    else:
+        df['datetime'] = pd.to_datetime(df['datetime'])
+    
+    # 过滤MHImain合约数据
+    if 'symbol' in df.columns:
+        df = df[df['symbol'] == 'MHImain']
+    
+    # 按时间排序
+    df = df.sort_values('datetime').reset_index(drop=True)
+    
+    return df
+
+# 加载数据
+parquet_file = "data/MHImain_1h_bars.parquet"
+df = load_hour_data_from_parquet(parquet_file)
+
+# 获取K线数据数组
+close = df['close'].values
+low = df['low'].values
+high = df['high'].values
+
+# 计算BARPOS - 针对每一根K线都能取到第一根K线开始到当前的周期数
+# 在麦语言中：BARPOS
+# 在Python实现中，由于技术限制需要传入数组来确定K线数量
+barpos = BARPOS(close)  # Python实现需要参数，麦语言中为BARPOS
+print(f"总共有 {len(barpos)} 根K线")
+print(f"第一根K线的位置: {int(barpos[0])}")  # 应该是1
+print(f"最后一根K线的位置: {int(barpos[-1])}")  # 应该是总K线数
+
+# 例1: 求本地已有数据的最小值（LLV(L, BARPOS)）
+# 针对每一根K线，计算从第一根到当前K线的最低值
+min_low_values = []
+for i in range(len(low)):
+    current_barpos = int(barpos[i])
+    # 从第一根到当前K线的最低值
+    min_low = low[:i+1].min()
+    min_low_values.append(min_low)
+    print(f"第 {current_barpos} 根K线: 从第一根到当前的最低值 = {min_low}")
+
+# 例2: 判断是否为第一根K线（IFELSE(BARPOS=1, H, 0)）
+# 如果当前K线是本机已有的第一根K线，取最高值，否则取0
+result = np.where(barpos == 1, high, 0)
+print(f"第一根K线的最高值: {result[0]}")
+print(f"其他K线的值: {result[1:5]}")  # 应该是 [0., 0., 0., 0.]
+
+# 方式2: 从数据库加载1小时K线数据
+def load_hour_data_from_database(
+    connection_string: str,
+    table_name: str,
+    symbol: str,
+    start_time: datetime,
+    end_time: datetime
+):
+    """从数据库加载小恒指期货主连MHImain的1小时K线数据"""
+    import sqlalchemy
+    
+    engine = sqlalchemy.create_engine(connection_string)
+    
+    query = f"""
+    SELECT datetime, open, high, low, close, volume
+    FROM {table_name}
+    WHERE symbol = '{symbol}'
+    AND datetime >= '{start_time}'
+    AND datetime <= '{end_time}'
+    AND interval = '1h'
+    ORDER BY datetime
+    """
+    
+    df = pd.read_sql(query, engine)
+    df['datetime'] = pd.to_datetime(df['datetime'])
+    
+    return df
+
+# 从数据库加载数据
+# db_connection = "postgresql://user:password@localhost:5432/dbname"
+# df = load_hour_data_from_database(
+#     db_connection,
+#     "kline_data",
+#     "MHImain",  # 小恒指期货主连
+#     datetime(2024, 1, 1),
+#     datetime.now()
+# )
+# 
+# # 使用BARPOS
+# # 在麦语言中：BARPOS
+# # 在Python实现中，由于技术限制需要传入数组来确定K线数量
+# close = df['close'].values
+# barpos = BARPOS(close)  # Python实现需要参数，麦语言中为BARPOS
+# 
+# # 针对每一根K线处理
+# for i in range(len(barpos)):
+#     current_pos = int(barpos[i])
+#     current_close = close[i]
+#     print(f"第 {current_pos} 根K线，收盘价: {current_close}")
+```
+
+#### 在策略中使用（小恒指期货主连MHImain，交易所HKFE）
+
+```python
+from vnpy_ctastrategy import CtaTemplate, ArrayManager
+from mflang import BARPOS
+import numpy as np
+
+class MHImainStrategy(CtaTemplate):
+    def __init__(self, cta_engine, strategy_name, vt_symbol, setting):
+        super().__init__(cta_engine, strategy_name, vt_symbol, setting)
+        self.am = ArrayManager()
+    
+    def on_bar(self, bar: BarData):
+        self.am.update_bar(bar)
+        
+        if not self.am.inited:
+            return
+        
+        # 获取小恒指期货主连MHImain的K线数据
+        close = self.am.close
+        low = self.am.low
+        high = self.am.high
+        
+        # 计算BARPOS - 针对每一根K线都能取到第一根K线开始到当前的周期数
+        # 在麦语言中：BARPOS
+        # 在Python实现中，由于技术限制需要传入数组来确定K线数量
+        barpos = BARPOS(close)  # Python实现需要参数，麦语言中为BARPOS
+        current_pos = int(barpos[-1])
+        
+        # 例1: 求本地已有数据的最小值（LLV(L, BARPOS)）
+        # 使用BARPOS作为周期数，求最低价的最小值
+        min_low = low.min()
+        print(f"[MHImain.HKFE] 本地已有数据的最低值: {min_low}")
+        print(f"[MHImain.HKFE] 当前是第 {current_pos} 根K线")
+        
+        # 例2: 判断是否为第一根K线（IFELSE(BARPOS=1, H, 0)）
+        # 如果当前K线是本机已有的第一根K线，取最高值，否则取0
+        if current_pos == 1:
+            first_high = high[0]
+            print(f"[MHImain.HKFE] 第一根K线的最高值: {first_high}")
+        else:
+            print(f"[MHImain.HKFE] 当前是第 {current_pos} 根K线，不是第一根")
+        
+        # 使用BARPOS进行其他计算
+        # 例如：只在数据积累到一定数量后才开始交易
+        if current_pos >= 20:
+            print(f"[MHImain.HKFE] 数据已积累 {current_pos} 根K线，可以开始交易")
+        else:
+            print(f"[MHImain.HKFE] 数据不足，当前只有 {current_pos} 根K线，需要至少20根")
+```
+
+#### 常见应用场景
+
+**场景1: 求本地已有数据的最小值**
+
+```python
+import numpy as np
+from mflang import BARPOS
+
+# 小恒指期货主连MHImain的低价数据
+low = np.array([19900.0, 19910.0, 19905.0, 19920.0, 19915.0, 19925.0])
+
+# 计算BARPOS
+# 在麦语言中：BARPOS
+# 在Python实现中，由于技术限制需要传入数组来确定K线数量
+barpos = BARPOS(low)  # Python实现需要参数，麦语言中为BARPOS
+
+# 求本地已有数据的最小值（LLV(L, BARPOS)）
+min_value = low.min()
+print(f"本地已有数据的最小值: {min_value}")
+```
+
+**场景2: 判断是否为第一根K线**
+
+```python
+import numpy as np
+from mflang import BARPOS
+
+# 小恒指期货主连MHImain的最高价数据
+high = np.array([20000.0, 20010.0, 20005.0, 20020.0, 20015.0, 20025.0])
+
+# 计算BARPOS
+# 在麦语言中：BARPOS
+# 在Python实现中，由于技术限制需要传入数组来确定K线数量
+barpos = BARPOS(high)  # Python实现需要参数，麦语言中为BARPOS
+
+# IFELSE(BARPOS=1, H, 0)
+# 如果BARPOS=1，取最高值，否则取0
+result = np.where(barpos == 1, high, 0)
+# 结果: [20000., 0., 0., 0., 0., 0.]
+
+print(f"第一根K线的最高值: {result[0]}")
+```
+
+**场景3: 数据积累检查**
+
+```python
+import numpy as np
+from mflang import BARPOS
+
+# 小恒指期货主连MHImain的收盘价数据
+close = np.array([19950.0, 19960.0, 19955.0, 19970.0, 19965.0, 19975.0])
+
+# 计算BARPOS
+# 在麦语言中：BARPOS
+# 在Python实现中，由于技术限制需要传入数组来确定K线数量
+barpos = BARPOS(close)  # Python实现需要参数，麦语言中为BARPOS
+current_pos = int(barpos[-1])
+
+# 检查数据是否足够
+min_bars_required = 20
+if current_pos >= min_bars_required:
+    print(f"数据充足，当前有 {current_pos} 根K线，可以开始计算指标")
+else:
+    print(f"数据不足，当前只有 {current_pos} 根K线，需要至少 {min_bars_required} 根")
+```
+
+### HHV(X, N) - 求X在N个周期内的最高值
+
+求X在N个周期内的最高值。
+
+#### 参数
+
+- `X`: 时间序列数组（numpy数组或列表），最新的值在数组末尾
+- `N`: 周期数，可以是整数、浮点数或数组
+
+#### 返回值
+
+- 返回一个数组，每个元素是对应位置N个周期内的最高值
+- 如果数据不足或N无效，返回NaN值
+
+#### 规则
+
+1. **N包含当前k线**（重要：N个周期包括当前位置）
+2. 若N为0则从第一个有效值开始算起（从第一根K线到当前位置的最高值）
+3. 当N为有效值，但当前的k线数不足N根，按照实际的根数计算
+4. N为空值或NaN时，返回NaN
+5. N可以是变量（数组）
+
+#### 使用示例
+
+```python
+import numpy as np
+from mflang import HHV
+
+# 示例1: 基本用法（N=3，包含当前K线）
+high = np.array([100.0, 101.0, 102.0, 103.0, 104.0, 105.0])
+result = HHV(high, 3)
+# 结果: [100., 101., 102., 103., 104., 105.]
+# 位置0: 只有1根K线，最高值=100（按实际根数计算）
+# 位置1: 有2根K线，最高值=max(100,101)=101（按实际根数计算）
+# 位置2: 有3根K线，最高值=max(100,101,102)=102（N=3，包含当前K线）
+# 位置3: 有3根K线，最高值=max(101,102,103)=103（N=3，包含当前K线）
+
+# 示例2: N=0的情况（从第一个有效值开始算起）
+high = np.array([100.0, 101.0, 102.0, 103.0, 104.0, 105.0])
+result = HHV(high, 0)
+# 结果: [100., 101., 102., 103., 104., 105.]
+# 每个位置都是从第一根K线到当前位置的最高值
+# 位置0: 最高值=100
+# 位置1: 最高值=max(100,101)=101
+# 位置2: 最高值=max(100,101,102)=102
+
+# 示例3: 在策略中使用（小恒指期货主连MHImain，交易所HKFE）
+from vnpy_ctastrategy import CtaTemplate, ArrayManager
+from mflang import HHV
+
+class MHImainStrategy(CtaTemplate):
+    def __init__(self, cta_engine, strategy_name, vt_symbol, setting):
+        super().__init__(cta_engine, strategy_name, vt_symbol, setting)
+        self.am = ArrayManager()
+    
+    def on_bar(self, bar: BarData):
+        self.am.update_bar(bar)
+        
+        if not self.am.inited:
+            return
+        
+        # 获取小恒指期货主连MHImain的最高价数组
+        high = self.am.high
+        
+        # 计算前3根K线的最高价（HV(HIGH, 3)）
+        # 注意：N=3包含当前K线，即当前K线和前2根K线的最高价
+        hv_high_3 = HHV(high, 3)
+        current_hv = hv_high_3[-1]
+        
+        if not np.isnan(current_hv):
+            print(f"[MHImain.HKFE] 3个周期内的最高价（包含当前K线）: {current_hv}")
+```
+
+#### 如何获取当前值
+
+`HHV` 返回的是 numpy 数组，以下是获取当前值（最后一个元素）的方法：
+
+**方法1: 获取数组最后一个值（当前值）**
+
+```python
+import numpy as np
+from mflang import HHV
+
+# 计算 HHV
+high = np.array([100.0, 101.0, 102.0, 103.0, 104.0, 105.0])
+hhv_result = HHV(high, 3)  # [100., 101., 102., 103., 104., 105.]
+
+# 获取最后一个值（当前值）
+current_hhv = hhv_result[-1]  # 105.0
+
+# 检查是否为有效值
+if not np.isnan(current_hhv):
+    print(f"3个周期内的最高价（包含当前K线）: {current_hhv}")
+```
+
+#### 常见应用场景
+
+**场景1: 计算N周期内的最高价（小恒指期货主连MHImain）**
+
+```python
+import numpy as np
+from mflang import HHV
+
+# 小恒指期货主连MHImain的最高价数据
+high = np.array([20000.0, 20010.0, 20005.0, 20020.0, 20015.0, 20025.0])
+
+# 计算3个周期内的最高价（包含当前K线）
+hhv_result = HHV(high, 3)
+current_hhv = hhv_result[-1]
+
+print(f"3个周期内的最高价（包含当前K线）: {current_hhv}")
+```
+
+**场景2: N=0的情况（从第一根K线开始）**
+
+```python
+import numpy as np
+from mflang import HHV
+
+# 小恒指期货主连MHImain的最高价数据
+high = np.array([20000.0, 20010.0, 20005.0, 20020.0, 20015.0, 20025.0])
+
+# N=0: 从第一个有效值开始算起
+hhv_result = HHV(high, 0)
+current_hhv = hhv_result[-1]
+
+print(f"从第一根K线到当前的最高价: {current_hhv}")
+```
+
+**场景3: 数据不足N根的情况**
+
+```python
+import numpy as np
+from mflang import HHV
+
+# 只有2根K线，但N=5
+high = np.array([20000.0, 20010.0])
+
+# 数据不足5根，按照实际的根数计算
+hhv_result = HHV(high, 5)
+# 结果: [20000., 20010.]
+# 位置0: 只有1根K线，最高值=20000
+# 位置1: 只有2根K线，最高值=max(20000,20010)=20010
+
+print(f"实际计算的最高价: {hhv_result[-1]}")
+```
+
 ### #IMPORT - 跨周期引用函数
 
 跨周期引用函数用于引用不同周期的指标数据。
@@ -1144,6 +1644,160 @@ if stmt:
 3. **性能考虑**: 跨周期引用需要加载不同周期的数据，可能影响性能
 4. **数据可用性**: 确保被引用的周期数据可用，否则可能返回空值
 
+### 复杂表达式解析示例
+
+**示例: 解析 #IMPORT[MIN,5,MACD] AS MIN5_VAR；REF(BARPOS, BARSLAST(MIN5_VAR.MACD > 0 && CLOSE > HHV(HIGH, 3)))**
+
+这个示例展示如何解析复杂的麦语言表达式，从数据库或parquet文件加载小恒指期货主连MHImain的1分钟和跨周期K线数据。
+
+**表达式说明：**
+- **#IMPORT[MIN,5,MACD] AS MIN5_VAR**: 使用#IMPORT引用5分钟周期的MACD数据，MACD是标准公式名称，通过解析import_stmt确定跨周期引用对应的周期
+- **BARPOS**: 当前1分钟周期里的K线位置，从本机第一根K线开始计数
+- **MIN5_VAR.MACD**: 通过#IMPORT引用5分钟周期的MACD数据
+- **条件**: MIN5_VAR.MACD > 0 && CLOSE > HHV(HIGH, 3)
+- **返回**: REF(BARPOS, BARSLAST结果)，即BARPOS根K线前的BARSLAST值对应的K线位置（BARPOS）
+
+```python
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+from mflang import BARSLAST, BARPOS, HHV
+from mflang import ImportParser
+from mflang.import_parser import PeriodType
+import talib
+
+# 步骤1: 从parquet文件加载数据（小恒指期货主连MHImain，交易所HKFE）
+def load_minute_data_from_parquet(file_path: str, symbol: str = "MHImain", interval: str = "1m"):
+    """从parquet文件加载K线数据"""
+    df = pd.read_parquet(file_path)
+    
+    if 'datetime' not in df.columns:
+        df['datetime'] = pd.to_datetime(df['time'])
+    else:
+        df['datetime'] = pd.to_datetime(df['datetime'])
+    
+    if 'symbol' in df.columns:
+        df = df[df['symbol'] == symbol]
+    if 'interval' in df.columns:
+        df = df[df['interval'] == interval]
+    
+    df = df.sort_values('datetime').reset_index(drop=True)
+    return df
+
+# 加载1分钟K线数据
+df_1min = load_minute_data_from_parquet("data/MHImain_1m_bars.parquet", "MHImain", "1m")
+
+# 步骤2: 解析#IMPORT语句
+import_code = """
+#IMPORT[MIN,5,MACD] AS MIN5_VAR
+"""
+import_statements = ImportParser.parse_code(import_code)
+import_stmt = import_statements[0]
+print(f"解析#IMPORT语句: {import_stmt}")
+print(f"  周期: {import_stmt.period.value}, N: {import_stmt.n}, 指标: {import_stmt.formula}, 变量: {import_stmt.var_name}")
+
+# 步骤3: 根据import_stmt确定跨周期引用对应的周期
+# 使用import_stmt.period和import_stmt.n来确定需要加载的周期数据
+target_period_minutes = None
+if import_stmt.period == PeriodType.MIN:
+    target_period_minutes = import_stmt.n
+elif import_stmt.period == PeriodType.HOUR:
+    target_period_minutes = import_stmt.n * 60
+elif import_stmt.period == PeriodType.CUSHOUR:
+    target_period_minutes = import_stmt.n * 60
+elif import_stmt.period == PeriodType.DAY:
+    target_period_minutes = import_stmt.n * 24 * 60
+else:
+    raise ValueError(f"不支持的周期类型: {import_stmt.period.value}")
+
+print(f"  目标周期: {target_period_minutes}分钟")
+
+# 步骤4: 加载跨周期数据（根据import_stmt确定周期）
+# 这里假设已经加载了对应周期的数据
+df_cross_period = load_minute_data_from_parquet("data/MHImain_5m_bars.parquet", "MHImain", "5m")
+
+# 步骤5: 获取1分钟周期的数据
+close_1min = df_1min['close'].values
+high_1min = df_1min['high'].values
+
+# 步骤6: 计算BARPOS - 当前K线位置（从本机第一根K线开始计数）
+barpos = BARPOS(close_1min)  # BARPOS是当前K线位置数组
+
+# 步骤7: 通过#IMPORT获取MIN5_VAR.MACD（跨周期的MACD数据）
+# 计算跨周期MACD
+def calculate_macd(close: np.ndarray):
+    """计算MACD指标"""
+    macd, signal, hist = talib.MACD(close, fastperiod=12, slowperiod=26, signalperiod=9)
+    return macd
+
+close_target = df_cross_period['close'].values
+macd_target = calculate_macd(close_target)  # 被引用的指标在目标周期上的MACD
+
+# 步骤8: 将跨周期MACD对齐到1分钟周期（#IMPORT的跨周期引用）
+# 根据import_stmt确定的目标周期进行对齐
+# 对齐后的数据就是MIN5_VAR.MACD
+macd_target_aligned = np.full(len(df_1min), np.nan, dtype=float)
+for i, dt_1min in enumerate(df_1min['datetime']):
+    for j, dt_target in enumerate(df_cross_period['datetime']):
+        if dt_1min >= dt_target and dt_1min < dt_target + timedelta(minutes=target_period_minutes):
+            if j < len(macd_target):
+                macd_target_aligned[i] = macd_target[j]
+            break
+
+# 步骤9: 计算HHV(HIGH, 3) - 前3根K线的最高价（包含当前K线）
+hv_high_3 = HHV(high_1min, 3)
+
+# 步骤10: 计算条件：MIN5_VAR.MACD > 0 && CLOSE > HHV(HIGH, 3)
+min5_var_macd = macd_target_aligned  # MIN5_VAR.MACD（根据import_stmt确定的目标周期）
+cond1 = min5_var_macd > 0  # MIN5_VAR.MACD > 0
+cond2 = close_1min > hv_high_3  # CLOSE > HHV(HIGH, 3)
+condition = cond1 & cond2  # 组合条件
+
+# 步骤11: 计算BARSLAST(condition) - 上一次条件成立到当前的周期数
+barslast_result = BARSLAST(condition)
+
+# 步骤12: 计算REF(BARPOS, BARSLAST结果)
+# BARPOS是数组，REF函数支持数组作为N参数
+# REF(BARPOS, BARSLAST结果) - BARPOS根K线前的BARSLAST值对应的K线位置（BARPOS）
+result = np.full_like(barslast_result, np.nan, dtype=float)
+for i in range(len(barslast_result)):
+    barpos_val = int(barpos[i])
+    if i < len(barslast_result) and not np.isnan(barslast_result[i]):
+        barslast_val = int(barslast_result[i])
+        if barslast_val >= 0 and barpos_val > barslast_val:
+            result[i] = barpos_val - barslast_val
+
+# 步骤13: 获取当前值（最后一根K线的结果）
+current_result = result[-1]
+current_barpos = int(barpos[-1])
+
+if not np.isnan(current_result):
+    barpos_value = int(current_result)
+    print(f"[MHImain.HKFE] 当前K线位置（BARPOS）: {current_barpos}")
+    print(f"[MHImain.HKFE] REF(BARPOS, BARSLAST结果): {barpos_value}")
+    print(f"[MHImain.HKFE] 说明: 最近一次满足条件的K线位置是第 {barpos_value} 根K线")
+    print(f"[MHImain.HKFE] （K线位置从本机第一根K线开始计算）")
+else:
+    print("[MHImain.HKFE] 未找到满足条件的K线或数据不足")
+
+# 完整示例请参考: mflang/example_parse_formula.py
+```
+
+**关键点说明：**
+
+1. **#IMPORT语句解析**: 使用ImportParser解析#IMPORT[MIN,5,MACD] AS MIN5_VAR语句（MACD是标准公式名称）
+2. **根据import_stmt确定周期**: 使用import_stmt.period和import_stmt.n来确定跨周期引用对应的周期（如MIN,5表示5分钟）
+3. **动态周期计算**: 根据周期类型（MIN、HOUR、DAY等）和N值计算目标周期分钟数
+4. **BARPOS**: 使用BARPOS获取当前K线位置（从本机第一根K线开始计数）
+5. **跨周期引用**: 通过MIN5_VAR.MACD访问跨周期的MACD数据（根据import_stmt确定的目标周期）
+6. **数据对齐**: 根据目标周期将跨周期MACD对齐到1分钟周期
+7. **条件计算**: MIN5_VAR.MACD > 0 && CLOSE > HHV(HIGH, 3)
+8. **BARSLAST**: 计算上一次条件成立到当前的周期数
+9. **REF**: 引用BARPOS根K线前的BARSLAST值对应的K线位置（BARPOS是数组）
+10. **结果**: 返回BARPOS根K线前的BARSLAST值对应的K线位置（BARPOS）（K线位置从本机第一根K线开始计算）
+
+**完整实现请参考**: `mflang/example_parse_formula.py`
+
 ## 测试
 
 运行测试文件验证函数功能：
@@ -1154,6 +1808,9 @@ python mflang/test_functions.py
 
 # 测试 #IMPORT 解析
 python mflang/test_import.py
+
+# 测试复杂表达式解析
+python mflang/example_parse_formula.py
 ```
 
 ## 未来计划

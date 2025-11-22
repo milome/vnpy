@@ -284,3 +284,179 @@ def SUMBARS(X: Union[np.ndarray, list], A: Union[int, float, np.ndarray]) -> np.
     
     return result
 
+
+def BARPOS(X: Union[np.ndarray, list]) -> np.ndarray:
+    """
+    返回从第一根K线开始到当前的周期数
+    
+    参数:
+        X: 时间序列数组（numpy数组或列表），最新的值在数组末尾
+           用于确定K线数量，可以是任意K线数据（如close、high、low等）
+        
+    返回值:
+        返回一个整数数组，每个元素表示从第一根K线到当前位置的周期数
+        - 第一根K线返回1
+        - 第二根K线返回2
+        - 以此类推
+        - 返回值都是整数
+        
+    规则:
+        1. BARPOS返回本地已有的K线根数，从本机上存在的数据开始算起
+        2. 本机已有的第一根K线上返回值为1
+        3. BARPOS函数本身没有参数，但需要传入数组来确定K线数量
+        
+    获取当前值:
+        由于返回的是numpy数组，要获取当前值（最后一个元素）可以使用：
+        - result[-1] 获取最后一个值（当前值）
+        - 转换为整数: current_pos = int(result[-1])
+        - 示例: current_pos = int(BARPOS(close)[-1])  # Python实现需要参数，麦语言中为BARPOS
+        
+    示例:
+        >>> # 例1: 基本用法
+        >>> # 在麦语言中：BARPOS
+        >>> # 在Python实现中，由于技术限制需要传入数组来确定K线数量
+        >>> close = np.array([100, 101, 102, 103, 104, 105])
+        >>> BARPOS(close)  # Python实现需要参数，麦语言中为BARPOS
+        array([1., 2., 3., 4., 5., 6.])
+        
+        >>> # 例2: 求本地已有数据的最小值（LLV(L, BARPOS)）
+        >>> # 在麦语言中：LLV(L, BARPOS)
+        >>> low = np.array([99, 100, 101, 102, 103, 104])
+        >>> barpos = BARPOS(low)  # Python实现需要参数，麦语言中为BARPOS
+        >>> # LLV(L, BARPOS) 等价于 low.min()
+        >>> min_value = low.min()
+        
+        >>> # 例3: 判断是否为第一根K线（IFELSE(BARPOS=1, H, 0)）
+        >>> # 在麦语言中：IFELSE(BARPOS=1, H, 0)
+        >>> high = np.array([101, 102, 103, 104, 105, 106])
+        >>> barpos = BARPOS(high)  # Python实现需要参数，麦语言中为BARPOS
+        >>> # IFELSE(BARPOS=1, H, 0)
+        >>> result = np.where(barpos == 1, high, 0)
+        >>> # 结果: [101., 0., 0., 0., 0., 0.]
+    """
+    # 转换为numpy数组以便处理
+    if not isinstance(X, np.ndarray):
+        X = np.array(X, dtype=float)
+    else:
+        X = X.astype(float)
+    
+    # 返回从1开始的索引数组（第一根K线为1）
+    length = len(X)
+    result = np.arange(1, length + 1, dtype=float)
+    
+    return result
+
+
+def HHV(X: Union[np.ndarray, list], N: Union[int, float, np.ndarray]) -> np.ndarray:
+    """
+    求X在N个周期内的最高值
+    
+    参数:
+        X: 时间序列数组（numpy数组或列表），最新的值在数组末尾
+        N: 周期数，可以是整数、浮点数或数组
+        
+    返回值:
+        - 如果X是数组，返回相同形状的数组，每个元素是对应位置N个周期内的最高值
+        - 如果数据不足或N无效，返回NaN值
+        
+    规则:
+        1. N包含当前k线（重要：N个周期包括当前位置）
+        2. 若N为0则从第一个有效值开始算起（从第一根K线到当前位置的最高值）
+        3. 当N为有效值，但当前的k线数不足N根，按照实际的根数计算
+        4. N为空值或NaN时，返回NaN
+        5. N可以是变量（数组）
+        
+    获取当前值:
+        由于返回的是numpy数组，要获取当前值（最后一个元素）可以使用：
+        - result[-1] 获取最后一个值（当前值）
+        - 需要先检查是否为NaN: if not np.isnan(result[-1])
+        - 示例: hhv_value = HHV(high, 3)[-1]
+        
+    示例:
+        >>> # 例1: 基本用法（N=3，包含当前K线）
+        >>> high = np.array([100, 101, 102, 103, 104, 105])
+        >>> HHV(high, 3)
+        array([100., 101., 102., 103., 104., 105.])
+        # 位置0: 只有1根K线，最高值=100
+        # 位置1: 有2根K线，最高值=max(100,101)=101
+        # 位置2: 有3根K线，最高值=max(100,101,102)=102
+        # 位置3: 有3根K线，最高值=max(101,102,103)=103
+        
+        >>> # 例2: N=0的情况（从第一个有效值开始算起）
+        >>> high = np.array([100, 101, 102, 103, 104, 105])
+        >>> HHV(high, 0)
+        array([100., 101., 102., 103., 104., 105.])
+        # 每个位置都是从第一根K线到当前位置的最高值
+    """
+    # 转换为numpy数组以便处理
+    if not isinstance(X, np.ndarray):
+        X = np.array(X, dtype=float)
+    else:
+        X = X.astype(float)
+    
+    # 处理N为空值或NaN的情况
+    if N is None:
+        return np.full_like(X, np.nan, dtype=float)
+    
+    if isinstance(N, (float, np.floating)) and np.isnan(N):
+        return np.full_like(X, np.nan, dtype=float)
+    
+    # 处理N为数组的情况
+    if isinstance(N, (np.ndarray, list)):
+        N = np.array(N, dtype=float)
+        if N.ndim == 0:
+            N = float(N)
+        else:
+            # N是数组，需要逐元素处理
+            result = np.full_like(X, np.nan, dtype=float)
+            for i in range(len(X)):
+                if i < len(N):
+                    n_val = N[i]
+                elif len(N) > 0:
+                    n_val = N[-1]
+                else:
+                    n_val = np.nan
+                
+                if not np.isnan(n_val):
+                    n_int = int(n_val)
+                    if n_int == 0:
+                        # N=0: 从第一个有效值开始算起（从第一根K线到当前位置）
+                        result[i] = np.max(X[0:i+1])
+                    elif n_int > 0:
+                        # N>0: 计算N个周期内的最高值（包含当前K线）
+                        # 如果数据不足N根，按照实际的根数计算
+                        start_idx = max(0, i - n_int + 1)
+                        result[i] = np.max(X[start_idx:i+1])
+            return result
+    
+    # N是标量，转换为整数
+    try:
+        N = int(N)
+    except (ValueError, TypeError):
+        return np.full_like(X, np.nan, dtype=float)
+    
+    # 处理N为0的情况：从第一个有效值开始算起
+    if N == 0:
+        result = np.full_like(X, np.nan, dtype=float)
+        for i in range(len(X)):
+            # 从第一根K线到当前位置的最高值
+            result[i] = np.max(X[0:i+1])
+        return result
+    
+    # 处理N为负数的情况
+    if N < 0:
+        return np.full_like(X, np.nan, dtype=float)
+    
+    # 使用numpy的向量化操作
+    result = np.full_like(X, np.nan, dtype=float)
+    
+    # 对于每个位置i，计算N个周期内的最高值（包含当前K线）
+    # 如果数据不足N根，按照实际的根数计算
+    for i in range(len(X)):
+        # 计算起始位置：max(0, i - N + 1)，确保包含当前K线
+        start_idx = max(0, i - N + 1)
+        # 计算从start_idx到i（包含i）的最高值
+        result[i] = np.max(X[start_idx:i+1])
+    
+    return result
+
