@@ -2504,3 +2504,786 @@ interval_mapping = {
 - **Gateway**: `vnpy_futu/vnpy_futu/futu_gateway.py` - 同步历史数据查询周期映射
 
 这个修复解决了历史数据查询功能的回归问题，确保了与datafeed模块的一致性。
+
+## DataRecorder 数据保存机制 (2025-01)
+
+### 概述
+
+DataRecorder 是 VeighNa 的实盘行情记录模块，用于实时记录 Tick 数据和 K线数据，并自动保存到数据库中。记录的数据可用于 CtaBacktester 的历史回测、CtaStrategy 和 PortfolioStrategy 等策略的实盘初始化。
+
+### 核心架构
+
+#### 1. 数据流程
+
+```
+实时行情数据流
+    ↓
+[事件引擎] EVENT_TICK 事件
+    ↓
+[DataRecorder引擎] 接收并处理
+    ↓
+[内存缓存] 临时存储（ticks/bars字典）
+    ↓
+[定时批量保存] 每10秒批量写入数据库
+    ↓
+[数据库] 持久化存储
+```
+
+#### 2. Tick 数据保存流程
+
+**接收与过滤**：
+```python
+def update_tick(self, tick: TickData) -> None:
+    # 过滤偏离本地时间戳过大的Tick数据（默认60秒窗口）
+    tick_delta: timedelta = abs(tick.datetime - self.filter_dt)
+    if abs(tick_delta) >= self.filter_delta:
+        return
+    
+    # 如果合约在录制列表中，记录Tick数据
+    if tick.vt_symbol in self.tick_recordings:
+        self.record_tick(copy(tick))
+```
+
+**内存缓存**：
+```python
+def record_tick(self, tick: TickData) -> None:
+    """将Tick数据追加到内存缓存"""
+    self.ticks[tick.vt_symbol].append(tick)
+```
+
+**批量保存**：
+```python
+def process_timer_event(self, event: Event) -> None:
+    """定时器事件：每10秒批量保存数据"""
+    self.timer_count += 1
+    if self.timer_count < self.timer_interval:  # timer_interval = 10
+        return
+    self.timer_count = 0
+    
+    # 批量保存Tick数据
+    for ticks in self.ticks.values():
+        self.queue.put(("tick", ticks))
+    self.ticks.clear()  # 清空缓存
+```
+
+**异步写入数据库**：
+```python
+def run(self) -> None:
+    """独立线程异步保存数据"""
+    while self.active:
+        task: tuple[str, list] = self.queue.get(timeout=1)
+        task_type, data = task
+        
+        if task_type == "tick":
+            self.database.save_tick_data(data, stream=True)
+        elif task_type == "bar":
+            self.database.save_bar_data(data, stream=True)
+```
+
+#### 3. K线数据保存流程
+
+**BarGenerator 合成**：
+```python
+def update_tick(self, tick: TickData) -> None:
+    # 如果合约在K线录制列表中，使用BarGenerator合成1分钟K线
+    if tick.vt_symbol in self.bar_recordings:
+        bg: BarGenerator = self.get_bar_generator(tick.vt_symbol)
+        bg.update_tick(copy(tick))  # 推送到BarGenerator聚合
+```
+
+**K线完成回调**：
+```python
+def get_bar_generator(self, vt_symbol: str) -> BarGenerator:
+    """获取或创建BarGenerator实例"""
+    bg = BarGenerator(self.record_bar)  # record_bar作为回调函数
+    return bg
+
+def record_bar(self, bar: BarData) -> None:
+    """BarGenerator合成完成1分钟K线后调用此回调"""
+    self.bars[bar.vt_symbol].append(bar)  # 缓存到内存
+```
+
+**批量保存**（与Tick数据相同）：
+- 每10秒批量保存一次
+- 通过队列异步写入数据库
+
+### 数据库存储格式
+
+DataRecorder 使用 `BaseDatabase` 接口，支持多种数据库后端：
+
+#### SQLite（默认）
+- **文件位置**：`vnpy.db`（在 VeighNa 安装目录）
+- **表结构**：
+  - `dbbardata`：存储K线数据
+    - 字段：`symbol`, `exchange`, `datetime`, `interval`, `volume`, `turnover`, `open_interest`, `open_price`, `high_price`, `low_price`, `close_price`
+  - `dbtickdata`：存储Tick数据
+    - 字段：`symbol`, `exchange`, `datetime`, `name`, `volume`, `turnover`, `open_interest`, `last_price`, `last_volume`, `limit_up`, `limit_down`, `open_price`, `high_price`, `low_price`, `pre_close`, `bid_price_1`, `ask_price_1`, `bid_volume_1`, `ask_volume_1`, ...
+
+#### MySQL/PostgreSQL
+- 表结构与 SQLite 相同
+- 支持更大数据量和并发访问
+- 适合生产环境
+
+#### MongoDB
+- 使用集合（Collection）存储
+- 每个合约的数据作为文档存储
+- 支持灵活的查询和索引
+
+### 关键配置参数
+
+```python
+# 定时保存间隔（秒）
+self.timer_interval: int = 10  # 每10秒批量保存一次
+
+# Tick数据过滤窗口（秒）
+self.filter_window: int = 60  # 过滤偏离本地时间60秒以上的数据
+
+# 内存缓存
+self.ticks: dict[str, list[TickData]] = defaultdict(list)  # Tick数据缓存
+self.bars: dict[str, list[BarData]] = defaultdict(list)    # K线数据缓存
+```
+
+### 数据保存特点
+
+1. **批量保存**：
+   - 每10秒批量写入一次，减少数据库操作频率
+   - 提高写入效率，降低数据库负载
+
+2. **异步处理**：
+   - 使用独立线程处理数据保存
+   - 不阻塞主程序，确保实时性
+
+3. **流式写入**：
+   - 使用 `stream=True` 模式
+   - 适合实时数据流场景
+
+4. **时间过滤**：
+   - 自动过滤异常时间戳的Tick数据
+   - 防止错误数据污染数据库
+
+5. **自动去重**：
+   - 数据库实现通常会自动处理重复数据
+   - 确保数据唯一性
+
+### 使用示例
+
+#### 添加录制任务
+
+```python
+# 通过UI添加
+recorder_engine.add_tick_recording("MHImain.SEHK")  # 录制Tick数据
+recorder_engine.add_bar_recording("MHImain.SEHK")  # 录制1分钟K线
+
+# 通过脚本添加
+from vnpy_datarecorder import DataRecorderApp
+
+recorder_engine = main_engine.add_app(DataRecorderApp)
+recorder_engine.add_tick_recording("MHImain.SEHK")
+recorder_engine.add_bar_recording("MHImain.SEHK")
+```
+
+#### 批量添加合约
+
+```python
+# 自动订阅符合条件的合约
+def subscribe_data(event: Event) -> None:
+    contract: ContractData = event.data
+    if contract.exchange in recording_exchanges:
+        recorder_engine.add_tick_recording(contract.vt_symbol)
+        recorder_engine.add_bar_recording(contract.vt_symbol)
+
+event_engine.register(EVENT_CONTRACT, subscribe_data)
+```
+
+### 数据读取
+
+保存的数据可以通过标准数据库接口读取：
+
+```python
+from vnpy.trader.database import get_database
+
+database = get_database()
+
+# 读取K线数据
+bars = database.load_bar_data(
+    symbol="MHImain",
+    exchange=Exchange.SEHK,
+    interval=Interval.MINUTE,
+    start=datetime(2024, 1, 1),
+    end=datetime(2024, 12, 31)
+)
+
+# 读取Tick数据
+ticks = database.load_tick_data(
+    symbol="MHImain",
+    exchange=Exchange.SEHK,
+    start=datetime(2024, 1, 1),
+    end=datetime(2024, 12, 31)
+)
+```
+
+### 性能优化
+
+1. **内存管理**：
+   - 使用字典按合约分组缓存
+   - 批量保存后立即清空缓存
+   - 避免内存无限增长
+
+2. **数据库优化**：
+   - 批量插入比单条插入效率高
+   - 流式写入模式减少事务开销
+   - 支持数据库连接池
+
+3. **时间过滤**：
+   - 过滤异常时间戳数据
+   - 减少无效数据写入
+   - 提高数据质量
+
+### 注意事项
+
+1. **数据延迟**：
+   - 数据最多延迟10秒保存（定时器间隔）
+   - 程序异常退出可能导致最后10秒数据丢失
+   - 建议定期备份数据库
+
+2. **存储空间**：
+   - Tick数据量巨大，需要足够的存储空间
+   - 建议定期清理历史数据或使用数据归档
+
+3. **数据库性能**：
+   - 大量数据写入时注意数据库性能
+   - 建议使用 MySQL/PostgreSQL 等生产级数据库
+   - 定期优化数据库索引
+
+4. **合约订阅**：
+   - 确保合约已正确订阅行情
+   - 检查合约信息是否查询成功
+   - IB接口需要手动订阅后才能录制
+
+### 文件位置
+
+- **引擎实现**：`vnpy_datarecorder/vnpy_datarecorder/engine.py`
+- **UI界面**：`vnpy_datarecorder/vnpy_datarecorder/ui/widget.py`
+- **配置保存**：
+  - 文件名：`data_recorder_setting.json`
+  - 默认路径（Windows）：`C:\Users\<用户名>\.vntrader\data_recorder_setting.json`
+  - 默认路径（Linux/macOS）：`~/.vntrader/data_recorder_setting.json`
+  - 如果当前工作目录存在 `.vntrader` 文件夹，则使用当前工作目录下的配置文件
+
+### 相关文档
+
+- DataRecorder 使用文档：`docs/community/app/data_recorder.md`
+- 数据库配置文档：`docs/community/info/database.md`
+
+### 查看当前激活的录制配置
+
+#### 方法1：通过UI界面查看
+
+1. 启动 VeighNa Trader
+2. 在菜单栏点击【功能】-> 【行情记录】
+3. 在UI界面中查看：
+   - **K线记录列表**：显示所有正在录制的K线合约
+   - **Tick记录列表**：显示所有正在录制的Tick合约
+
+#### 方法2：通过配置文件查看
+
+**配置文件位置**：
+
+配置文件路径的确定规则（按优先级）：
+1. **当前工作目录**：如果当前工作目录下存在 `.vntrader` 文件夹，则使用 `当前工作目录/.vntrader/data_recorder_setting.json`
+2. **用户主目录**：否则使用 `用户主目录/.vntrader/data_recorder_setting.json`
+
+**Windows 系统**：
+- 默认路径：`C:\Users\<用户名>\.vntrader\data_recorder_setting.json`
+- 例如：`C:\Users\milom\.vntrader\data_recorder_setting.json`
+
+**Linux/macOS 系统**：
+- 默认路径：`~/.vntrader/data_recorder_setting.json`
+- 例如：`/home/username/.vntrader/data_recorder_setting.json`
+
+**通过Python代码获取路径**：
+```python
+from vnpy.trader.utility import get_file_path
+
+config_path = get_file_path("data_recorder_setting.json")
+print(f"配置文件路径: {config_path}")
+print(f"绝对路径: {config_path.resolve()}")
+```
+
+**配置文件内容示例**：
+```json
+{
+  "tick": {
+    "MHImain.SEHK": {
+      "symbol": "MHImain",
+      "exchange": "SEHK",
+      "gateway_name": "FUTU"
+    }
+  },
+  "bar": {
+    "MHImain.SEHK": {
+      "symbol": "MHImain",
+      "exchange": "SEHK",
+      "gateway_name": "FUTU"
+    }
+  },
+  "filter_window": 60
+}
+```
+
+#### 方法3：通过Python代码查看
+
+```python
+from vnpy_datarecorder import DataRecorderApp
+
+# 获取DataRecorder引擎
+recorder_engine = main_engine.get_engine("DataRecorder")
+
+# 查看Tick录制列表
+tick_recordings = recorder_engine.tick_recordings
+print("Tick录制列表：", list(tick_recordings.keys()))
+
+# 查看K线录制列表
+bar_recordings = recorder_engine.bar_recordings
+print("K线录制列表：", list(bar_recordings.keys()))
+
+# 查看完整配置
+print("Tick配置：", tick_recordings)
+print("K线配置：", bar_recordings)
+```
+
+### DataRecorder 与 DataManager 的区别
+
+#### 功能定位
+
+**DataRecorder（行情记录模块）**：
+- **用途**：实时录制行情数据
+- **数据来源**：实时行情数据流（通过 `EVENT_TICK` 事件）
+- **工作方式**：被动接收，实时录制
+- **数据特点**：实时产生，连续不断
+- **适用场景**：实盘交易时录制实时行情
+
+**DataManager（历史数据管理模块）**：
+- **用途**：管理历史数据（下载、查看、导入、导出、更新）
+- **数据来源**：数据服务（datafeed）或交易接口的历史数据查询
+- **工作方式**：主动查询，批量下载
+- **数据特点**：历史已有，按需下载
+- **适用场景**：回测前准备历史数据，补充缺失的历史数据
+
+#### 更新数据功能的区别
+
+**DataRecorder 的"录制"**：
+```python
+# 实时录制流程
+实时行情 → EVENT_TICK事件 → DataRecorder接收 → 内存缓存 → 定时批量保存到数据库
+```
+- 从**实时行情流**中录制
+- 数据是**实时产生**的
+- 需要**订阅行情**才能录制
+- 录制的是**当前时刻**的数据
+
+**DataManager 的"更新数据"**：
+```python
+# 更新数据流程
+数据库已有数据 → 查询结束日期 → 从数据服务下载最新数据 → 保存到数据库
+```
+- 从**数据服务**（datafeed）或**交易接口**下载
+- 数据是**历史已有**的
+- 需要**配置数据服务**（如富途、RQData等）
+- 更新的是**历史缺失**的数据
+
+#### 数据存储冲突分析
+
+**结论：不会冲突，可以共存**
+
+1. **使用同一个数据库**：
+   - 两者都使用 `get_database()` 获取数据库实例
+   - 数据存储在相同的表结构中（`dbbardata`、`dbtickdata`）
+
+2. **数据去重机制**：
+   - 数据库的 `save_bar_data()` 和 `save_tick_data()` 方法会处理重复数据
+   - 通常通过 `(symbol, exchange, datetime, interval)` 唯一索引去重
+   - 相同时间戳的数据会被覆盖或忽略
+
+3. **数据互补性**：
+   - **DataRecorder**：录制实时数据，填补实时数据空白
+   - **DataManager**：下载历史数据，填补历史数据空白
+   - 两者可以**同时使用**，形成完整的数据覆盖
+
+4. **使用建议**：
+   ```python
+   # 场景1：回测前准备数据
+   # 使用 DataManager 下载历史数据
+   data_manager.download_bar_data("MHImain", Exchange.SEHK, Interval.MINUTE, start_date)
+   
+   # 场景2：实盘交易时录制数据
+   # 使用 DataRecorder 录制实时数据
+   recorder_engine.add_bar_recording("MHImain.SEHK")
+   
+   # 场景3：定期更新历史数据
+   # 使用 DataManager 更新到最新日期
+   data_manager.update_data()  # 从数据库结束日期更新到当前日期
+   ```
+
+5. **数据时间范围**：
+   - **DataRecorder**：录制**当前时刻**的数据（实时）
+   - **DataManager**：下载**历史时间段**的数据（从指定开始日期到当前日期）
+
+#### 典型使用场景
+
+**场景1：回测准备**
+```python
+# 1. 使用 DataManager 下载历史数据
+data_manager.download_bar_data("MHImain", Exchange.SEHK, Interval.MINUTE, datetime(2024, 1, 1))
+
+# 2. 运行回测
+backtesting_engine.run_backtesting()
+```
+
+**场景2：实盘录制**
+```python
+# 1. 启动 DataRecorder
+recorder_engine.add_bar_recording("MHImain.SEHK")
+recorder_engine.add_tick_recording("MHImain.SEHK")
+
+# 2. 实时录制数据（自动保存到数据库）
+```
+
+**场景3：数据维护**
+```python
+# 1. 使用 DataManager 更新历史数据（补充缺失）
+data_manager.update_data()  # 从数据库结束日期更新到当前日期
+
+# 2. 使用 DataRecorder 继续录制实时数据
+recorder_engine.add_bar_recording("MHImain.SEHK")
+```
+
+#### 注意事项
+
+1. **数据服务配置**：
+   - DataManager 需要配置数据服务（datafeed）才能下载历史数据
+   - DataRecorder 需要订阅行情才能录制实时数据
+
+2. **数据完整性**：
+   - DataManager 下载的数据可能不连续（取决于数据服务提供的数据范围）
+   - DataRecorder 录制的数据是连续的（实时行情流）
+
+3. **存储空间**：
+   - 两者都会写入数据库，注意存储空间管理
+   - 建议定期清理历史数据或使用数据归档
+
+4. **性能考虑**：
+   - DataRecorder 实时录制，对数据库写入性能要求较高
+   - DataManager 批量下载，对数据库读取性能要求较高
+   - 建议使用 MySQL/PostgreSQL 等生产级数据库
+
+## IndicatorManager 快速初始化与增量加载功能 (2025-01)
+
+### 概述
+
+`IndicatorManager` 实现了快速初始化模式和增量加载功能，解决了在回测环境中加载大量历史指标数据时初始化时间过长的问题。通过先加载少量数据快速完成初始化，然后在后台异步加载完整数据，使得策略可以立即开始回测，而不需要等待完整历史数据加载完成。
+
+### 核心功能
+
+#### 1. 快速初始化模式 (Fast Mode)
+
+**问题背景**：
+- 加载1年（365天）的历史数据并计算指标可能需要数分钟甚至更长时间
+- 在回测环境中，用户希望策略能够快速启动，而不需要等待完整数据加载
+- 策略初始化时只需要最近一段时间的数据即可开始运行
+
+**解决方案**：
+- 快速模式：先加载少量数据（默认30天）快速完成初始化
+- 后台异步加载：在后台线程中继续加载完整数据（365天）
+- 增量合并：后台加载的数据会自动追加到现有数据中，不影响策略运行
+
+**实现细节**：
+
+```python
+def initialize_indicators(
+    self,
+    interval: Interval,
+    days: int = 365,
+    database: Optional[BaseDatabase] = None,
+    fast_mode: bool = False,
+    fast_days: int = 30,
+    preserve_existing: bool = False
+):
+    """
+    快速模式工作流程：
+    1. 先加载 fast_days 天的数据（默认30天）
+    2. 快速计算指标并标记初始化完成
+    3. 在后台异步加载完整 days 天的数据
+    4. 使用增量模式（preserve_existing=True）合并数据
+    """
+    if fast_mode and not preserve_existing:
+        # 快速模式：先加载少量数据
+        fast_bars = self.load_history_bars(interval, fast_days, database)
+        # 快速计算指标
+        # ... 计算指标 ...
+        # 标记初始化完成（允许策略开始运行）
+        self._init_status[interval] = True
+        
+        # 后台继续加载完整数据（增量模式）
+        if days > fast_days:
+            self.initialize_indicators_async(
+                interval,
+                days=days,
+                database=database,
+                preserve_existing=True  # 保留现有数据
+            )
+```
+
+#### 2. 增量加载模式 (Incremental Loading)
+
+**问题背景**：
+- 后台异步加载完整数据时，不能清空已加载的快速数据
+- 需要智能合并新旧数据，避免重复和丢失
+
+**解决方案**：
+- `preserve_existing` 参数：控制是否保留现有数据
+- 时间戳合并：根据K线时间戳智能合并新旧数据
+- 增量更新指标：只更新新增部分的指标值
+
+**实现细节**：
+
+```python
+# 增量加载逻辑
+if preserve_existing and interval in self.history_bars:
+    existing_bars = self.history_bars[interval]
+    last_existing_time = existing_bars[-1].datetime if existing_bars else None
+    
+    # 过滤出新增的K线数据
+    new_bars = [bar for bar in bars 
+                if last_existing_time is None or bar.datetime > last_existing_time]
+    
+    # 合并现有数据和新增数据
+    all_bars = existing_bars + new_bars
+    
+    # 增量更新指标（只更新新增部分）
+    if len(indicator_deque) > 0:
+        existing_count = len(indicator_deque)
+        new_values = indicator_values[existing_count:]
+        for val in new_values:
+            indicator_deque.append(val)
+```
+
+#### 3. K线数据合成功能
+
+**问题背景**：
+- 数据库中可能只有1分钟K线数据，没有5分钟K线数据
+- 需要从1分钟数据合成5分钟数据用于指标计算
+
+**解决方案**：
+- `_synthesize_bars_from_minute()` 方法：从1分钟K线合成目标周期K线
+- 支持合成5分钟、15分钟、30分钟等能被60整除的周期
+- 自动检测并合成：如果目标周期数据不存在，自动尝试从1分钟数据合成
+
+**实现细节**：
+
+```python
+def load_history_bars(
+    self,
+    interval: Interval,
+    days: int,
+    database: Optional[BaseDatabase] = None,
+    start: Optional[datetime] = None,
+    end: Optional[datetime] = None
+) -> List[BarData]:
+    """加载历史K线数据，支持从1分钟数据合成"""
+    # 先尝试直接加载目标周期数据
+    bars = database.load_bar_data(...)
+    
+    if not bars:
+        # 如果目标周期数据不存在，尝试从1分钟数据合成
+        if interval in [Interval.MINUTE_5, Interval.MINUTE_15, ...]:
+            minute_bars = database.load_bar_data(Interval.MINUTE, ...)
+            if minute_bars:
+                bars = self._synthesize_bars_from_minute(minute_bars, interval)
+                self.write_log(f"从1分钟数据合成了 {len(bars)} 根{interval.value}K线")
+```
+
+### 使用示例
+
+#### 回测环境中的使用
+
+```python
+def on_init(self):
+    """策略初始化回调"""
+    # 注册指标
+    self.indicator_manager.register_indicator(
+        interval=Interval.MINUTE_5,
+        indicator_name="MIN5.PREV_OPEN",
+        calculator=self._calculate_min5_open_prev_open,
+        max_history=10000
+    )
+    
+    # 获取数据库（兼容回测和实盘环境）
+    try:
+        # 实盘环境：从 cta_engine 获取数据库
+        database = self.cta_engine.database
+        is_backtesting = False
+    except AttributeError:
+        # 回测环境：使用 get_database() 函数
+        database = get_database()
+        is_backtesting = True
+    
+    # 初始化指标（回测环境使用快速模式）
+    self.indicator_manager.initialize_indicators(
+        Interval.MINUTE_5,
+        days=365,  # 加载1年历史数据
+        database=database,
+        fast_mode=is_backtesting,  # 回测环境使用快速模式
+        fast_days=30  # 快速模式先加载30天数据
+    )
+    
+    # 策略可以立即继续执行，不等待完整数据加载
+    self.load_bar(10)
+```
+
+#### 实盘环境中的使用
+
+```python
+def on_init(self):
+    """策略初始化回调"""
+    # 实盘环境不使用快速模式，直接加载完整数据
+    database = self.cta_engine.database
+    self.indicator_manager.initialize_indicators(
+        Interval.MINUTE_5,
+        days=365,
+        database=database,
+        fast_mode=False  # 实盘环境不使用快速模式
+    )
+```
+
+### 工作流程
+
+#### 快速模式完整流程
+
+```
+1. 策略初始化开始
+   ↓
+2. 调用 initialize_indicators(fast_mode=True, fast_days=30)
+   ↓
+3. 快速加载30天数据
+   ↓
+4. 快速计算指标（30天数据）
+   ↓
+5. 标记初始化完成（_init_status[interval] = True）
+   ↓
+6. 策略可以立即开始运行（使用30天数据）
+   ↓
+7. 后台异步加载365天完整数据（增量模式）
+   ↓
+8. 合并新旧数据（根据时间戳）
+   ↓
+9. 增量更新指标（只更新新增部分）
+   ↓
+10. 完整数据加载完成，策略继续使用完整数据
+```
+
+#### 增量加载数据合并流程
+
+```
+现有数据（快速模式）：
+  [2024-01-01, 2024-01-02, ..., 2024-01-30]  ← 30天数据
+
+后台加载完整数据：
+  [2024-01-01, 2024-01-02, ..., 2024-12-31]  ← 365天数据
+
+合并逻辑：
+  1. 找到现有数据的最后时间戳：2024-01-30
+  2. 过滤出新增数据：2024-01-31 之后的数据
+  3. 合并：现有数据 + 新增数据
+  4. 重新计算指标（使用合并后的完整数据）
+  5. 增量更新指标deque（只追加新增部分）
+```
+
+### 关键特性
+
+#### 1. 智能数据合并
+
+- **时间戳检测**：根据K线时间戳智能检测新旧数据
+- **去重处理**：自动处理重复数据，避免重复计算
+- **无缝切换**：策略在数据合并过程中无需感知，继续正常运行
+
+#### 2. 异步加载
+
+- **非阻塞**：使用 `ThreadPoolExecutor` 在后台线程中加载数据
+- **状态管理**：通过 `_init_status` 和 `_init_futures` 管理初始化状态
+- **错误处理**：异步加载失败不影响策略运行
+
+#### 3. 数据合成
+
+- **自动检测**：自动检测目标周期数据是否存在
+- **智能合成**：如果不存在，自动从1分钟数据合成
+- **支持周期**：支持5分钟、15分钟、30分钟等能被60整除的周期
+
+### 性能优化
+
+#### 1. 快速启动
+
+- **30天数据**：快速模式默认加载30天数据，通常只需几秒钟
+- **立即可用**：策略可以立即开始运行，不需要等待完整数据
+
+#### 2. 后台加载
+
+- **异步处理**：完整数据在后台异步加载，不阻塞主线程
+- **增量更新**：只更新新增部分，避免重复计算
+
+#### 3. 内存管理
+
+- **动态调整**：根据数据量动态调整 `deque` 的 `maxlen`
+- **增量追加**：增量模式下只追加新数据，不重复存储
+
+### 日志输出示例
+
+```
+[IndicatorManager] MHImain.HKFE - 注册指标: 5m - MIN5.PREV_OPEN
+[IndicatorManager] MHImain.HKFE - 指标文件不存在，将从数据库加载K线数据并计算
+[IndicatorManager] MHImain.HKFE - 快速模式：先加载 30 天数据快速初始化，然后在后台继续加载 365 天完整数据
+[IndicatorManager] MHImain.HKFE - 5分钟周期数据不存在，尝试从1分钟数据合成
+[IndicatorManager] MHImain.HKFE - 从1分钟数据合成了 3689 根5分钟K线
+[IndicatorManager] MHImain.HKFE - 加载历史K线: 5m, 共 3689 根
+[IndicatorManager] MHImain.HKFE - 快速初始化: 5m - MIN5.PREV_OPEN, 共 3689 个值（其中 3688 个有效值，快速模式，30天数据）
+[IndicatorManager] MHImain.HKFE - 快速初始化完成: 5m 周期，所有指标已就绪
+[IndicatorManager] MHImain.HKFE - 后台继续加载完整数据: 5m 周期，365 天（增量模式，保留现有数据）
+[IndicatorManager] MHImain.HKFE - 开始异步增量初始化指标: 5m（保留现有数据）
+[IndicatorManager] MHImain.HKFE - 增量加载模式：将从数据库加载K线数据并追加到现有指标数据
+```
+
+### 配置参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `fast_mode` | `bool` | `False` | 是否启用快速模式 |
+| `fast_days` | `int` | `30` | 快速模式下的初始加载天数 |
+| `preserve_existing` | `bool` | `False` | 是否保留现有数据（用于增量加载） |
+| `days` | `int` | `365` | 完整数据加载天数 |
+
+### 使用建议
+
+#### 回测环境
+
+- **启用快速模式**：`fast_mode=True`，快速启动回测
+- **合理设置 fast_days**：根据策略需求设置，通常30天足够
+- **等待完整数据**：如果需要完整历史数据，可以等待异步加载完成
+
+#### 实盘环境
+
+- **禁用快速模式**：`fast_mode=False`，直接加载完整数据
+- **确保数据完整**：实盘环境需要完整的历史数据用于准确计算
+
+### 文件位置
+
+- **核心实现**：`indicators/indicator_manager.py`
+- **使用示例**：`vnpy_ctastrategy/vnpy_ctastrategy/strategies/test_import_strategy.py`
+- **文档**：`indicators/docs/INDICATOR_MANAGER_README.md`
+
+### 相关功能
+
+- **运行时指标值**：支持在K线聚合过程中计算和引用运行时指标值
+- **数据持久化**：支持将指标数据保存到 Parquet/PKL 文件
+- **智能获取**：`get_indicator_smart()` 方法支持优先使用运行时值，回退到历史值
+
+这个功能显著提升了回测环境的用户体验，使得策略可以快速启动，同时保证数据的完整性和准确性。
