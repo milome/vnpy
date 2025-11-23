@@ -111,13 +111,13 @@ class Datafeed(BaseDatafeed):
         try:
             self.quote_ctx = OpenQuoteContext(host=self.host, port=self.port)
             self.inited = True
-            safe_output(output, _("富途数据服务连接成功"))
+            safe_output(output, "富途数据服务连接成功")
             return True
         except Exception as e:
             # 安全处理异常消息，避免特殊字符导致格式化错误
             error_msg = str(e)
-            safe_output(output, _("富途数据服务连接失败: {}").format(error_msg))
-            safe_output(output, _("提示: 请确保富途牛牛客户端已启动，并开启了OpenD服务"))
+            safe_output(output, f"富途数据服务连接失败: {error_msg}")
+            safe_output(output, "提示: 请确保富途牛牛客户端已启动，并开启了OpenD服务")
             return False
 
     def query_bar_history(self, req: HistoryRequest, output: Callable = print) -> List[BarData]:
@@ -133,7 +133,7 @@ class Datafeed(BaseDatafeed):
         # 检查是否支持该周期
         if req.interval not in INTERVAL_VT2FUTU:
             interval_value = str(req.interval.value)
-            msg = _("富途数据服务不支持 {} 级别的K线数据").format(interval_value)
+            msg = f"富途数据服务不支持 {interval_value} 级别的K线数据"
             safe_output(output, msg)
             return bars
 
@@ -159,7 +159,7 @@ class Datafeed(BaseDatafeed):
             if ret != RET_OK:
                 # 安全处理错误消息，避免DataFrame包含花括号导致格式化错误
                 error_msg = str(history_df) if isinstance(history_df, str) else "未知错误"
-                msg = _("获取K线数据失败: {}").format(error_msg)
+                msg = f"获取K线数据失败: {error_msg}"
                 safe_output(output, msg)
                 return bars
 
@@ -177,11 +177,11 @@ class Datafeed(BaseDatafeed):
                 else:
                     # 安全处理错误消息，避免DataFrame包含花括号导致格式化错误
                     error_msg = str(data) if isinstance(data, str) else "分页数据获取失败"
-                    msg = _("获取分页数据失败: {}").format(error_msg)
+                    msg = f"获取分页数据失败: {error_msg}"
                     safe_output(output, msg)
 
             if history_df.empty:
-                safe_output(output, _("未获取到K线数据"))
+                safe_output(output, "未获取到K线数据")
                 return bars
 
             # 处理时间字段
@@ -209,21 +209,14 @@ class Datafeed(BaseDatafeed):
                 )
                 bars.append(bar)
 
-            try:
-                msg = _("成功获取 {} 条K线数据").format(len(bars))
-            except Exception:
-                msg = f"成功获取 {len(bars)} 条K线数据"
+            msg = f"成功获取 {len(bars)} 条K线数据"
             safe_output(output, msg)
             return bars
 
         except Exception as e:
-            try:
-                error_msg = str(e)
-                msg = _("查询K线数据异常: {}").format(error_msg)
-            except Exception:
-                # 如果格式化失败，使用f-string
-                error_msg = str(e)
-                msg = f"查询K线数据异常: {error_msg}"
+            # 直接使用f-string，避免_函数可能的问题
+            error_msg = str(e)
+            msg = f"查询K线数据异常: {error_msg}"
             safe_output(output, msg)
             return bars
 
@@ -232,7 +225,7 @@ class Datafeed(BaseDatafeed):
         查询历史Tick数据
         注意：富途API暂不支持历史Tick数据查询，此方法返回空列表
         """
-        safe_output(output, _("富途数据服务暂不支持历史Tick数据查询"))
+        safe_output(output, "富途数据服务暂不支持历史Tick数据查询")
         return []
 
     def close(self) -> None:
