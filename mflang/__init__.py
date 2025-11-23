@@ -18,6 +18,7 @@
 from .functions import REF, BARSLAST, SUMBARS, BARPOS, HHV
 from .import_parser import ImportParser, ImportStatement, PeriodType, parse_import
 from .cross_period import CrossPeriodDataManager, ImportResolver
+from .model_loader import ModelLoader, get_model_loader, load_model, get_variable
 
 __all__ = [
     "REF",
@@ -31,5 +32,9 @@ __all__ = [
     "parse_import",
     "CrossPeriodDataManager",
     "ImportResolver",
+    "ModelLoader",
+    "get_model_loader",
+    "load_model",
+    "get_variable",
 ]
 

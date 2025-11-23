@@ -32,10 +32,20 @@ class ImportStatement:
         var_name: str,
         line_number: int = 0
     ):
+        """
+        初始化 #IMPORT 语句解析结果
+        
+        参数:
+            period: 周期类型
+            n: 周期参数
+            formula: 模型文件名（FORMULA参数，对应 mflang/mmodels/ 目录下的模型文件）
+            var_name: 变量名（用于访问模型中的变量，如 VAR.CC）
+            line_number: 行号
+        """
         self.period = period
         self.n = n
-        self.formula = formula
-        self.var_name = var_name
+        self.formula = formula  # 模型文件名，对应 mflang/mmodels/ 目录下的文件
+        self.var_name = var_name  # 变量名，用于访问模型中的变量（如 VAR.CC）
         self.line_number = line_number
     
     def __repr__(self):
@@ -74,6 +84,14 @@ class ImportParser:
         """
         解析 #IMPORT 语句
         
+        语法: #IMPORT [PERIOD,N,FORMULA] AS VAR
+        
+        参数说明:
+            PERIOD: 周期类型（MIN、HOUR、DAY等）
+            N: 周期参数（大于等于1的整数）
+            FORMULA: 模型文件名（对应 mflang/mmodels/ 目录下的模型文件）
+            VAR: 变量名（用于访问模型中的变量，如 VAR.CC）
+        
         参数:
             line: 代码行
             line_number: 行号
@@ -94,8 +112,8 @@ class ImportParser:
         
         period_str = match.group(1).upper()
         n_str = match.group(2)
-        formula = match.group(3)
-        var_name = match.group(4)
+        formula = match.group(3)  # 模型文件名，对应 mflang/mmodels/ 目录下的文件
+        var_name = match.group(4)  # 变量名，用于访问模型中的变量（如 VAR.CC）
         
         # 验证周期类型
         if period_str not in cls.PERIOD_TYPES:

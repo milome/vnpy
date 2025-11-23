@@ -1,5 +1,14 @@
 # #IMPORT 跨周期引用函数使用指南
 
+## 概述
+
+`#IMPORT [PERIOD,N,FORMULA] AS VAR` 用于引用当前合约，PERIOD参数为N的周期，指标FORMULA的数据。
+
+**重要说明：**
+- **FORMULA是模型文件名**，对应 `mflang/mmodels/` 目录下的模型文件
+- 模型文件中定义了变量（如 `CC:REF(C,1);`），这些变量可以通过 `VAR.VARIABLE_NAME` 的方式访问
+- 例如：`#IMPORT[DAY,1,AA] AS VAR` 表示引用 `mflang/mmodels/AA` 文件中定义的指标
+
 ## 快速开始
 
 ### 1. 解析 #IMPORT 语句
@@ -18,11 +27,26 @@ import_statements = ImportParser.parse_code(code)
 for stmt in import_statements:
     print(f"周期: {stmt.period.value}")
     print(f"N: {stmt.n}")
-    print(f"指标: {stmt.formula}")
-    print(f"变量: {stmt.var_name}")
+    print(f"模型文件: {stmt.formula}")  # FORMULA是模型文件名
+    print(f"变量名: {stmt.var_name}")  # VAR是变量名，用于访问模型中的变量
 ```
 
-### 2. 解析单个语句
+### 2. 加载模型文件
+
+```python
+from mflang import load_model, get_variable
+
+# 加载模型文件（FORMULA参数对应 mflang/mmodels/ 目录下的文件）
+model = load_model("AA")  # 加载 mflang/mmodels/AA 文件
+print(f"模型AA中的变量: {model}")
+# 输出: {'CC': 'REF(C,1)'}
+
+# 获取模型中的特定变量
+cc_expr = get_variable("AA", "CC")
+print(f"CC变量的定义: {cc_expr}")  # 输出: REF(C,1)
+```
+
+### 3. 解析单个语句
 
 ```python
 from mflang import ImportParser
@@ -32,9 +56,11 @@ stmt = ImportParser.parse_import_statement(line)
 
 if stmt:
     print(f"解析成功: {stmt}")
+    print(f"模型文件: {stmt.formula}")  # MACD是模型文件名（mflang/mmodels/MACD）
+    print(f"变量名: {stmt.var_name}")  # VAR是变量名
 ```
 
-### 3. 验证变量名
+### 4. 验证变量名
 
 ```python
 from mflang import ImportParser
@@ -56,50 +82,99 @@ is_valid = ImportParser.validate_variable_name("REF")   # False
 - `QUARTER`: 一季度
 - `YEAR`: 年周期
 
+## 模型文件说明
+
+**FORMULA参数是模型文件名**，模型文件存储在 `mflang/mmodels/` 目录下。
+
+### 模型文件格式
+
+模型文件包含变量定义，格式为：`VARIABLE_NAME:EXPRESSION;` 或 `VARIABLE_NAME:=EXPRESSION;`
+
+**示例：`mflang/mmodels/AA` 文件内容：**
+```
+CC:REF(C,1);//定义一个周期前的收盘价
+```
+
+**示例：`mflang/mmodels/CC` 文件内容：**
+```
+CC:C;//定义收盘价
+```
+
+### 访问模型中的变量
+
+通过 `#IMPORT` 语句定义的变量名（VAR）可以访问模型文件中定义的变量：
+
+```python
+# #IMPORT[DAY,1,AA] AS VAR
+# 模型文件AA中定义了CC变量
+# 通过 VAR.CC 访问模型AA中的CC变量
+```
+
 ## 示例
 
 ### 示例1: 引用日周期数据
 
-```python
-# 被引用的指标（保存为AA）:
-# CC:REF(C,1);
+**步骤1：创建模型文件 `mflang/mmodels/AA`**
+```
+CC:REF(C,1);//定义一个周期前的收盘价
+```
 
-# 主指标:
+**步骤2：在主指标中使用**
+```python
 code = """
 #IMPORT[DAY,1,AA] AS VAR
-CC:VAR.CC;
+CC:VAR.CC;//跨周期引用昨天的收盘价
 """
 ```
+
+**说明：**
+- `#IMPORT[DAY,1,AA] AS VAR` 引用日周期，模型文件AA，变量名为VAR
+- `VAR.CC` 访问模型AA中定义的CC变量（即 `REF(C,1)`）
 
 ### 示例2: 引用自定义小时周期
 
+**模型文件 `mflang/mmodels/AA` 已存在（见示例1）**
+
 ```python
 code = """
 #IMPORT[CUSHOUR,6,AA]AS S
-CC1:=S.CC;
+CC1:=S.CC;//跨周期引用自定义6小时周期的一个周期前的收盘价
 """
 ```
+
+**说明：**
+- `#IMPORT[CUSHOUR,6,AA]AS S` 引用自定义6小时周期，模型文件AA，变量名为S
+- `S.CC` 访问模型AA中定义的CC变量
 
 ### 示例3: 多个引用
 
+**模型文件 `mflang/mmodels/AA` 已存在（见示例1）**
+
 ```python
 code = """
 #IMPORT[CUSHOUR,6,AA]AS S
-CC1:=S.CC;
+CC1:=S.CC;//跨周期引用自定义6小时周期的一个周期前的收盘价
 
 #IMPORT[MIN,1,AA]AS R
-CC2:=R.CC;
+CC2:=R.CC;//跨周期引用自定义1分钟周期的一个周期前的收盘价
 """
 ```
 
+**说明：**
+- 同一个模型文件（AA）可以被多个 `#IMPORT` 语句引用
+- 不同的变量名（S、R）用于区分不同的引用
+
 ## 注意事项
 
-1. **N参数限制**: 周、季周期，N>1时按1计算
-2. **变量名规则**: 
+1. **FORMULA是模型文件名**: FORMULA参数对应 `mflang/mmodels/` 目录下的模型文件
+2. **模型文件中的变量**: 被引用的变量必须在模型文件中定义
+3. **N参数限制**: 周、季周期，N>1时按1计算
+4. **变量名规则**: 
    - 不能以数字开头
    - 不能与函数名重复
-3. **语句数量限制**: #IMPORT、#CALL、#CALL_PLUS、#CALL_OTHER 总共不能超过6个
-4. **末尾分号**: 使用 #IMPORT 时末尾不能写分号（会自动移除）
+5. **语句数量限制**: #IMPORT、#CALL、#CALL_PLUS、#CALL_OTHER 总共不能超过6个
+6. **末尾分号**: 使用 #IMPORT 时末尾不能写分号（会自动移除）
+7. **被引用的指标中不能存在引用**: 避免循环引用
 
 ## 错误处理
 

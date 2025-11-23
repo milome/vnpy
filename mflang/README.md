@@ -1248,78 +1248,115 @@ print(f"实际计算的最高价: {hhv_result[-1]}")
   - `YEAR`: 年周期
 - `N`: 周期参数，必须为大于等于1的整数
   - 对于 `WEEK` 和 `QUARTER` 周期，N>1时按1计算
-- `FORMULA`: 被引用的指标名称（字母、汉字或数字命名）
+- `FORMULA`: **模型文件名**（对应 `mflang/mmodels/` 目录下的模型文件）
+  - 模型文件中定义了变量（如 `CC:REF(C,1);`），这些变量可以通过 `VAR.VARIABLE_NAME` 的方式访问
+  - 例如：`#IMPORT[DAY,1,AA] AS VAR` 表示引用 `mflang/mmodels/AA` 文件中定义的指标
 - `VAR`: 定义的变量名（不能以数字开头，不能与函数名重复）
+  - 用于访问模型文件中的变量，例如 `VAR.CC` 访问模型AA中定义的CC变量
 
 #### 规则
 
-1. PERIOD为周期，N为具体的参数，FORMULA为引用指标名，VAR为定义变量名
-2. 支持引用自定义周期
-3. N必须为大于等于1的整数，周、季周期，N写入大于1的数，按照1计算
-4. 引用常规小时周期使用HOUR，引用自定义小时周期需要使用CUSHOUR
-5. 该函数不支持加载到量能周期使用
-6. 该函数可以小周期引用大周期，也可以大周期引用小周期
-7. 被引用的指标中不能存在引用（避免循环引用）
-8. FORMULA引用指标名可以为字母、汉字或数字命名的指标
-9. 定义变量名不能与函数名重复
-10. 一个模型中#IMPORT、#CALL、#CALL_PLUS、#CALL_OTHER总的语句个数不能超过6个
-11. 使用该函数编写末尾不能编写分号
+1. PERIOD为周期，N为具体的参数，**FORMULA为模型文件名**（对应 `mflang/mmodels/` 目录下的文件），VAR为定义变量名
+2. **模型文件格式**: 模型文件包含变量定义，格式为 `VARIABLE_NAME:EXPRESSION;` 或 `VARIABLE_NAME:=EXPRESSION;`
+3. **被引用的变量必须在模型文件中定义**: 通过 `VAR.VARIABLE_NAME` 访问模型文件中的变量
+4. 支持引用自定义周期
+5. N必须为大于等于1的整数，周、季周期，N写入大于1的数，按照1计算
+6. 引用常规小时周期使用HOUR，引用自定义小时周期需要使用CUSHOUR
+7. 该函数不支持加载到量能周期使用
+8. 该函数可以小周期引用大周期，也可以大周期引用小周期
+9. **被引用的指标中不能存在引用**（避免循环引用）
+10. FORMULA模型文件名可以为字母、汉字或数字命名
+11. 定义变量名不能与函数名重复
+12. 一个模型中#IMPORT、#CALL、#CALL_PLUS、#CALL_OTHER总的语句个数不能超过6个
+13. 使用该函数编写末尾不能编写分号
 
 #### 使用示例
 
 **示例1: 引用日周期上一个周期的收盘价**
 
-```python
-# 被引用的指标（保存为AA）:
-# CC:REF(C,1);
+**步骤1：创建模型文件 `mflang/mmodels/AA`**
+```
+CC:REF(C,1);//定义一个周期前的收盘价
+```
 
-# 主指标:
-from mflang.import_parser import ImportParser
+**步骤2：在主指标中使用**
+```python
+from mflang import ImportParser, load_model
 
 code = """
 #IMPORT[DAY,1,AA] AS VAR
-CC:VAR.CC;
+CC:VAR.CC;//跨周期引用昨天的收盘价
 """
 
 # 解析 #IMPORT 语句
 import_statements = ImportParser.parse_code(code)
 for stmt in import_statements:
-    print(f"周期: {stmt.period.value}, N: {stmt.n}, 指标: {stmt.formula}, 变量: {stmt.var_name}")
+    print(f"周期: {stmt.period.value}, N: {stmt.n}, 模型文件: {stmt.formula}, 变量名: {stmt.var_name}")
+    
+    # 加载模型文件，查看其中定义的变量
+    model = load_model(stmt.formula)
+    print(f"模型文件中的变量: {model}")
+    # 输出: {'CC': 'REF(C,1)'}
 ```
+
+**说明：**
+- `#IMPORT[DAY,1,AA] AS VAR` 引用日周期，模型文件AA（`mflang/mmodels/AA`），变量名为VAR
+- `VAR.CC` 访问模型AA中定义的CC变量（即 `REF(C,1)`）
 
 **示例2: 引用日周期上的收盘价**
 
-```python
-# 被引用的指标（保存为CC）:
-# CC:C;
+**步骤1：创建模型文件 `mflang/mmodels/CC`**
+```
+CC:C;//定义收盘价
+```
 
-# 主指标:
+**步骤2：在主指标中使用**
+```python
+from mflang import ImportParser, load_model
+
 code = """
 #IMPORT[DAY,1,CC] AS VAR
-CC:=VAR.CC;
+CC:=VAR.CC;//跨周期引用日周期上的收盘价
 CC1:REF(CC,1);
 """
+
+# 解析并加载模型
+import_statements = ImportParser.parse_code(code)
+for stmt in import_statements:
+    model = load_model(stmt.formula)
+    print(f"模型{stmt.formula}中的变量: {model}")
 ```
+
+**说明：**
+- `#IMPORT[DAY,1,CC] AS VAR` 引用日周期，模型文件CC（`mflang/mmodels/CC`），变量名为VAR
+- `VAR.CC` 访问模型CC中定义的CC变量（即 `C`，收盘价）
+- `CC1:REF(CC,1)` 在主指标中引用VAR.CC，然后取一个周期前的值
 
 **示例3: 引用自定义小时周期和分钟周期**
 
-```python
-# 被引用的指标（保存为AA）:
-# CC:=REF(C,1);
+**模型文件 `mflang/mmodels/AA` 已存在（见示例1）**
 
-# 主指标:
+```python
+from mflang import ImportParser, load_model
+
 code = """
 #IMPORT[CUSHOUR,6,AA]AS S
-CC1:=S.CC;
+CC1:=S.CC;//跨周期引用自定义6小时周期的一个周期前的收盘价
 
 #IMPORT[MIN,1,AA]AS R
-CC2:=R.CC;
+CC2:=R.CC;//跨周期引用自定义1分钟周期的一个周期前的收盘价
 """
 
 import_statements = ImportParser.parse_code(code)
 for stmt in import_statements:
     print(f"{stmt}")
+    model = load_model(stmt.formula)
+    print(f"  模型文件中的变量: {model}")
 ```
+
+**说明：**
+- 同一个模型文件（AA）可以被多个 `#IMPORT` 语句引用
+- 不同的变量名（S、R）用于区分不同的引用
 
 **示例4: 判断趋势（当前收盘价大于前一个5分钟周期的开盘价）**
 
@@ -1637,12 +1674,33 @@ if stmt:
     print(f"变量: {stmt.var_name}")
 ```
 
+#### 模型文件加载
+
+```python
+from mflang import load_model, get_variable, ModelLoader
+
+# 方式1: 使用便捷函数
+model = load_model("AA")  # 加载 mflang/mmodels/AA 文件
+print(f"模型AA中的变量: {model}")  # 输出: {'CC': 'REF(C,1)'}
+
+# 获取模型中的特定变量
+cc_expr = get_variable("AA", "CC")
+print(f"CC变量的定义: {cc_expr}")  # 输出: REF(C,1)
+
+# 方式2: 使用ModelLoader实例
+loader = ModelLoader()
+model = loader.load_model("AA")
+variables = loader.list_models()  # 列出所有可用的模型文件
+```
+
 #### 注意事项
 
-1. **避免循环引用**: 被引用的指标中不能包含其他 #IMPORT 语句
-2. **数据对齐**: 跨周期引用时，需要将大周期数据对齐到小周期，或将小周期数据聚合到大周期
-3. **性能考虑**: 跨周期引用需要加载不同周期的数据，可能影响性能
-4. **数据可用性**: 确保被引用的周期数据可用，否则可能返回空值
+1. **FORMULA是模型文件名**: FORMULA参数对应 `mflang/mmodels/` 目录下的模型文件
+2. **模型文件中的变量**: 被引用的变量必须在模型文件中定义
+3. **避免循环引用**: 被引用的指标中不能包含其他 #IMPORT 语句
+4. **数据对齐**: 跨周期引用时，需要将大周期数据对齐到小周期，或将小周期数据聚合到大周期
+5. **性能考虑**: 跨周期引用需要加载不同周期的数据，可能影响性能
+6. **数据可用性**: 确保被引用的周期数据可用，否则可能返回空值
 
 ### 复杂表达式解析示例
 
@@ -1808,6 +1866,9 @@ python mflang/test_functions.py
 
 # 测试 #IMPORT 解析
 python mflang/test_import.py
+
+# 测试模型文件加载器
+python mflang/test_model_loader.py
 
 # 测试复杂表达式解析
 python mflang/example_parse_formula.py

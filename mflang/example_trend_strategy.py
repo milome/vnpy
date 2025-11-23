@@ -3,6 +3,11 @@
 """
 趋势判断策略示例
 从数据库或parquet文件加载5分钟K线数据，通过#IMPORT引用跨周期数据
+
+说明：
+- #IMPORT[MIN,5,MIN5_OPEN] AS MIN5 表示引用5分钟周期，模型文件MIN5_OPEN（mflang/mmodels/MIN5_OPEN）
+- 模型文件MIN5_OPEN中定义了PREV_OPEN变量（PREV_OPEN:REF(O,1);）
+- 通过MIN5.PREV_OPEN访问模型文件中的PREV_OPEN变量
 """
 
 import numpy as np
@@ -11,7 +16,7 @@ from datetime import datetime
 from typing import Optional, Dict, List
 from pathlib import Path
 
-from mflang import ImportParser, REF, CrossPeriodDataManager, ImportResolver
+from mflang import ImportParser, REF, CrossPeriodDataManager, ImportResolver, load_model, get_variable
 from mflang.import_parser import ImportStatement, PeriodType
 
 
@@ -222,24 +227,72 @@ class EnhancedCrossPeriodDataManager(CrossPeriodDataManager):
         执行被引用的指标公式
         
         参数:
-            formula_name: 指标名称
+            formula_name: 模型文件名（对应 mflang/mmodels/ 目录下的文件）
             period: 周期类型
             n: 周期参数
             symbol: 合约代码
             data: K线数据字典
             
         返回:
-            指标计算结果字典
+            指标计算结果字典，key为变量名，value为计算结果数组
         """
-        # 根据指标名称执行相应的计算
-        # 这里以 MIN5_OPEN 为例，计算前一个周期的开盘价
-        if formula_name == "MIN5_OPEN":
-            if 'open' in data:
-                prev_open = REF(data['open'], 1)
-                return {'PREV_OPEN': prev_open}
+        # 加载模型文件
+        try:
+            model = load_model(formula_name)
+        except Exception as e:
+            print(f"无法加载模型文件 {formula_name}: {e}")
+            return {}
         
-        # 可以添加更多指标公式
-        return {}
+        # 执行模型文件中定义的变量
+        results = {}
+        
+        # 遍历模型文件中的变量定义
+        for var_name, var_expr in model.items():
+            # 这里需要解析和执行 var_expr
+            # 简化实现：根据常见的表达式模式执行
+            # 实际实现中需要完整的表达式解析器
+            
+            # 示例：处理 REF(O,1) 表达式
+            if var_expr.strip().startswith('REF('):
+                # 解析 REF(O,1) 或 REF(C,1) 等
+                # 提取第一个参数（O, C, H, L等）
+                import re
+                match = re.search(r'REF\((\w+),\s*(\d+)\)', var_expr)
+                if match:
+                    data_key = match.group(1).lower()  # O -> open, C -> close等
+                    n_periods = int(match.group(2))
+                    
+                    # 映射数据键
+                    data_mapping = {
+                        'o': 'open',
+                        'c': 'close',
+                        'h': 'high',
+                        'l': 'low',
+                        'v': 'volume'
+                    }
+                    
+                    if data_key in data_mapping:
+                        actual_key = data_mapping[data_key]
+                        if actual_key in data:
+                            result = REF(data[actual_key], n_periods)
+                            results[var_name] = result
+            
+            # 示例：处理简单的变量赋值 C 或 O 等
+            elif var_expr.strip() in ['C', 'O', 'H', 'L', 'V']:
+                data_mapping = {
+                    'C': 'close',
+                    'O': 'open',
+                    'H': 'high',
+                    'L': 'low',
+                    'V': 'volume'
+                }
+                key = var_expr.strip()
+                if key in data_mapping:
+                    actual_key = data_mapping[key]
+                    if actual_key in data:
+                        results[var_name] = data[actual_key]
+        
+        return results
     
     def resolve_import(
         self,
@@ -349,12 +402,29 @@ class TrendStrategy:
             print(f"加载 {self.symbol} 的5分钟K线数据失败")
     
     def parse_import_code(self) -> List[ImportStatement]:
-        """解析 #IMPORT 代码"""
+        """
+        解析 #IMPORT 代码
+        
+        说明：
+        - #IMPORT[MIN,5,MIN5_OPEN] AS MIN5 表示引用5分钟周期，模型文件MIN5_OPEN（mflang/mmodels/MIN5_OPEN）
+        - 模型文件MIN5_OPEN中定义了PREV_OPEN变量（PREV_OPEN:REF(O,1);）
+        - 通过MIN5.PREV_OPEN访问模型文件中的PREV_OPEN变量
+        """
         code = """
 #IMPORT[MIN,5,MIN5_OPEN] AS MIN5
 PREV_OPEN:=MIN5.PREV_OPEN;
 """
-        return ImportParser.parse_code(code)
+        statements = ImportParser.parse_code(code)
+        
+        # 验证模型文件是否存在
+        for stmt in statements:
+            try:
+                model = load_model(stmt.formula)
+                print(f"模型文件 {stmt.formula} 加载成功，包含变量: {list(model.keys())}")
+            except Exception as e:
+                print(f"警告: 无法加载模型文件 {stmt.formula}: {e}")
+        
+        return statements
     
     def check_trend(self, current_close: float, current_time: datetime) -> bool:
         """
@@ -405,6 +475,11 @@ def example_usage():
     print("=" * 60)
     print("示例1: 从parquet文件加载5分钟K线数据")
     print("=" * 60)
+    print("说明:")
+    print("  - #IMPORT[MIN,5,MIN5_OPEN] AS MIN5 引用5分钟周期，模型文件MIN5_OPEN")
+    print("  - 模型文件 mflang/mmodels/MIN5_OPEN 中定义了 PREV_OPEN:REF(O,1);")
+    print("  - 通过 MIN5.PREV_OPEN 访问模型文件中的PREV_OPEN变量")
+    print()
     
     # 假设parquet文件路径
     parquet_file = "data/5min_bars.parquet"
