@@ -57,17 +57,36 @@ def generate_datetime(s: str) -> datetime:
     return dt
 
 
+def escape_braces(text: str) -> str:
+    """
+    转义字符串中的花括号，避免loguru格式化错误
+    
+    Args:
+        text: 需要转义的字符串
+    
+    Returns:
+        转义后的字符串
+    """
+    if not isinstance(text, str):
+        text = str(text)
+    # 转义花括号，避免loguru将其作为格式化占位符
+    return text.replace("{", "{{").replace("}", "}}")
+
+
 def safe_output(output, message: str) -> None:
     """安全地调用 output 函数"""
     try:
+        # 转义消息中的花括号，避免loguru格式化错误
+        safe_message = escape_braces(message) if isinstance(message, str) else str(message)
         if callable(output):
-            output(message)
+            output(safe_message)
         else:
-            print(message)
+            print(safe_message)
     except (TypeError, AttributeError):
         # 如果 output 不是可调用对象，使用 print
         try:
-            print(message)
+            safe_message = escape_braces(message) if isinstance(message, str) else str(message)
+            print(safe_message)
         except Exception:
             pass  # 如果连 print 都失败，静默忽略
 
@@ -95,7 +114,9 @@ class Datafeed(BaseDatafeed):
             safe_output(output, _("富途数据服务连接成功"))
             return True
         except Exception as e:
-            safe_output(output, _("富途数据服务连接失败: {}").format(str(e)))
+            # 安全处理异常消息，避免特殊字符导致格式化错误
+            error_msg = str(e)
+            safe_output(output, _("富途数据服务连接失败: {}").format(error_msg))
             safe_output(output, _("提示: 请确保富途牛牛客户端已启动，并开启了OpenD服务"))
             return False
 
@@ -111,7 +132,9 @@ class Datafeed(BaseDatafeed):
 
         # 检查是否支持该周期
         if req.interval not in INTERVAL_VT2FUTU:
-            safe_output(output, _("富途数据服务不支持 {} 级别的K线数据").format(req.interval.value))
+            interval_value = str(req.interval.value)
+            msg = _("富途数据服务不支持 {} 级别的K线数据").format(interval_value)
+            safe_output(output, msg)
             return bars
 
         try:
@@ -134,7 +157,10 @@ class Datafeed(BaseDatafeed):
             )
 
             if ret != RET_OK:
-                safe_output(output, _("获取K线数据失败: {}").format(history_df))
+                # 安全处理错误消息，避免DataFrame包含花括号导致格式化错误
+                error_msg = str(history_df) if isinstance(history_df, str) else "未知错误"
+                msg = _("获取K线数据失败: {}").format(error_msg)
+                safe_output(output, msg)
                 return bars
 
             # 处理分页数据
@@ -149,7 +175,10 @@ class Datafeed(BaseDatafeed):
                 if ret == RET_OK:
                     history_df = pd.concat([history_df, data], ignore_index=True)
                 else:
-                    safe_output(output, _("获取分页数据失败: {}").format(data))
+                    # 安全处理错误消息，避免DataFrame包含花括号导致格式化错误
+                    error_msg = str(data) if isinstance(data, str) else "分页数据获取失败"
+                    msg = _("获取分页数据失败: {}").format(error_msg)
+                    safe_output(output, msg)
 
             if history_df.empty:
                 safe_output(output, _("未获取到K线数据"))
@@ -189,9 +218,12 @@ class Datafeed(BaseDatafeed):
 
         except Exception as e:
             try:
-                msg = _("查询K线数据异常: {}").format(str(e))
+                error_msg = str(e)
+                msg = _("查询K线数据异常: {}").format(error_msg)
             except Exception:
-                msg = f"查询K线数据异常: {str(e)}"
+                # 如果格式化失败，使用f-string
+                error_msg = str(e)
+                msg = f"查询K线数据异常: {error_msg}"
             safe_output(output, msg)
             return bars
 

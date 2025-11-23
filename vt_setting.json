@@ -1,6 +1,7 @@
 {
     "position.view.enabled": true,
     "position.view.emit_legacy": true,
-    "position.view.debug": true
+    "position.view.debug": true,
+    "log.level": "DEBUG"
 }
 

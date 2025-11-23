@@ -855,7 +855,7 @@ class FutuGateway(BaseGateway):
                 page_req_key=page_req_key
             )   # 请求翻页后的数据
             if ret == RET_OK:
-                history_df = history_df.append(data, ignore_index=True)
+                history_df = pd.concat([history_df, data], ignore_index=True)
                 self.write_log(f"第 {page_count + 1} 页获取成功，新增 {len(data)} 条，累计 {len(history_df)} 条，page_req_key={page_req_key}")
                 page_count += 1
             else:
