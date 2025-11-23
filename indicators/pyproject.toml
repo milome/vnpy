@@ -1,0 +1,23 @@
+[project]
+name = "indicators"
+version = "0.1.0"
+description = "多周期自定义指标管理器"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=2.2.3",
+    "pandas>=2.2.3",
+]
+
+[project.optional-dependencies]
+parquet = [
+    "polars>=1.26.0",
+]
+
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["indicators"]
+
