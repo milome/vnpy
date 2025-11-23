@@ -1248,11 +1248,34 @@ print(f"实际计算的最高价: {hhv_result[-1]}")
   - `YEAR`: 年周期
 - `N`: 周期参数，必须为大于等于1的整数
   - 对于 `WEEK` 和 `QUARTER` 周期，N>1时按1计算
+  - **重要**：PERIOD 和 N 共同确定需要加载哪个周期的数据
+  - 例如：`#IMPORT[MIN,2,MACD] AS VAR` 表示引用2分钟周期的数据
+  - 例如：`#IMPORT[MIN,5,MIN5_OPEN] AS MIN5` 表示引用5分钟周期的数据
 - `FORMULA`: **模型文件名**（对应 `mflang/mmodels/` 目录下的模型文件）
   - 模型文件中定义了变量（如 `CC:REF(C,1);`），这些变量可以通过 `VAR.VARIABLE_NAME` 的方式访问
   - 例如：`#IMPORT[DAY,1,AA] AS VAR` 表示引用 `mflang/mmodels/AA` 文件中定义的指标
 - `VAR`: 定义的变量名（不能以数字开头，不能与函数名重复）
   - 用于访问模型文件中的变量，例如 `VAR.CC` 访问模型AA中定义的CC变量
+
+#### 周期数据确定机制
+
+**重要：** 必须从 `#IMPORT` 语句中解析出 PERIOD 和 N 来确定需要加载哪个周期的数据。
+
+```python
+# 示例：#IMPORT[MIN,5,MIN5_OPEN] AS MIN5
+# PERIOD = MIN, N = 5 → 需要5分钟周期的数据
+
+# 在策略中：
+for stmt in self.import_statements:
+    period_type = stmt.period.value  # 从 #IMPORT 语句获取 PERIOD（如 "MIN"）
+    period_n = stmt.n  # 从 #IMPORT 语句获取 N（如 5）
+    
+    # 根据 PERIOD 和 N 判断当前K线是否为目标周期
+    if self._is_period_bar(bar, period_type, period_n):
+        # 更新对应周期的数据
+        am = getattr(self, f"{stmt.var_name.lower()}_am")
+        am.update_bar(bar)
+```
 
 #### 规则
 
@@ -1360,12 +1383,13 @@ for stmt in import_statements:
 
 **示例4: 判断趋势（当前收盘价大于前一个5分钟周期的开盘价）**
 
-```python
-# 被引用的指标（保存为MIN5_OPEN）:
-# 获取5分钟周期前一个周期的开盘价
-# PREV_OPEN:REF(O,1);
+**步骤1：创建被引用的模型文件 `mflang/mmodels/MIN5_OPEN`**
+```
+PREV_OPEN:REF(O,1);//前一个周期的开盘价
+```
 
-# 主指标（1分钟周期）:
+**步骤2：在主指标中使用**
+```python
 from mflang.import_parser import ImportParser
 from vnpy_ctastrategy import CtaTemplate, ArrayManager
 from vnpy.trader.object import BarData
@@ -1409,6 +1433,107 @@ class TrendStrategy(CtaTemplate):
         # 3. 将数据对齐到当前1分钟周期
         # 4. 进行比较判断
 ```
+
+**示例5: 模型文件中包含#IMPORT语句和跨周期引用（TEST_IMPORT）**
+
+这个示例展示如何在模型文件中使用#IMPORT语句，并在变量定义中使用跨周期引用的变量。
+
+**步骤1：创建被引用的模型文件 `mflang/mmodels/MIN5_OPEN`**
+```
+PREV_OPEN:REF(O,1);//前一个周期的开盘价
+```
+
+**步骤2：创建主模型文件 `mflang/mmodels/TEST_IMPORT`**
+```
+#IMPORT[MIN,5,MIN5_OPEN] AS MIN5
+
+CC:C;//定义收盘价
+ISBUYTREND: C > MIN5.PREV_OPEN;//判断是否多头趋势
+```
+
+**步骤3：解析和使用模型文件（包含计算被引用模型中的变量）**
+
+```python
+from mflang import ImportParser, load_model, REF
+import numpy as np
+import pandas as pd
+
+# 读取TEST_IMPORT文件内容
+from pathlib import Path
+test_import_file = Path("mflang/mmodels/TEST_IMPORT")
+with open(test_import_file, 'r', encoding='utf-8') as f:
+    file_content = f.read()
+
+# 解析#IMPORT语句
+import_statements = ImportParser.parse_code(file_content)
+for stmt in import_statements:
+    print(f"#IMPORT语句: {stmt}")
+    print(f"  被引用的模型文件: {stmt.formula}")
+
+# 加载被引用的模型文件
+referenced_model = load_model("MIN5_OPEN")
+print(f"被引用模型包含变量: {referenced_model}")
+# 输出: {'PREV_OPEN': 'REF(O,1)'}
+
+# 加载当前模型文件
+current_model = load_model("TEST_IMPORT")
+print(f"当前模型包含变量: {current_model}")
+# 输出: {'CC': 'C', 'ISBUYTREND': 'C > MIN5.PREV_OPEN'}
+
+# 步骤4: 计算被引用模型中的变量（重要！）
+# 准备5分钟周期的K线数据（小恒指期货主连MHImain，交易所HKFE）
+dates_5min = pd.date_range(start='2024-01-01 09:00', periods=20, freq='5min')
+df_5min = pd.DataFrame({
+    'datetime': dates_5min,
+    'open': 20000 + np.random.randn(20).cumsum() * 10,
+    'close': 20000 + np.random.randn(20).cumsum() * 10,
+})
+
+# 计算被引用模型中的变量
+referenced_variables = {}
+for var_name, var_expr in referenced_model.items():
+    if var_expr.strip() == 'REF(O,1)':
+        # 执行REF(O,1)计算
+        open_prices = df_5min['open'].values
+        result = REF(open_prices, 1)
+        referenced_variables[var_name] = result
+        print(f"计算 {var_name}: 数组长度={len(result)}, 当前值={result[-1]:.2f}")
+
+# 步骤5: 使用计算后的变量值计算当前模型中的变量
+# 准备1分钟周期的K线数据（小恒指期货主连MHImain，交易所HKFE）
+dates_1min = pd.date_range(start='2024-01-01 09:00', periods=100, freq='1min')
+df_1min = pd.DataFrame({
+    'datetime': dates_1min,
+    'close': 20000 + np.random.randn(100).cumsum() * 10,
+})
+
+# 计算当前模型中的变量
+for var_name, var_expr in current_model.items():
+    if var_name == "CC":
+        # 简单的变量赋值
+        result = df_1min['close'].values
+        print(f"计算 {var_name}: 数组长度={len(result)}, 当前值={result[-1]:.2f}")
+    elif var_name == "ISBUYTREND":
+        # 解析表达式 C > MIN5.PREV_OPEN
+        # 获取MIN5.PREV_OPEN的值（已计算）
+        if "PREV_OPEN" in referenced_variables:
+            prev_open_value = referenced_variables["PREV_OPEN"][-1]  # 当前值
+            current_close = df_1min['close'].iloc[-1]
+            isbuytrend = current_close > prev_open_value
+            print(f"计算 {var_name}: {current_close:.2f} > {prev_open_value:.2f} = {isbuytrend}")
+            print(f"  -> [MHImain.HKFE] 当前收盘价: {current_close:.2f}")
+            print(f"  -> [MHImain.HKFE] 5分钟周期前一个周期的开盘价: {prev_open_value:.2f}")
+            print(f"  -> [MHImain.HKFE] 是否多头趋势: {isbuytrend}")
+```
+
+**关键点说明：**
+
+1. **模型文件可以包含#IMPORT语句**: TEST_IMPORT模型文件本身包含#IMPORT语句
+2. **变量定义可以使用跨周期引用**: ISBUYTREND变量定义中使用了MIN5.PREV_OPEN
+3. **必须先计算被引用模型中的变量**: 在使用MIN5.PREV_OPEN之前，需要先计算被引用模型MIN5_OPEN中的PREV_OPEN变量
+4. **使用计算后的值**: 在计算当前模型的变量时，使用已计算的跨周期引用值
+
+**完整示例请参考**: `mflang/test_parse_test_import.py`
 
 **示例4的完整实现思路：**
 
@@ -1869,6 +1994,9 @@ python mflang/test_import.py
 
 # 测试模型文件加载器
 python mflang/test_model_loader.py
+
+# 测试TEST_IMPORT模型文件（包含#IMPORT和跨周期引用）
+python mflang/test_parse_test_import.py
 
 # 测试复杂表达式解析
 python mflang/example_parse_formula.py

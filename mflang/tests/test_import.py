@@ -403,6 +403,213 @@ UNKNOWN:MIN5.UNKNOWN;
         print()
 
 
+def test_model_with_multiple_variables():
+    """测试模型文件包含多个变量的情况"""
+    print("=" * 50)
+    print("测试11: 模型文件包含多个变量")
+    print("=" * 50)
+    
+    # 测试用例1: 加载包含多个变量的模型文件AA
+    print("测试用例1: 加载包含多个变量的模型文件AA")
+    try:
+        model = load_model("AA")
+        print(f"模型AA加载成功，包含 {len(model)} 个变量:")
+        for var_name, var_expr in model.items():
+            print(f"  {var_name}: {var_expr}")
+        print()
+        
+        # 验证所有变量都已加载
+        expected_vars = ['CC', 'HH', 'LL', 'OO', 'MA5', 'MA10']
+        actual_vars = list(model.keys())
+        
+        print(f"期望的变量: {expected_vars}")
+        print(f"实际的变量: {actual_vars}")
+        
+        for var in expected_vars:
+            if var in model:
+                print(f"  [OK] 变量 {var} 已定义: {model[var]}")
+            else:
+                print(f"  [错误] 变量 {var} 未定义")
+        print()
+        
+    except Exception as e:
+        print(f"加载AA模型失败: {e}")
+        print()
+    
+    # 测试用例2: 通过#IMPORT访问模型文件中的多个变量
+    print("测试用例2: 通过#IMPORT访问模型文件中的多个变量")
+    code = """
+#IMPORT[DAY,1,AA] AS VAR
+CC:VAR.CC;
+HH:VAR.HH;
+LL:VAR.LL;
+OO:VAR.OO;
+MA5:VAR.MA5;
+MA10:VAR.MA10;
+"""
+    statements = ImportParser.parse_code(code)
+    
+    for stmt in statements:
+        print(f"解析#IMPORT语句: {stmt}")
+        print(f"  模型文件: {stmt.formula} (对应 mflang/mmodels/{stmt.formula})")
+        print(f"  变量名: {stmt.var_name}")
+        
+        try:
+            model = load_model(stmt.formula)
+            print(f"  模型文件中的变量 ({len(model)} 个):")
+            for var_name, var_expr in model.items():
+                print(f"    {var_name}: {var_expr}")
+            
+            # 检查代码中引用的所有变量是否都在模型中定义
+            referenced_vars = ['CC', 'HH', 'LL', 'OO', 'MA5', 'MA10']
+            print(f"\n  检查引用的变量:")
+            all_defined = True
+            for var in referenced_vars:
+                if var in model:
+                    print(f"    [OK] 变量 {var} 在模型{stmt.formula}中已定义")
+                else:
+                    print(f"    [警告] 变量 {var} 在模型{stmt.formula}中未定义")
+                    all_defined = False
+            
+            if all_defined:
+                print(f"  [OK] 所有引用的变量都在模型{stmt.formula}中已定义")
+            else:
+                print(f"  [警告] 部分引用的变量在模型{stmt.formula}中未定义")
+        except Exception as e:
+            print(f"  [错误] 无法加载模型文件: {e}")
+        print()
+    
+    # 测试用例3: 使用get_variable获取模型中的各个变量
+    print("测试用例3: 使用get_variable获取模型中的各个变量")
+    variables_to_test = ['CC', 'HH', 'LL', 'OO', 'MA5', 'MA10']
+    
+    for var_name in variables_to_test:
+        var_expr = get_variable("AA", var_name)
+        if var_expr:
+            print(f"  [OK] 变量 {var_name}: {var_expr}")
+        else:
+            print(f"  [错误] 变量 {var_name} 未找到")
+    print()
+    
+    # 测试用例4: 测试访问不存在的变量
+    print("测试用例4: 测试访问不存在的变量")
+    non_existent_vars = ['UNKNOWN1', 'UNKNOWN2', 'TEST']
+    for var_name in non_existent_vars:
+        var_expr = get_variable("AA", var_name)
+        if var_expr is None:
+            print(f"  [OK] 变量 {var_name} 不存在（正确返回None）")
+        else:
+            print(f"  [错误] 变量 {var_name} 不应该存在，但返回了: {var_expr}")
+    print()
+    
+    # 测试用例5: 测试多个#IMPORT语句引用同一个模型文件的不同变量
+    print("测试用例5: 多个#IMPORT语句引用同一个模型文件")
+    code2 = """
+#IMPORT[DAY,1,AA] AS VAR1
+CC:VAR1.CC;
+HH:VAR1.HH;
+
+#IMPORT[DAY,1,AA] AS VAR2
+LL:VAR2.LL;
+OO:VAR2.OO;
+"""
+    statements2 = ImportParser.parse_code(code2)
+    print(f"找到 {len(statements2)} 个 #IMPORT 语句:")
+    for i, stmt in enumerate(statements2, 1):
+        print(f"  {i}. {stmt}")
+        print(f"     变量名: {stmt.var_name}")
+        print(f"     模型文件: {stmt.formula}")
+        
+        try:
+            model = load_model(stmt.formula)
+            print(f"     模型包含 {len(model)} 个变量: {list(model.keys())}")
+        except Exception as e:
+            print(f"     加载模型失败: {e}")
+    print()
+
+
+def test_test_import_model():
+    """测试TEST_IMPORT模型文件（包含#IMPORT语句和跨周期引用）"""
+    print("=" * 50)
+    print("测试12: TEST_IMPORT模型文件（包含#IMPORT和跨周期引用）")
+    print("=" * 50)
+    
+    # 读取TEST_IMPORT文件内容
+    from pathlib import Path
+    test_import_file = Path(__file__).parent / "mmodels" / "TEST_IMPORT"
+    
+    try:
+        with open(test_import_file, 'r', encoding='utf-8') as f:
+            file_content = f.read()
+        print("TEST_IMPORT文件内容:")
+        print(file_content)
+        print()
+    except Exception as e:
+        print(f"读取文件失败: {e}")
+        return
+    
+    # 解析#IMPORT语句
+    import_statements = ImportParser.parse_code(file_content)
+    print(f"找到 {len(import_statements)} 个 #IMPORT 语句:")
+    for stmt in import_statements:
+        print(f"  {stmt}")
+    print()
+    
+    # 加载被引用的模型文件
+    if len(import_statements) > 0:
+        stmt = import_statements[0]
+        try:
+            referenced_model = load_model(stmt.formula)
+            print(f"[OK] 被引用的模型文件 {stmt.formula} 加载成功")
+            print(f"     包含变量: {referenced_model}")
+        except Exception as e:
+            print(f"[错误] 无法加载被引用的模型文件: {e}")
+            return
+    else:
+        print("[错误] 未找到 #IMPORT 语句")
+        return
+    
+    # 加载TEST_IMPORT模型文件
+    try:
+        current_model = load_model("TEST_IMPORT")
+        print(f"[OK] TEST_IMPORT 模型文件加载成功")
+        print(f"     包含变量: {current_model}")
+    except Exception as e:
+        print(f"[错误] 无法加载 TEST_IMPORT 模型文件: {e}")
+        return
+    
+    # 验证跨周期引用
+    print("\n验证跨周期引用:")
+    for var_name, var_expr in current_model.items():
+        if 'MIN5.PREV_OPEN' in var_expr:
+            print(f"  {var_name}: 使用了跨周期引用 MIN5.PREV_OPEN")
+            
+            # 检查MIN5是否在#IMPORT中定义
+            min5_found = False
+            for stmt in import_statements:
+                if stmt.var_name == "MIN5":
+                    min5_found = True
+                    print(f"    -> MIN5 在 #IMPORT 语句中已定义")
+                    
+                    # 检查PREV_OPEN是否在被引用的模型中定义
+                    if "PREV_OPEN" in referenced_model:
+                        print(f"    -> [OK] PREV_OPEN 在被引用的模型 {stmt.formula} 中已定义: {referenced_model['PREV_OPEN']}")
+                    else:
+                        print(f"    -> [警告] PREV_OPEN 在被引用的模型 {stmt.formula} 中未定义")
+                    break
+            
+            if not min5_found:
+                print(f"    -> [警告] MIN5 未在 #IMPORT 语句中定义")
+    
+    print()
+    print("说明:")
+    print("  1. TEST_IMPORT 模型文件包含 #IMPORT 语句和变量定义")
+    print("  2. 变量定义中使用了跨周期引用（MIN5.PREV_OPEN）")
+    print("  3. 需要先计算被引用模型中的变量，才能在当前模型中使用")
+    print("  4. 完整示例请参考: mflang/test_parse_test_import.py")
+    print()
+
+
 if __name__ == "__main__":
     test_parse_import_statement()
     test_parse_code()
@@ -414,6 +621,8 @@ if __name__ == "__main__":
     test_import_with_model()
     test_model_file_not_exists()
     test_variable_not_in_model()
+    test_model_with_multiple_variables()
+    test_test_import_model()
     
     print("=" * 50)
     print("所有测试完成！")

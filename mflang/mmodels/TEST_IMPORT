@@ -1,0 +1,4 @@
+#IMPORT[MIN,5,MIN5_OPEN] AS MIN5
+
+CC:C;//定义收盘价
+ISBUYTREND: C > MIN5.PREV_OPEN;//判断是否多头趋势
