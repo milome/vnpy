@@ -988,6 +988,65 @@ self.chase_stats = {
   - Interval optimization tests
   - Logging format validation
 
+### 2025-11-24 Reliability Hardening (Futu Gateway)
+
+Recent production logs still showed cases where `订单6440118/6440119` 在全部成交后仍被超时线程尝试撤单。此次补丁聚焦在消除智能追价各个线程之间的竞态，使其完全以状态驱动。
+
+**Highlights**
+- `_normalize_orderid()` 现在在读取或写入 `self.chase_orders` 时一律调用，`FUTU.6440118` 与 `6440118` 会落到相同 key，避免因 ID 形式不同导致无法查找到状态。
+- `_check_timeout_orders()` 只要 `_get_order_status()` 返回 `ALLTRADED` 就立即移除，并且对 `None` 状态（且 `just_cancelled=False`）采取保守删除策略，彻底阻断“幽灵追价”。
+- `_retry_order_with_latest_price()` / `_try_reorder_with_tick()` 在查询状态、撤单 API、等待 tick、生成新订单等每一步都重新确认 chaser 是否仍然存在，一旦发现已被其他线程移除就立刻退出。
+- `on_order_update()` 会记录是它自己移除追价还是发现已被其他逻辑删掉，方便排查到底是哪条路径先完成。
+
+#### Flowchart · Timeout & Retry Logic
+
+```mermaid
+flowchart TD
+    A[Timer Trigger] --> B{遍历 chase_orders}
+    B --> C[normalize(orderid)]
+    C --> D{_get_order_status}
+    D -->|ALLTRADED| E[立即移除追价并写日志]
+    D -->|CANCELLED ∧ just_cancelled| F[等待tick -> _try_reorder_with_tick]
+    D -->|CANCELLED ∧ 非just_cancelled| G[安全移除追价]
+    D -->|None| H{仍在 chase_orders?}
+    H -->|否| I[跳过 - 其他线程已处理]
+    H -->|是且非just_cancelled| G
+    H -->|是且just_cancelled| F
+    D -->|其他状态| J{elapsed ≥ timeout?}
+    J -->|否| K[继续下一单]
+    J -->|是| L{orderid 仍存在?}
+    L -->|否| I
+    L -->|是| M[_retry_order_with_latest_price]
+```
+
+#### Sequence Diagram · Fill vs Timeout Race
+
+```mermaid
+sequenceDiagram
+    participant Timer as TimerThread
+    participant Gateway as FutuGateway
+    participant Futu as Futu API
+    participant Callback as on_order_update
+
+    Timer->>Gateway: _check_timeout_orders()
+    Gateway->>Gateway: normalize(orderid)
+    Gateway->>Futu: _get_order_status()
+    alt Status == ALLTRADED
+        Futu-->>Gateway: Filled
+        Gateway->>Gateway: 删除追价并写日志
+    else Status == None
+        Gateway->>Gateway: if not just_cancelled -> 删除
+    else Timeout exceeded
+        Gateway->>Gateway: 确认 orderid 仍存在
+        Gateway->>Gateway: _retry_order_with_latest_price()
+        Gateway->>Futu: 撤单 / 重委托
+    end
+    Futu-->>Callback: order update (ALLTRADED / CANCELLED)
+    Callback->>Gateway: normalize(orderid)
+    Gateway->>Gateway: 删除剩余追价 or 记录已被移除
+    Gateway-->>Timer: 下一轮扫描忽略已完成订单
+```
+
 #### 7. Chase Statistics Tracking
 
 **Real-time Metrics:**
