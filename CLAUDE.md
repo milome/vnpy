@@ -1047,6 +1047,79 @@ sequenceDiagram
     Gateway-->>Timer: 下一轮扫描忽略已完成订单
 ```
 
+### 2025-11-24 Thread Safety Enhancement for chase_orders
+
+本次更新全面增强了 `chase_orders` 数据结构的线程安全性，解决了多线程并发访问时的数据竞争问题，并确保订单号变更时的一致性保证。
+
+**核心改进**
+
+1. **线程安全锁机制**
+   - 添加 `chase_orders_lock = RLock()` 保护所有字典操作
+   - 实现线程安全的访问方法：
+     - `_safe_has_chase_order()` - 检查订单是否存在
+     - `_safe_get_chase_order()` - 获取订单
+     - `_safe_set_chase_order()` - 设置订单
+     - `_safe_del_chase_order()` - 删除订单
+     - `_safe_get_all_chase_orders()` - 获取所有订单副本
+     - `_safe_update_chase_order_key()` - 原子化更新字典key
+     - `_safe_clear_chase_orders()` - 清空所有订单
+
+2. **订单一致性保证**
+   - 添加 `original_orderid` 字段：保存第一次下单的订单ID（不更新）
+   - 添加 `original_order_time` 字段：保存第一次下单时间（不更新，用于统计总耗时）
+   - 重委托时保持原始订单信息（symbol, direction, offset, volume, original_reference）
+   - 确保追价行为针对原始订单意图保持一致
+
+3. **统计耗时准确性**
+   - 修改统计耗时计算，使用 `original_order_time` 而不是 `order_time`
+   - 确保统计的是从第一次下单开始的总耗时，而不是最后一次重委托到成交的时间
+   - 保留所有现有的 `order_time` 更新逻辑（用于超时判断），避免 regression issues
+
+4. **原子化字典操作**
+   - 字典key更新操作使用锁保护，确保原子性
+   - 先添加新key，再删除旧key，确保新订单能立即被找到
+   - 避免在key更新过程中丢失订单状态更新
+
+**关键代码变更**
+
+```python
+# ChaseOrder 类新增字段
+class ChaseOrder:
+    def __init__(self, orderid: str, ...):
+        self.original_orderid = orderid  # 保存第一次下单的订单ID（不更新）
+        self.orderid = orderid  # 当前订单ID（重委托后会更新）
+        self.original_order_time = time()  # 保存第一次下单时间（不更新）
+        self.order_time = time()  # 当前订单的委托时间（重委托后会更新）
+
+# 统计耗时计算（使用原始时间）
+elapsed_ms = (chase_order.fill_time - chase_order.original_order_time) * 1000
+
+# 线程安全的字典key更新
+def _safe_update_chase_order_key(self, old_key: str, new_key: str, chase_order: ChaseOrder):
+    with self.chase_orders_lock:
+        if new_key != old_key:
+            # 先添加新key，确保新订单能立即被找到
+            self.chase_orders[new_key] = chase_order
+            # 再删除旧key
+            if old_key in self.chase_orders:
+                del self.chase_orders[old_key]
+```
+
+**测试覆盖**
+
+创建了完整的测试用例 `tests/test_chase_orders_thread_safety.py`，包含：
+- 原始字段正确性测试
+- 线程安全访问方法测试
+- 并发访问测试
+- 字典key更新测试
+- 统计耗时准确性测试
+- 订单一致性测试
+
+**相关文档**
+
+- 详细分析文档：`chase_orders_thread_safety_analysis.md`
+- 测试用例：`tests/test_chase_orders_thread_safety.py`
+
 #### 7. Chase Statistics Tracking
 
 **Real-time Metrics:**

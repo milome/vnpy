@@ -1,7 +1,7 @@
 import pandas as pd
 from copy import copy
 from datetime import datetime
-from threading import Thread
+from threading import Thread, RLock
 from time import sleep, time
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
@@ -130,7 +130,8 @@ class ChaseOrder:
                  symbol: str, exchange, direction, offset, volume: int, reference: str):
         # 标记是否刚刚撤单成功，用于区分"已取消的旧订单"和"刚撤单成功的订单"
         self.just_cancelled: bool = False
-        self.orderid = orderid
+        self.original_orderid = orderid  # 保存第一次下单的订单ID（不更新）
+        self.orderid = orderid  # 当前订单ID（重委托后会更新）
         self.original_price = original_price
         self.current_price = original_price
         self.chase_count = 0
@@ -147,8 +148,10 @@ class ChaseOrder:
         self.original_reference = reference
         self.vt_symbol = f"{symbol}.{exchange.value}"
         
-        # 时间戳（用于耗时统计）
-        self.order_time = time()
+        # 时间戳
+        current_time = time()
+        self.original_order_time = current_time  # 保存第一次下单时间（不更新，用于统计总耗时）
+        self.order_time = current_time  # 当前订单的委托时间（重委托后会更新，用于超时判断）
         self.first_trade_time = None
         self.fill_time = None
         
@@ -213,6 +216,7 @@ class FutuGateway(BaseGateway):
 
         # 追价功能相关
         self.chase_orders: Dict[str, ChaseOrder] = {}  # 追价订单追踪
+        self.chase_orders_lock = RLock()  # 线程安全锁
         self.chase_enabled: bool = True  # 全局追价开关
         
         # 撤单频率限制（避免触发API限制：每30秒最多20次）
@@ -300,6 +304,51 @@ class FutuGateway(BaseGateway):
             return orderid[len(prefix):]
         return orderid
     
+    # ========== 线程安全的 chase_orders 访问方法 ==========
+    
+    def _safe_has_chase_order(self, orderid: str) -> bool:
+        """线程安全地检查订单是否存在"""
+        with self.chase_orders_lock:
+            return orderid in self.chase_orders
+    
+    def _safe_get_chase_order(self, orderid: str) -> Optional[ChaseOrder]:
+        """线程安全地获取追价订单"""
+        with self.chase_orders_lock:
+            return self.chase_orders.get(orderid)
+    
+    def _safe_set_chase_order(self, orderid: str, chase_order: ChaseOrder) -> None:
+        """线程安全地设置追价订单"""
+        with self.chase_orders_lock:
+            self.chase_orders[orderid] = chase_order
+    
+    def _safe_del_chase_order(self, orderid: str) -> bool:
+        """线程安全地删除追价订单，返回是否成功删除"""
+        with self.chase_orders_lock:
+            if orderid in self.chase_orders:
+                del self.chase_orders[orderid]
+                return True
+            return False
+    
+    def _safe_get_all_chase_orders(self) -> Dict[str, ChaseOrder]:
+        """线程安全地获取所有追价订单的副本"""
+        with self.chase_orders_lock:
+            return dict(self.chase_orders)  # 返回副本
+    
+    def _safe_update_chase_order_key(self, old_key: str, new_key: str, chase_order: ChaseOrder) -> None:
+        """线程安全地更新订单key"""
+        with self.chase_orders_lock:
+            if new_key != old_key:
+                # 先添加新key，确保新订单能立即被找到
+                self.chase_orders[new_key] = chase_order
+                # 再删除旧key
+                if old_key in self.chase_orders:
+                    del self.chase_orders[old_key]
+    
+    def _safe_clear_chase_orders(self) -> None:
+        """线程安全地清空所有追价订单"""
+        with self.chase_orders_lock:
+            self.chase_orders.clear()
+    
     def _check_timeout_orders(self) -> None:
         """检查超时订单并执行撤单重委托"""
         if not self.chase_enabled:
@@ -311,16 +360,15 @@ class FutuGateway(BaseGateway):
         # 清理过期的撤单时间记录（保留最近30秒的）
         self.cancel_times = [t for t in self.cancel_times if current_time - t < 30.0]
         
-        # 查找超时的未成交订单
-        for orderid, chase_order in list(self.chase_orders.items()):
+        # 查找超时的未成交订单（使用线程安全的副本）
+        for orderid, chase_order in list(self._safe_get_all_chase_orders().items()):
             normalized_orderid = self._normalize_orderid(orderid)
             if not normalized_orderid:
                 self.write_log(f"订单{orderid}无法规范化订单ID，跳过超时检查")
                 continue
             if normalized_orderid != orderid:
-                # 更新字典key，确保后续逻辑统一使用富途原始订单ID
-                del self.chase_orders[orderid]
-                self.chase_orders[normalized_orderid] = chase_order
+                # 更新字典key，确保后续逻辑统一使用富途原始订单ID（线程安全）
+                self._safe_update_chase_order_key(orderid, normalized_orderid, chase_order)
                 orderid = normalized_orderid
             chase_order.orderid = normalized_orderid
             # 检查是否启用超时撤单
@@ -335,15 +383,14 @@ class FutuGateway(BaseGateway):
                 if order_status == Status.ALLTRADED:
                     # 订单已完全成交，立即移除，停止所有追价操作
                     self.write_log(f"订单{orderid}已完全成交，从追价列表中移除（超时检查中发现）")
-                    if orderid in self.chase_orders:
-                        del self.chase_orders[orderid]
+                    self._safe_del_chase_order(orderid)
                     continue
                 
                 # 如果状态查询返回None，可能是订单已成交但查询不到，检查是否还在chase_orders中
                 # 如果不在，说明已经被移除了（可能已成交），跳过处理
                 if order_status is None:
                     # 再次检查订单是否还在chase_orders中（可能在其他线程中已被移除）
-                    if orderid not in self.chase_orders:
+                    if not self._safe_has_chase_order(orderid):
                         self.write_log(f"订单{orderid}状态无法查询且已不在追价列表中（可能已成交），跳过处理")
                         continue
                     
@@ -354,8 +401,7 @@ class FutuGateway(BaseGateway):
                         # 订单不是刚刚撤单的，查询不到状态通常意味着已成交或已取消
                         # 为了安全，直接移除，避免继续追价导致超仓
                         self.write_log(f"订单{orderid}状态无法查询且不是刚刚撤单的订单，可能已成交，从追价列表中移除")
-                        if orderid in self.chase_orders:
-                            del self.chase_orders[orderid]
+                        self._safe_del_chase_order(orderid)
                         continue
                     
                     # 如果订单刚刚撤单成功（just_cancelled=True），查询不到状态是正常的（订单已从活跃列表中移除）
@@ -378,8 +424,7 @@ class FutuGateway(BaseGateway):
                 if chase_order.retry_count >= chase_order.config.max_retry_times:
                     self.write_log(f"订单{orderid}超时但已达到最大重委托次数{chase_order.config.max_retry_times}，停止重试并从追价列表中移除")
                     # 从追价列表中移除
-                    if orderid in self.chase_orders:
-                        del self.chase_orders[orderid]
+                    self._safe_del_chase_order(orderid)
                     continue
                 
                 timeout_orders.append((orderid, chase_order, elapsed))
@@ -387,7 +432,7 @@ class FutuGateway(BaseGateway):
         # 处理超时订单
         for orderid, chase_order, elapsed in timeout_orders:
             # 在处理前再次检查订单是否还在chase_orders中（可能在其他线程中已被移除，如已成交）
-            if orderid not in self.chase_orders:
+            if not self._safe_has_chase_order(orderid):
                 self.write_log(f"订单{orderid}已不在追价列表中（可能已成交），跳过处理")
                 continue
             
@@ -439,7 +484,7 @@ class FutuGateway(BaseGateway):
             chase_order.orderid = original_orderid
             
             # 0. 首先检查订单是否还在chase_orders中（可能在其他线程中已被移除，如已成交）
-            if original_orderid not in self.chase_orders:
+            if not self._safe_has_chase_order(original_orderid):
                 self.write_log(f"订单{original_orderid}已不在追价列表中（可能已成交），停止重委托")
                 return
             
@@ -450,7 +495,7 @@ class FutuGateway(BaseGateway):
             if order_status is None:
                 # 无法查询状态，可能是订单不存在或已取消/成交
                 # 再次检查订单是否还在chase_orders中，如果不在，说明已经被移除了（可能已成交），直接返回
-                if original_orderid not in self.chase_orders:
+                if not self._safe_has_chase_order(original_orderid):
                     self.write_log(f"订单{original_orderid}状态无法查询且已不在追价列表中（可能已成交），停止重委托")
                     return
                 
@@ -461,8 +506,7 @@ class FutuGateway(BaseGateway):
                     # 订单不是刚刚撤单的，查询不到状态通常意味着已成交或已取消
                     # 为了安全，直接移除，避免继续追价导致超仓
                     self.write_log(f"订单{original_orderid}状态无法查询且不是刚刚撤单的订单，可能已成交，从追价列表中移除")
-                    if original_orderid in self.chase_orders:
-                        del self.chase_orders[original_orderid]
+                    self._safe_del_chase_order(original_orderid)
                     return
                 
                 # 如果订单刚刚撤单成功（just_cancelled=True），查询不到状态是正常的（订单已从活跃列表中移除）
@@ -472,8 +516,7 @@ class FutuGateway(BaseGateway):
                 # 订单已完全成交，移除
                 self.write_log(f"订单{original_orderid}已完全成交，停止重委托并从追价列表中移除")
                 # 使用原始订单ID和当前订单ID都尝试移除，确保移除成功
-                if original_orderid in self.chase_orders:
-                    del self.chase_orders[original_orderid]
+                self._safe_del_chase_order(original_orderid)
                 return
             elif order_status == Status.CANCELLED:
                 # 订单已取消
@@ -488,8 +531,7 @@ class FutuGateway(BaseGateway):
                     # 这是之前就已经取消的订单，移除（不再尝试重新委托）
                     self.write_log(f"订单{original_orderid}已取消，从追价列表中移除")
                     # 使用原始订单ID和当前订单ID都尝试移除，确保移除成功
-                    if original_orderid in self.chase_orders:
-                        del self.chase_orders[original_orderid]
+                    self._safe_del_chase_order(original_orderid)
                     return
             else:
                 # 订单状态不是CANCELLED，需要执行撤单操作
@@ -506,8 +548,7 @@ class FutuGateway(BaseGateway):
                 if already_cancelled:
                     self.write_log(f"订单{original_orderid}在撤单前已取消，停止重委托并从追价列表中移除")
                     # 使用原始订单ID和当前订单ID都尝试移除，确保移除成功
-                    if original_orderid in self.chase_orders:
-                        del self.chase_orders[original_orderid]
+                    self._safe_del_chase_order(original_orderid)
                     return
                 
                 # 如果撤单因频率限制失败，停止重试，等待下次超时检查
@@ -536,8 +577,7 @@ class FutuGateway(BaseGateway):
                 if new_status == Status.ALLTRADED:
                     # 订单已成交，移除（撤单前订单已经成交）
                     self.write_log(f"订单{original_orderid}已完全成交，停止重委托并从追价列表中移除")
-                    if original_orderid in self.chase_orders:
-                        del self.chase_orders[original_orderid]
+                    self._safe_del_chase_order(original_orderid)
                     return
                 elif new_status == Status.CANCELLED:
                     # 订单已取消（是我们刚才撤单成功的，这是正常情况，继续重新委托）
@@ -560,8 +600,7 @@ class FutuGateway(BaseGateway):
                     # 订单已成交，移除
                     self.write_log(f"订单{original_orderid}状态为{final_status}，无法获取tick，从追价列表中移除")
                     # 使用原始订单ID和当前订单ID都尝试移除，确保移除成功
-                    if original_orderid in self.chase_orders:
-                        del self.chase_orders[original_orderid]
+                    self._safe_del_chase_order(original_orderid)
                     return
                 elif final_status == Status.CANCELLED:
                     # 订单已取消（撤单成功），这是正常的，应该继续等待tick或重试
@@ -578,10 +617,9 @@ class FutuGateway(BaseGateway):
                     else:
                         # 这不是刚刚撤单的订单，可能是之前就取消的，移除
                         self.write_log(f"订单{original_orderid}已取消且不是刚刚撤单，从追价列表中移除")
-                        if original_orderid in self.chase_orders:
-                            del self.chase_orders[original_orderid]
-                        elif chase_order.orderid in self.chase_orders:
-                            del self.chase_orders[chase_order.orderid]
+                        self._safe_del_chase_order(original_orderid)
+                        if chase_order.orderid != original_orderid:
+                            self._safe_del_chase_order(chase_order.orderid)
                         return
                 
                 # 如果无法获取tick且订单状态无法查询，可能是订单不存在或已取消
@@ -592,8 +630,7 @@ class FutuGateway(BaseGateway):
                     # 如果重试次数达到上限，从追价列表中移除
                     if chase_order.retry_count >= chase_order.config.max_retry_times:
                         self.write_log(f"订单{original_orderid}已达到最大重试次数，从追价列表中移除")
-                        if original_orderid in self.chase_orders:
-                            del self.chase_orders[original_orderid]
+                        self._safe_del_chase_order(original_orderid)
                     return
                 else:
                     # 订单状态正常但无法获取tick，记录日志并检查重试次数
@@ -606,8 +643,7 @@ class FutuGateway(BaseGateway):
                     # 如果已达到上限，从追价列表中移除
                     if chase_order.retry_count >= chase_order.config.max_retry_times - 1:
                         self.write_log(f"订单{original_orderid}已达到最大重试次数，从追价列表中移除")
-                        if original_orderid in self.chase_orders:
-                            del self.chase_orders[original_orderid]
+                        self._safe_del_chase_order(original_orderid)
                     return
             
             # 4. 计算新价格（使用买一/卖一）
@@ -637,28 +673,25 @@ class FutuGateway(BaseGateway):
                     self.write_log(f"订单{original_orderid}重委托成功但无法识别新订单ID，停止追价")
                     return
                 chase_order.retry_count += 1
-                chase_order.order_time = time()  # 更新委托时间
+                chase_order.order_time = time()  # 更新委托时间（用于下次超时判断）
                 chase_order.orderid = normalized_new_orderid
-                # 更新chase_orders字典的key
+                # 更新chase_orders字典的key（线程安全）
                 if normalized_new_orderid != old_orderid:
-                    self.chase_orders[normalized_new_orderid] = chase_order
-                    # 使用原始订单ID和旧订单ID都尝试移除，确保移除成功
-                    if old_orderid in self.chase_orders:
-                        del self.chase_orders[old_orderid]
-                    if original_orderid in self.chase_orders and original_orderid != old_orderid:
-                        del self.chase_orders[original_orderid]
+                    self._safe_update_chase_order_key(old_orderid, normalized_new_orderid, chase_order)
+                    # 如果原始订单ID不同，也尝试删除
+                    if original_orderid != old_orderid and original_orderid != normalized_new_orderid:
+                        self._safe_del_chase_order(original_orderid)
                 
-                self.write_log(f"订单{original_orderid}重委托成功：新订单{normalized_new_orderid}，价格{new_price:.3f}，第{chase_order.retry_count}次重试")
+                self.write_log(f"订单{chase_order.original_orderid}重委托成功：新订单{normalized_new_orderid}，价格{new_price:.3f}，第{chase_order.retry_count}次重试")
             else:
                 self.write_log(f"订单{original_orderid}重委托失败：发送新订单失败")
                 # 如果重试次数未达上限，保留在追价列表中
                 # 如果已达到上限，从追价列表中移除
                 if chase_order.retry_count >= chase_order.config.max_retry_times - 1:
                     self.write_log(f"订单{original_orderid}已达到最大重试次数，从追价列表中移除")
-                    if original_orderid in self.chase_orders:
-                        del self.chase_orders[original_orderid]
-                    elif chase_order.orderid in self.chase_orders:
-                        del self.chase_orders[chase_order.orderid]
+                    self._safe_del_chase_order(original_orderid)
+                    if chase_order.orderid != original_orderid:
+                        self._safe_del_chase_order(chase_order.orderid)
                 
         except Exception as e:
             # 异常情况下，original_orderid可能未定义，使用chase_order.orderid作为后备
@@ -671,20 +704,16 @@ class FutuGateway(BaseGateway):
             # 异常情况下也尝试移除订单，避免订单卡在追价列表中
             # 尝试使用original_orderid移除（如果已定义）
             try:
-                if original_orderid in self.chase_orders:
-                    del self.chase_orders[original_orderid]
-                    return
+                self._safe_del_chase_order(original_orderid)
             except NameError:
                 pass  # original_orderid未定义，继续使用chase_order.orderid
-            except KeyError:
-                pass  # 订单不在列表中，继续尝试使用chase_order.orderid
             
             # 如果original_orderid移除失败或未定义，使用chase_order.orderid
             try:
-                if hasattr(chase_order, 'orderid') and chase_order.orderid in self.chase_orders:
-                    del self.chase_orders[chase_order.orderid]
-            except (KeyError, AttributeError):
-                pass  # 订单可能已经不在列表中，忽略错误
+                if hasattr(chase_order, 'orderid'):
+                    self._safe_del_chase_order(chase_order.orderid)
+            except AttributeError:
+                pass  # chase_order.orderid不存在，忽略错误
 
     def _try_reorder_with_tick(self, chase_order: ChaseOrder, original_orderid: str) -> None:
         """尝试获取tick并重新委托（用于撤单成功后等待tick的场景）
@@ -703,10 +732,9 @@ class FutuGateway(BaseGateway):
             if order_status == Status.ALLTRADED:
                 # 订单已完全成交，立即移除，停止所有追价操作
                 self.write_log(f"订单{original_orderid}已完全成交，从追价列表中移除（等待tick时发现）")
-                if original_orderid in self.chase_orders:
-                    del self.chase_orders[original_orderid]
-                elif chase_order.orderid in self.chase_orders:
-                    del self.chase_orders[chase_order.orderid]
+                self._safe_del_chase_order(original_orderid)
+                if chase_order.orderid != original_orderid:
+                    self._safe_del_chase_order(chase_order.orderid)
                 return
             
             # 获取最新tick（支持主力合约到实际合约的映射）
@@ -747,29 +775,26 @@ class FutuGateway(BaseGateway):
                     self.write_log(f"订单{original_orderid}等待tick后重委托成功但无法识别新订单ID，停止追价")
                     return
                 chase_order.retry_count += 1
-                chase_order.order_time = time()  # 更新委托时间为新订单的实际委托时间
+                chase_order.order_time = time()  # 更新委托时间为新订单的实际委托时间（用于下次超时判断）
                 chase_order.just_cancelled = False  # 重置标志，因为已经重新委托成功
                 chase_order.orderid = normalized_new_orderid
-                # 更新chase_orders字典的key
+                # 更新chase_orders字典的key（线程安全）
                 if normalized_new_orderid != old_orderid:
-                    self.chase_orders[normalized_new_orderid] = chase_order
-                    # 使用原始订单ID和旧订单ID都尝试移除，确保移除成功
-                    if old_orderid in self.chase_orders:
-                        del self.chase_orders[old_orderid]
-                    if original_orderid in self.chase_orders and original_orderid != old_orderid:
-                        del self.chase_orders[original_orderid]
+                    self._safe_update_chase_order_key(old_orderid, normalized_new_orderid, chase_order)
+                    # 如果原始订单ID不同，也尝试删除
+                    if original_orderid != old_orderid and original_orderid != normalized_new_orderid:
+                        self._safe_del_chase_order(original_orderid)
                 
-                self.write_log(f"订单{original_orderid}等待tick后重委托成功：新订单{normalized_new_orderid}，价格{new_price:.3f}，第{chase_order.retry_count}次重试")
+                self.write_log(f"订单{chase_order.original_orderid}等待tick后重委托成功：新订单{normalized_new_orderid}，价格{new_price:.3f}，第{chase_order.retry_count}次重试")
             else:
                 self.write_log(f"订单{original_orderid}等待tick后重委托失败：发送新订单失败")
                 # 如果重试次数未达上限，保留在追价列表中
                 # 如果已达到上限，从追价列表中移除
                 if chase_order.retry_count >= chase_order.config.max_retry_times - 1:
                     self.write_log(f"订单{original_orderid}已达到最大重试次数，从追价列表中移除")
-                    if original_orderid in self.chase_orders:
-                        del self.chase_orders[original_orderid]
-                    elif chase_order.orderid in self.chase_orders:
-                        del self.chase_orders[chase_order.orderid]
+                    self._safe_del_chase_order(original_orderid)
+                    if chase_order.orderid != original_orderid:
+                        self._safe_del_chase_order(chase_order.orderid)
         except Exception as e:
             self.write_log(f"订单{original_orderid}尝试重新委托异常：{str(e)}")
 
@@ -1015,7 +1040,7 @@ class FutuGateway(BaseGateway):
                 orderid, req.price, chase_config,
                 req.symbol, req.exchange, req.direction, req.offset, req.volume, req.reference
             )
-            self.chase_orders[orderid] = chase_order
+            self._safe_set_chase_order(orderid, chase_order)
             self.chase_stats["total_orders"] += 1
 
             self.write_log(f"启用智能追价: {req.symbol} 订单{orderid} - "
@@ -1092,17 +1117,18 @@ class FutuGateway(BaseGateway):
         # 检查订单是否在追价列表中（需要检查所有可能的订单ID）
         # 因为订单ID可能会在重委托过程中发生变化
         orderid_to_remove = None
-        for orderid, chase_order in list(self.chase_orders.items()):
+        for orderid, chase_order in list(self._safe_get_all_chase_orders().items()):
             # 检查当前订单ID或原始订单ID是否匹配
             if (orderid == normalized_req_orderid or orderid == req.orderid or
-                    chase_order.orderid == normalized_req_orderid or chase_order.orderid == req.orderid):
+                    chase_order.orderid == normalized_req_orderid or chase_order.orderid == req.orderid or
+                    chase_order.original_orderid == normalized_req_orderid or chase_order.original_orderid == req.orderid):
                 orderid_to_remove = orderid
                 self.write_log(f"订单{req.orderid}通过公共接口撤单，从追价列表中移除（无视智能追价选项）")
                 break
         
         # 从追价列表中移除（如果存在）
         if orderid_to_remove:
-            del self.chase_orders[orderid_to_remove]
+            self._safe_del_chase_order(orderid_to_remove)
         
         # 执行撤单操作（无视智能追价配置，直接撤单）
         self._cancel_order_internal(req)  # 忽略返回值，保持接口兼容
@@ -1112,12 +1138,13 @@ class FutuGateway(BaseGateway):
         
         此方法用于全撤时清理所有追价列表中的订单，即使它们不在active_orders中。
         """
-        if not self.chase_orders:
+        chase_orders_copy = self._safe_get_all_chase_orders()
+        if not chase_orders_copy:
             return
         
-        self.write_log(f"全撤：清理所有追价订单（共{len(self.chase_orders)}个）")
+        self.write_log(f"全撤：清理所有追价订单（共{len(chase_orders_copy)}个）")
         # 清理所有追价订单
-        for orderid, chase_order in list(self.chase_orders.items()):
+        for orderid, chase_order in list(chase_orders_copy.items()):
             # 使用chase_order.orderid作为实际要撤单的订单ID（重委托后可能已更新）
             actual_orderid = self._normalize_orderid(chase_order.orderid) or chase_order.orderid
             chase_order.orderid = actual_orderid
@@ -1133,17 +1160,16 @@ class FutuGateway(BaseGateway):
             except Exception as e:
                 self.write_log(f"全撤：撤单{actual_orderid}时发生异常：{str(e)}")
         
-        # 清空追价列表
-        self.chase_orders.clear()
+        # 清空追价列表（线程安全）
+        self._safe_clear_chase_orders()
         self.write_log("全撤：所有追价订单已清理完成")
 
     def start_chase_order(self, orderid: str, vt_symbol: str, direction: Direction) -> None:
         """开始追价订单处理"""
         normalized_orderid = self._normalize_orderid(orderid) or orderid
-        if normalized_orderid not in self.chase_orders:
+        chase_order = self._safe_get_chase_order(normalized_orderid)
+        if not chase_order:
             return
-
-        chase_order = self.chase_orders[normalized_orderid]
         if chase_order.is_chasing or chase_order.chase_count >= chase_order.config.max_chase_times:
             return
 
@@ -1229,18 +1255,18 @@ class FutuGateway(BaseGateway):
             self.query_position()
 
         # 检查是否是追价订单
-        if orderid in self.chase_orders:
-            chase_order = self.chase_orders[orderid]
+        chase_order = self._safe_get_chase_order(orderid)
+        if chase_order:
             
             # 记录完全成交时间（用于耗时统计）
             if order.status == Status.ALLTRADED and chase_order.fill_time is None:
                 chase_order.fill_time = time()
-                # 计算委托到完全成交耗时
-                elapsed_ms = (chase_order.fill_time - chase_order.order_time) * 1000
+                # 计算委托到完全成交耗时（使用原始下单时间，统计总耗时）
+                elapsed_ms = (chase_order.fill_time - chase_order.original_order_time) * 1000
                 self.chase_stats["order_to_fill_times"].append(elapsed_ms)
                 # 更新统计
                 self._update_time_statistics()
-                self.write_log(f"订单{orderid}完全成交耗时: {elapsed_ms:.1f}ms")
+                self.write_log(f"订单{orderid}完全成交耗时: {elapsed_ms:.1f}ms（从原始下单开始）")
 
             # 如果订单被拒绝且还能继续追价，则启动追价
             if (order.status in [Status.REJECTED, Status.CANCELLED] and
@@ -1257,8 +1283,7 @@ class FutuGateway(BaseGateway):
             # 如果订单完全成交或取消，清除追价记录
             elif order.status in [Status.ALLTRADED, Status.CANCELLED]:
                 # 立即从追价列表中移除，防止继续追价
-                if orderid in self.chase_orders:
-                    del self.chase_orders[orderid]
+                if self._safe_del_chase_order(orderid):
                     self.write_log(f"订单{orderid}状态为{order.status.value}，已从追价列表中移除")
                 else:
                     # 订单不在chase_orders中，可能是重委托后的新订单，或者已经被移除了
@@ -1298,7 +1323,7 @@ class FutuGateway(BaseGateway):
     def get_chase_statistics(self) -> dict:
         """获取追价统计信息"""
         stats = self.chase_stats.copy()
-        stats["active_chase_orders"] = len(self.chase_orders)
+        stats["active_chase_orders"] = len(self._safe_get_all_chase_orders())
 
         if stats["total_orders"] > 0:
             stats["chase_success_rate"] = stats["successful_chases"] / stats["total_orders"] * 100
@@ -1726,16 +1751,15 @@ class FutuGateway(BaseGateway):
             self.on_trade(trade)
             
             # 记录首次成交时间（用于耗时统计）
-            if orderid in self.chase_orders:
-                chase_order = self.chase_orders[orderid]
-                if chase_order.first_trade_time is None:
-                    chase_order.first_trade_time = time()
-                    # 计算委托到首次成交耗时
-                    elapsed_ms = (chase_order.first_trade_time - chase_order.order_time) * 1000
-                    self.chase_stats["order_to_first_trade_times"].append(elapsed_ms)
-                    # 更新统计
-                    self._update_time_statistics()
-                    self.write_log(f"订单{orderid}首次成交耗时: {elapsed_ms:.1f}ms")
+            chase_order = self._safe_get_chase_order(orderid)
+            if chase_order and chase_order.first_trade_time is None:
+                chase_order.first_trade_time = time()
+                # 计算委托到首次成交耗时（使用原始下单时间，统计总耗时）
+                elapsed_ms = (chase_order.first_trade_time - chase_order.original_order_time) * 1000
+                self.chase_stats["order_to_first_trade_times"].append(elapsed_ms)
+                # 更新统计
+                self._update_time_statistics()
+                self.write_log(f"订单{orderid}首次成交耗时: {elapsed_ms:.1f}ms（从原始下单开始）")
 
 
 def convert_symbol_futu2vt(code) -> str:
