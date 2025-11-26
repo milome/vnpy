@@ -3494,3 +3494,193 @@ def on_init(self):
 - **智能获取**：`get_indicator_smart()` 方法支持优先使用运行时值，回退到历史值
 
 这个功能显著提升了回测环境的用户体验，使得策略可以快速启动，同时保证数据的完整性和准确性。
+
+---
+
+## 主力合约切换检测功能 (2025-11-27)
+
+### 概述
+
+实现了主力合约（如 MHImain）自动检测切换的功能。当主力合约从旧月份合约切换到新月份合约时，系统会自动检测并通知 UI 更新显示，无需重新连接 Gateway。
+
+### 核心功能
+
+#### 1. 主力合约解析（多策略）
+
+按优先级使用以下策略解析主力合约对应的实际合约：
+
+| 优先级 | 策略 | 说明 |
+|--------|------|------|
+| 1 | `origin_code` | 使用 `get_future_info` API 的 `origin_code` 字段（最可靠） |
+| 2 | 名称提取 | 从合约名称提取月份（如"小恒指期货 (2512)" → MHI2512） |
+| 3 | 成交量比较 | 比较各月份合约成交量，选择最大的 |
+| 4 | 最近到期 | 选择最近到期的月份合约 |
+
+```python
+# 示例：get_future_info 返回
+ret, data = quote_ctx.get_future_info(["HK.MHImain"])
+origin_code = data.loc[0, 'origin_code']  # "HK.MHI2512"
+```
+
+#### 2. 定时检查机制
+
+- **检查间隔**：每 60 秒检查一次
+- **初始化时检查**：连接 Gateway 后立即检查
+- **缓存机制**：`main_contract_mapping` 字典缓存当前映射
+
+#### 3. 提前切换检测
+
+判断是否"提前切换"（当前月份 < 新合约月份）：
+
+```python
+# 当前日期：2025年11月27日
+# 新主力合约：MHI2512（2025年12月）
+# 11月 < 12月 → 提前切换 ✅
+```
+
+#### 4. UI 通知（Toast + 状态栏）
+
+| 类型 | Toast | 状态栏 |
+|------|-------|--------|
+| **提前切换** | ⚠️ 橙色，屏幕中央，8秒 | 黄色警告，永久显示 |
+| 正常切换 | 🔄 蓝色，顶部，5秒 | 默认，30秒后消失 |
+
+### 新增事件类型
+
+**文件**: `vnpy/trader/event.py`
+
+```python
+EVENT_MAIN_CONTRACT_SWITCH = "eMainContractSwitch."
+```
+
+### 新增数据类
+
+**文件**: `vnpy/trader/object.py`
+
+```python
+@dataclass
+class MainContractSwitchData(BaseData):
+    main_symbol: str              # 主力合约代码（如MHImain）
+    exchange: Exchange            # 交易所
+    old_actual_symbol: str        # 旧的实际合约代码（如MHI2511）
+    new_actual_symbol: str        # 新的实际合约代码（如MHI2512）
+    switch_time: Datetime | None  # 切换发生时间
+    is_early_switch: bool         # 是否提前切换
+```
+
+### UI 组件
+
+**文件**: `vnpy/trader/ui/widget.py`
+
+新增 `ToastNotification` 组件：
+- 淡入淡出动画效果
+- 可配置位置（`top`/`center`）
+- 可配置颜色和图标
+- 自动消失
+
+```python
+# 使用示例
+self.toast.show_message(
+    "主力合约切换: MHI2511 → MHI2512",
+    duration=5000,
+    icon="🔄",
+    color="rgba(30, 144, 255, 230)",
+    position="top"
+)
+```
+
+### Gateway 修改
+
+**文件**: `vnpy_futu/vnpy_futu/futu_gateway.py`
+
+新增方法：
+- `_check_main_contract_switch()`: 定时检查主力合约切换
+- `_is_early_switch()`: 判断是否提前切换
+- `_handle_main_contract_switch()`: 处理切换后的更新
+- `_resolve_main_contract()`: 多策略解析主力合约
+- `_resolve_main_by_volume()`: 通过成交量解析
+- `_resolve_main_by_nearest_expiry()`: 通过最近到期解析
+- `get_main_contract_mapping()`: 获取当前映射
+- `get_actual_symbol()`: 获取实际合约代码
+
+新增字段：
+```python
+self.main_contract_mapping: Dict[str, str] = {}  # 主力合约映射缓存
+self.main_contract_check_interval: int = 60      # 检查间隔（秒）
+```
+
+### BaseGateway 扩展
+
+**文件**: `vnpy/trader/gateway.py`
+
+新增方法：
+```python
+def on_main_contract_switch(self, switch_data: MainContractSwitchData) -> None:
+    """主力合约切换事件推送"""
+    self.on_event(EVENT_MAIN_CONTRACT_SWITCH, switch_data)
+    self.on_event(EVENT_MAIN_CONTRACT_SWITCH + switch_data.vt_main_symbol, switch_data)
+```
+
+### MainWindow 修改
+
+**文件**: `vnpy/trader/ui/mainwindow.py`
+
+- 初始化 Toast 组件
+- 注册 `EVENT_MAIN_CONTRACT_SWITCH` 事件监听
+- `process_main_contract_switch()`: 处理切换事件，显示 Toast 和状态栏消息
+
+### 切换时的自动操作
+
+当检测到主力合约切换时，自动执行：
+
+1. ✅ 更新 `main_contract_mapping` 缓存
+2. ✅ 更新合约名称（如 `小恒指期货 (主力→MHI2512)`）
+3. ✅ 更新 tick 缓存
+4. ✅ 推送 tick 事件（UI 立即刷新）
+5. ✅ 推送合约更新事件
+6. ✅ 显示 Toast 提示
+7. ✅ 更新状态栏消息
+
+### 日志输出示例
+
+```
+★ 主力合约解析成功（策略1-origin_code，最可靠）: MHImain -> HK.MHI2512
+初始化主力合约映射: MHImain -> MHI2512
+⚠️ 检测到当前主力合约MHI2512是提前切换状态！
+主力合约已切换: MHImain -> MHI2512
+已更新主力合约信息: MHImain.HKFE -> 小恒指期货 (主力→MHI2512)
+已推送主力合约tick更新事件，UI将立即刷新
+```
+
+### 监控的合约
+
+默认只监控 MHImain（小恒指），如需监控其他合约可修改：
+
+```python
+# vnpy_futu/vnpy_futu/futu_gateway.py
+main_contracts = [
+    ("MHImain", Exchange.HKFE),   # 小恒指
+    # ("HSImain", Exchange.HKFE),   # 大恒指（暂不监控）
+    # ("MCHmain", Exchange.HKFE),   # 小国指（暂不监控）
+    # ("HHImain", Exchange.HKFE),   # 大国指（暂不监控）
+]
+```
+
+### 文件清单
+
+**修改的文件**:
+- `vnpy/trader/event.py`: 新增 `EVENT_MAIN_CONTRACT_SWITCH`
+- `vnpy/trader/object.py`: 新增 `MainContractSwitchData`
+- `vnpy/trader/gateway.py`: 新增 `on_main_contract_switch()`
+- `vnpy/trader/ui/widget.py`: 新增 `ToastNotification` 组件
+- `vnpy/trader/ui/mainwindow.py`: 事件监听和 Toast 显示
+- `vnpy_futu/vnpy_futu/futu_gateway.py`: 主力合约检测逻辑
+
+### 使用说明
+
+无需额外配置，连接 FUTU Gateway 后自动启用。当检测到主力合约切换时：
+1. Toast 提示会自动显示
+2. 状态栏会显示切换信息
+3. 行情显示会自动更新合约名称
+
+如果是提前切换（当前月份早于新合约月份），状态栏会持续显示警告信息。

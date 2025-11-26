@@ -10,6 +10,7 @@ from .event import (
     EVENT_CONTRACT,
     EVENT_LOG,
     EVENT_QUOTE,
+    EVENT_MAIN_CONTRACT_SWITCH,
 )
 from .object import (
     TickData,
@@ -26,7 +27,8 @@ from .object import (
     HistoryRequest,
     QuoteRequest,
     Exchange,
-    BarData
+    BarData,
+    MainContractSwitchData,
 )
 
 
@@ -149,6 +151,16 @@ class BaseGateway(ABC):
         Contract event push.
         """
         self.on_event(EVENT_CONTRACT, contract)
+
+    def on_main_contract_switch(self, switch_data: MainContractSwitchData) -> None:
+        """
+        主力合约切换事件推送。
+        
+        当检测到主力合约（如MHImain）对应的实际合约发生变化时触发。
+        同时推送通用事件和特定主力合约的事件。
+        """
+        self.on_event(EVENT_MAIN_CONTRACT_SWITCH, switch_data)
+        self.on_event(EVENT_MAIN_CONTRACT_SWITCH + switch_data.vt_main_symbol, switch_data)
 
     def write_log(self, msg: str) -> None:
         """

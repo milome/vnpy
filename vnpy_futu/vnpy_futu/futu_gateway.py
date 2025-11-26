@@ -46,7 +46,8 @@ from vnpy.trader.object import (
     SubscribeRequest,
     OrderRequest,
     CancelRequest,
-    HistoryRequest
+    HistoryRequest,
+    MainContractSwitchData
 )
 from vnpy.trader.event import EVENT_TIMER
 from vnpy.trader.utility import ZoneInfo
@@ -219,6 +220,12 @@ class FutuGateway(BaseGateway):
         self.chase_orders_lock = RLock()  # 线程安全锁
         self.chase_enabled: bool = True  # 全局追价开关
         
+        # 主力合约映射缓存（主力合约代码 -> 实际合约代码）
+        # 例如：{"MHImain": "MHI2511", "HSImain": "HSI2511"}
+        self.main_contract_mapping: Dict[str, str] = {}
+        self.main_contract_check_interval: int = 60  # 主力合约检查间隔（秒）
+        self.main_contract_check_count: int = 0  # 主力合约检查计数器
+        
         # 撤单频率限制（避免触发API限制：每30秒最多20次）
         self.cancel_times: List[float] = []  # 记录撤单时间戳
         self.max_cancel_per_30s: int = 18  # 30秒内最多撤单次数（留2次余量）
@@ -275,6 +282,9 @@ class FutuGateway(BaseGateway):
         self.query_order()
         self.query_position()
         self.query_account()
+        
+        # 初始化主力合约映射
+        self._check_main_contract_switch()
 
         # 初始化定时查询任务
         self.event_engine.register(EVENT_TIMER, self.process_timer_event)
@@ -293,6 +303,12 @@ class FutuGateway(BaseGateway):
         
         # 检查超时订单（每1秒检查一次）
         self._check_timeout_orders()
+        
+        # 检查主力合约切换（根据配置的间隔检查）
+        self.main_contract_check_count += 1
+        if self.main_contract_check_count >= self.main_contract_check_interval:
+            self.main_contract_check_count = 0
+            self._check_main_contract_switch()
     
     def _normalize_orderid(self, orderid: Optional[str]) -> Optional[str]:
         """去除网关前缀，统一使用富途实际订单ID"""
@@ -444,6 +460,253 @@ class FutuGateway(BaseGateway):
             self.write_log(f"订单{orderid}超时{elapsed:.1f}秒，执行撤单重委托")
             self._retry_order_with_latest_price(chase_order)
     
+    def _check_main_contract_switch(self) -> None:
+        """
+        检查主力合约是否发生切换。
+        
+        遍历所有已订阅的主力合约，查询当前实际合约代码，
+        如果与缓存中的映射不同，则触发主力合约切换事件。
+        """
+        # 只监控MHImain的主力合约切换（其他合约如需监控可添加到列表）
+        main_contracts = [
+            ("MHImain", Exchange.HKFE),   # 小恒指
+            # ("HSImain", Exchange.HKFE),   # 大恒指（暂不监控）
+            # ("MCHmain", Exchange.HKFE),   # 小国指（暂不监控）
+            # ("HHImain", Exchange.HKFE),   # 大国指（暂不监控）
+        ]
+        
+        for main_symbol, exchange in main_contracts:
+            try:
+                # 构造富途格式的合约代码
+                futu_symbol = convert_symbol_vt2futu(main_symbol, exchange)
+                
+                # 解析当前实际合约
+                actual_code = self._resolve_main_contract(main_symbol, futu_symbol)
+                if not actual_code:
+                    continue
+                
+                # 从富途格式提取实际合约代码（如 "HK.MHI2511" -> "MHI2511"）
+                if "." in actual_code:
+                    actual_symbol = actual_code.split(".")[-1]
+                else:
+                    actual_symbol = actual_code
+                
+                # 获取缓存中的旧映射
+                old_actual_symbol = self.main_contract_mapping.get(main_symbol)
+                
+                # 如果是首次查询
+                if old_actual_symbol is None:
+                    self.main_contract_mapping[main_symbol] = actual_symbol
+                    self.write_log(f"初始化主力合约映射: {main_symbol} -> {actual_symbol}")
+                    
+                    # 首次初始化时也检查是否提前切换，如果是则立即提示用户
+                    is_early_switch = self._is_early_switch(actual_symbol)
+                    if is_early_switch:
+                        self.write_log(f"⚠️ 检测到当前主力合约{actual_symbol}是提前切换状态！")
+                        
+                        # 创建切换事件数据（old_actual_symbol用空字符串表示首次初始化）
+                        switch_data = MainContractSwitchData(
+                            gateway_name=self.gateway_name,
+                            main_symbol=main_symbol,
+                            exchange=exchange,
+                            old_actual_symbol="(首次连接)",
+                            new_actual_symbol=actual_symbol,
+                            switch_time=datetime.now(CHINA_TZ),
+                            is_early_switch=True
+                        )
+                        
+                        # 触发主力合约切换事件，通知UI显示提前切换提示
+                        self.on_main_contract_switch(switch_data)
+                    
+                    continue
+                
+                # 检查是否发生切换
+                if actual_symbol != old_actual_symbol:
+                    self.write_log(f"检测到主力合约切换: {main_symbol} 从 {old_actual_symbol} 切换到 {actual_symbol}")
+                    
+                    # 更新缓存
+                    self.main_contract_mapping[main_symbol] = actual_symbol
+                    
+                    # 判断是否提前切换（当前月份 < 新合约月份）
+                    is_early_switch = self._is_early_switch(actual_symbol)
+                    if is_early_switch:
+                        self.write_log(f"⚠️ 检测到提前切换！当前日期早于新主力合约{actual_symbol}的月份")
+                    
+                    # 创建切换事件数据
+                    switch_data = MainContractSwitchData(
+                        gateway_name=self.gateway_name,
+                        main_symbol=main_symbol,
+                        exchange=exchange,
+                        old_actual_symbol=old_actual_symbol,
+                        new_actual_symbol=actual_symbol,
+                        switch_time=datetime.now(CHINA_TZ),
+                        is_early_switch=is_early_switch
+                    )
+                    
+                    # 触发主力合约切换事件
+                    self.on_main_contract_switch(switch_data)
+                    
+                    # 更新tick订阅：订阅新的实际合约
+                    self._handle_main_contract_switch(main_symbol, exchange, old_actual_symbol, actual_symbol)
+                    
+            except Exception as e:
+                self.write_log(f"检查主力合约{main_symbol}切换时发生异常: {str(e)}")
+    
+    def _is_early_switch(self, actual_symbol: str) -> bool:
+        """
+        判断是否提前切换主力合约。
+        
+        如果当前日期的年月 < 新主力合约的年月，说明是提前切换。
+        例如：当前是2025年11月，新主力是MHI2512（2025年12月），则是提前切换。
+        
+        Args:
+            actual_symbol: 新的实际合约代码（如MHI2512）
+            
+        Returns:
+            True表示提前切换，False表示正常切换
+        """
+        try:
+            # 提取合约年月代码（最后4位数字，格式YYMM）
+            if len(actual_symbol) < 4:
+                return False
+            
+            year_month_code = actual_symbol[-4:]
+            if not year_month_code.isdigit():
+                return False
+            
+            # 解析合约年月
+            contract_year = int(year_month_code[:2]) + 2000  # 25 -> 2025
+            contract_month = int(year_month_code[2:])  # 12
+            
+            # 获取当前年月
+            now = datetime.now(CHINA_TZ)
+            current_year = now.year
+            current_month = now.month
+            
+            # 比较：如果当前年月 < 合约年月，说明是提前切换
+            if current_year < contract_year:
+                return True
+            elif current_year == contract_year and current_month < contract_month:
+                return True
+            
+            return False
+            
+        except Exception as e:
+            self.write_log(f"判断提前切换异常: {str(e)}")
+            return False
+    
+    def _handle_main_contract_switch(self, main_symbol: str, exchange: Exchange, 
+                                      old_actual_symbol: str, new_actual_symbol: str) -> None:
+        """
+        处理主力合约切换后的相关更新操作。
+        
+        更新内容：
+        1. 更新合约信息（名称显示新的实际合约）
+        2. 更新tick缓存
+        3. 推送tick事件让UI立即刷新
+        
+        注意：不需要单独订阅新的实际合约行情，因为订阅MHImain后
+        富途API会自动将行情映射到当前主力合约。
+        
+        Args:
+            main_symbol: 主力合约代码（如MHImain）
+            exchange: 交易所
+            old_actual_symbol: 旧的实际合约代码
+            new_actual_symbol: 新的实际合约代码
+        """
+        try:
+            main_vt_symbol = f"{main_symbol}.{exchange.value}"
+            new_vt_symbol = f"{new_actual_symbol}.{exchange.value}"
+            main_futu_code = convert_symbol_vt2futu(main_symbol, exchange)
+            new_futu_code = convert_symbol_vt2futu(new_actual_symbol, exchange)
+            
+            # 注意：不需要单独订阅新合约，MHImain的行情会自动切换到新主力
+            self.write_log(f"主力合约已切换: {main_symbol} -> {new_actual_symbol}")
+            
+            # 1. 更新合约信息缓存（名称中包含实际合约代码，方便用户识别）
+            # 尝试获取新合约的基础信息
+            base_name = main_symbol  # 默认名称
+            product = Product.FUTURES
+            size = 10  # 默认合约乘数
+            pricetick = 0.001
+            
+            if new_vt_symbol in self.contracts:
+                new_contract = self.contracts[new_vt_symbol]
+                base_name = new_contract.name
+                product = new_contract.product
+                size = new_contract.size
+                pricetick = new_contract.pricetick
+            
+            # 创建/更新主力合约信息，名称格式："小恒指期货 (主力→MHI2512)"
+            main_contract = ContractData(
+                symbol=main_symbol,
+                exchange=exchange,
+                name=f"{base_name} (主力→{new_actual_symbol})",
+                product=product,
+                size=size,
+                pricetick=pricetick,
+                history_data=True,
+                net_position=True,
+                gateway_name=self.gateway_name,
+            )
+            self.contracts[main_vt_symbol] = main_contract
+            # 推送合约更新事件
+            self.on_contract(main_contract)
+            self.write_log(f"已更新主力合约信息: {main_vt_symbol} -> {main_contract.name}")
+            
+            # 3. 更新ticks缓存中的主力合约数据
+            # 如果新实际合约已有tick数据，复制并更新名称
+            if new_futu_code in self.ticks:
+                new_tick = self.ticks[new_futu_code]
+                # 创建主力合约的tick副本，使用主力合约的symbol
+                main_tick = self.get_tick(main_futu_code)
+                # 复制价格数据
+                main_tick.last_price = new_tick.last_price
+                main_tick.open_price = new_tick.open_price
+                main_tick.high_price = new_tick.high_price
+                main_tick.low_price = new_tick.low_price
+                main_tick.pre_close = new_tick.pre_close
+                main_tick.volume = new_tick.volume
+                main_tick.bid_price_1 = new_tick.bid_price_1
+                main_tick.bid_volume_1 = new_tick.bid_volume_1
+                main_tick.ask_price_1 = new_tick.ask_price_1
+                main_tick.ask_volume_1 = new_tick.ask_volume_1
+                main_tick.datetime = new_tick.datetime
+                # 更新名称以反映实际合约
+                main_tick.name = main_contract.name
+                
+                self.write_log(f"已更新主力合约tick缓存: {main_futu_code}")
+                
+                # 4. 推送tick事件，让UI立即刷新显示
+                self.on_tick(copy(main_tick))
+                self.write_log(f"已推送主力合约tick更新事件，UI将立即刷新")
+            else:
+                self.write_log(f"新实际合约{new_futu_code}暂无tick数据，等待行情推送后更新")
+                
+        except Exception as e:
+            self.write_log(f"处理主力合约切换时发生异常: {str(e)}")
+    
+    def get_main_contract_mapping(self) -> Dict[str, str]:
+        """
+        获取当前主力合约映射关系。
+        
+        Returns:
+            Dict[str, str]: 主力合约代码 -> 实际合约代码的映射
+        """
+        return self.main_contract_mapping.copy()
+    
+    def get_actual_symbol(self, main_symbol: str) -> Optional[str]:
+        """
+        获取主力合约对应的实际合约代码。
+        
+        Args:
+            main_symbol: 主力合约代码（如MHImain）
+            
+        Returns:
+            实际合约代码（如MHI2511），如果未找到返回None
+        """
+        return self.main_contract_mapping.get(main_symbol)
+
     def _get_order_status(self, orderid: str) -> Optional[Status]:
         """查询订单状态
         
@@ -897,37 +1160,211 @@ class FutuGateway(BaseGateway):
         """
         解析主力合约为实际月份合约
 
-        例如：MHImain -> HK_FUTURE.MHI2511
+        例如：MHImain -> HK.MHI2511
+
+        判断主力合约的策略（按优先级）：
+        1. 使用 get_future_info API 的 origin_code 字段（最可靠）
+        2. 从主力合约名称中提取月份代码（如"小恒指期货 (2511)"）
+        3. 通过成交量/持仓量比较所有可用月份合约
+        4. 选择最近到期的月份合约
 
         Args:
             vt_symbol: VNPy合约代码（如MHImain）
             futu_symbol: Futu合约代码（如HK_FUTURE.MHImain）
 
         Returns:
-            实际合约代码（如HK_FUTURE.MHI2511），如果解析失败返回None
+            实际合约代码（如HK.MHI2511），如果解析失败返回None
         """
         try:
             # 提取基础代码（去掉main后缀）
             base_symbol = vt_symbol.replace("main", "")  # MHI
+            futu_main_code = f"HK.{vt_symbol}"  # HK.MHImain
 
-            # 尝试通过查询行情快照获取实际合约信息
-            # 注意：get_market_snapshot使用HK格式，但我们最终返回HK_FUTURE格式
-            code, data = self.quote_ctx.get_market_snapshot([f"HK.{vt_symbol}"])
+            # 策略1（最可靠）：使用 get_future_info API 的 origin_code 字段
+            # origin_code 是富途官方的主力合约指向，直接返回具体合约代码
+            # 这是唯一能准确反映主力切换的方法（不依赖成交量/持仓量比较）
+            try:
+                ret, data = self.quote_ctx.get_future_info([futu_main_code])
+                if ret == 0 and not data.empty:
+                    # 打印返回的所有字段，用于调试
+                    self.write_log(f"get_future_info 返回字段: {list(data.columns)}")
+                    
+                    if 'origin_code' in data.columns:
+                        origin_code = data.loc[0, 'origin_code']
+                        if origin_code and isinstance(origin_code, str) and origin_code.strip():
+                            origin_code = origin_code.strip()
+                            # origin_code 格式应该是 HK.MHI2512
+                            self.write_log(f"★ 主力合约解析成功（策略1-origin_code，最可靠）: {vt_symbol} -> {origin_code}")
+                            return origin_code
+                        else:
+                            self.write_log(f"策略1: origin_code 字段为空或无效: '{origin_code}'")
+                    else:
+                        self.write_log(f"策略1: 返回数据中没有 origin_code 字段")
+                else:
+                    self.write_log(f"策略1: get_future_info 查询失败, ret={ret}")
+            except Exception as e:
+                self.write_log(f"策略1(origin_code)查询异常: {str(e)}")
+
+            # 策略2：尝试通过查询主力合约行情快照，从名称中提取月份
+            code, data = self.quote_ctx.get_market_snapshot([futu_main_code])
             if code == 0 and not data.empty:
                 # 从名称中提取合约月份：如"小恒指期货 (2511)" -> 2511
                 name = data['name'].values[0]
                 if '(' in name and ')' in name:
                     month_code = name.split('(')[1].split(')')[0].strip()
                     if month_code.isdigit() and len(month_code) == 4:
-                        # 构造实际合约代码，使用HK前缀（富途API期望格式）
                         actual_code = f"HK.{base_symbol}{month_code}"
+                        self.write_log(f"主力合约解析成功（策略2-名称提取）: {vt_symbol} -> {actual_code}")
                         return actual_code
 
-            self.write_log(f"无法解析主力合约 {vt_symbol}：查询失败或数据格式异常")
+            # 策略3：通过成交量/持仓量比较确定主力合约
+            actual_code = self._resolve_main_by_volume(base_symbol)
+            if actual_code:
+                self.write_log(f"主力合约解析成功（策略3-成交量比较）: {vt_symbol} -> {actual_code}")
+                return actual_code
+
+            # 策略4：选择最近到期的月份合约
+            actual_code = self._resolve_main_by_nearest_expiry(base_symbol)
+            if actual_code:
+                self.write_log(f"主力合约解析成功（策略4-最近到期）: {vt_symbol} -> {actual_code}")
+                return actual_code
+
+            self.write_log(f"无法解析主力合约 {vt_symbol}：所有策略均失败")
             return None
 
         except Exception as e:
             self.write_log(f"解析主力合约异常 {vt_symbol}: {str(e)}")
+            return None
+    
+    def _resolve_main_by_volume(self, base_symbol: str) -> Optional[str]:
+        """
+        通过成交量比较确定主力合约（后备方案，不够可靠）。
+        
+        注意：此方法仅作为后备方案！
+        持仓量和成交量在主力切换当天可能不准确，因为移仓是渐进的。
+        例如：切换日当天旧主力持仓量仍然可能大于新主力。
+        
+        应优先使用 get_future_info 的 origin_code 字段。
+        
+        Args:
+            base_symbol: 基础合约代码（如MHI）
+            
+        Returns:
+            成交量最大的合约代码（如HK.MHI2512），失败返回None
+        """
+        try:
+            # 获取所有可用的期货合约
+            ret, contract_data = self.quote_ctx.get_stock_basicinfo("HK", "FUTURE")
+            if ret != 0 or contract_data.empty:
+                return None
+            
+            # 过滤出该品种的月份合约（排除价差合约和虚拟合约）
+            # 月份合约格式：HK.MHI2511（基础代码+4位数字）
+            month_contracts = []
+            for _, row in contract_data.iterrows():
+                code = row['code']  # HK.MHI2511
+                if '.' in code:
+                    symbol = code.split('.')[-1]  # MHI2511
+                else:
+                    symbol = code
+                
+                # 检查是否是该品种的月份合约
+                if (symbol.startswith(base_symbol) and 
+                    len(symbol) == len(base_symbol) + 4 and
+                    symbol[-4:].isdigit() and
+                    '/' not in code):  # 排除价差合约
+                    month_contracts.append(code)
+            
+            if not month_contracts:
+                return None
+            
+            # 查询所有月份合约的快照数据
+            code, snapshot_data = self.quote_ctx.get_market_snapshot(month_contracts)
+            if code != 0 or snapshot_data.empty:
+                return None
+            
+            # 记录各合约的成交量，用于日志（仅供参考，不作为主力判断依据）
+            self.write_log(f"[后备方案] 各月份合约成交量对比（仅供参考）:")
+            for _, row in snapshot_data.iterrows():
+                contract_code = row['code']
+                volume = row.get('volume', 0)
+                open_interest = row.get('open_interest', row.get('position', 0))
+                self.write_log(f"  - {contract_code}: 成交量={volume}, 持仓量={open_interest}")
+            
+            # 只按成交量排序（持仓量在切换日不准确）
+            snapshot_data = snapshot_data.sort_values('volume', ascending=False)
+            best_contract = snapshot_data.iloc[0]['code']
+            volume = snapshot_data.iloc[0]['volume']
+            self.write_log(f"[后备方案] 成交量最大: {best_contract} (成交量: {volume})")
+            self.write_log(f"[警告] 此结果可能不准确，建议检查 get_future_info 是否可用")
+            
+            return best_contract
+            
+        except Exception as e:
+            self.write_log(f"通过成交量解析主力合约异常: {str(e)}")
+            return None
+    
+    def _resolve_main_by_nearest_expiry(self, base_symbol: str) -> Optional[str]:
+        """
+        选择最近到期的月份合约作为主力合约。
+        
+        对于香港期货，合约代码格式为：MHI2511（YYMM格式）
+        
+        Args:
+            base_symbol: 基础合约代码（如MHI）
+            
+        Returns:
+            最近到期的合约代码（如HK.MHI2511），失败返回None
+        """
+        try:
+            # 获取所有可用的期货合约
+            ret, contract_data = self.quote_ctx.get_stock_basicinfo("HK", "FUTURE")
+            if ret != 0 or contract_data.empty:
+                return None
+            
+            # 过滤并排序月份合约
+            month_contracts = []
+            for _, row in contract_data.iterrows():
+                code = row['code']  # HK.MHI2511
+                if '.' in code:
+                    symbol = code.split('.')[-1]  # MHI2511
+                else:
+                    symbol = code
+                
+                # 检查是否是该品种的月份合约
+                if (symbol.startswith(base_symbol) and 
+                    len(symbol) == len(base_symbol) + 4 and
+                    symbol[-4:].isdigit() and
+                    '/' not in code):  # 排除价差合约
+                    # 提取年月代码用于排序
+                    year_month = symbol[-4:]  # 2511
+                    month_contracts.append((code, year_month))
+            
+            if not month_contracts:
+                return None
+            
+            # 按年月排序（最近的在前）
+            # 注意：年月格式为YYMM，可以直接字符串排序
+            month_contracts.sort(key=lambda x: x[1])
+            
+            # 获取当前年月
+            now = datetime.now()
+            current_ym = f"{now.year % 100:02d}{now.month:02d}"
+            
+            # 选择大于等于当前年月的最近合约
+            for code, ym in month_contracts:
+                if ym >= current_ym:
+                    self.write_log(f"最近到期合约: {code} (到期: {ym})")
+                    return code
+            
+            # 如果没有找到，返回第一个（最近的）
+            if month_contracts:
+                return month_contracts[0][0]
+            
+            return None
+            
+        except Exception as e:
+            self.write_log(f"通过最近到期解析主力合约异常: {str(e)}")
             return None
 
     def send_order(self, req: OrderRequest) -> str:
@@ -1491,9 +1928,18 @@ class FutuGateway(BaseGateway):
             )
             self.ticks[code] = tick
 
+        # 获取合约名称
         contract: ContractData = self.contracts.get(tick.vt_symbol, None)
         if contract:
             tick.name = contract.name
+        else:
+            # 如果是主力合约，尝试显示实际合约信息
+            if symbol.endswith("main"):
+                actual_symbol = self.main_contract_mapping.get(symbol)
+                if actual_symbol:
+                    tick.name = f"{symbol} (→{actual_symbol})"
+                else:
+                    tick.name = symbol
 
         return tick
     

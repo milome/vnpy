@@ -425,3 +425,30 @@ class QuoteRequest:
             gateway_name=gateway_name,
         )
         return quote
+
+
+@dataclass
+class MainContractSwitchData(BaseData):
+    """
+    主力合约切换数据，当检测到主力合约对应的实际合约发生变化时触发。
+    
+    用于通知UI和其他组件更新：
+    - UI上显示的具体合约
+    - 接收的tickdata订阅
+    - 所有主力合约的映射关系
+    """
+    
+    main_symbol: str              # 主力合约代码（如MHImain）
+    exchange: Exchange            # 交易所
+    old_actual_symbol: str        # 旧的实际合约代码（如MHI2511）
+    new_actual_symbol: str        # 新的实际合约代码（如MHI2512）
+    switch_time: Datetime | None = None  # 切换发生时间
+    is_early_switch: bool = False  # 是否提前切换（当前月份 < 新合约月份）
+    
+    def __post_init__(self) -> None:
+        """"""
+        self.vt_main_symbol: str = f"{self.main_symbol}.{self.exchange.value}"
+        self.vt_old_actual_symbol: str = f"{self.old_actual_symbol}.{self.exchange.value}"
+        self.vt_new_actual_symbol: str = f"{self.new_actual_symbol}.{self.exchange.value}"
+        if self.switch_time is None:
+            self.switch_time = Datetime.now()

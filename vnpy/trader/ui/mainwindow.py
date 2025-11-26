@@ -26,11 +26,13 @@ from .widget import (
     ContractManager,
     TradingWidget,
     AboutDialog,
-    GlobalDialog
+    GlobalDialog,
+    ToastNotification
 )
 from ..engine import MainEngine, BaseApp
 from ..utility import get_icon_path, TRADER_DIR
 from ..locale import _
+from ..event import EVENT_MAIN_CONTRACT_SWITCH
 
 
 WidgetType = TypeVar("WidgetType", bound="QtWidgets.QWidget")
@@ -41,6 +43,9 @@ class MainWindow(QtWidgets.QMainWindow):
     Main window of the trading platform.
     """
 
+    # 信号定义（用于跨线程UI更新）
+    signal_main_contract_switch = QtCore.Signal(object)
+    
     def __init__(self, main_engine: MainEngine, event_engine: EventEngine) -> None:
         """"""
         super().__init__()
@@ -52,8 +57,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.widgets: dict[str, QtWidgets.QWidget] = {}
         self.monitors: dict[str, BaseMonitor] = {}
+        
+        # Toast通知组件
+        self.toast: ToastNotification = None
 
         self.init_ui()
+        self.init_toast()
+        self.register_event()
 
     def init_ui(self) -> None:
         """"""
@@ -199,6 +209,79 @@ class MainWindow(QtWidgets.QMainWindow):
             layout.setSpacing(10)
 
         self.addToolBar(QtCore.Qt.ToolBarArea.LeftToolBarArea, self.toolbar)
+    
+    def init_toast(self) -> None:
+        """初始化Toast通知组件"""
+        self.toast = ToastNotification(self)
+        
+        # 初始化状态栏（用于显示滚动消息）
+        self.statusBar().showMessage(_("就绪"))
+    
+    def register_event(self) -> None:
+        """注册事件监听"""
+        # 监听主力合约切换事件
+        self.signal_main_contract_switch.connect(self.process_main_contract_switch)
+        self.event_engine.register(EVENT_MAIN_CONTRACT_SWITCH, self.signal_main_contract_switch.emit)
+    
+    def process_main_contract_switch(self, event) -> None:
+        """处理主力合约切换事件 - 显示Toast提示"""
+        switch_data = event.data
+        
+        # 判断是否提前切换
+        is_early = getattr(switch_data, 'is_early_switch', False)
+        
+        if is_early:
+            # 提前切换 - 更强的提示
+            message = _("主力合约提前切换！{} → {}").format(
+                switch_data.old_actual_symbol,
+                switch_data.new_actual_symbol
+            )
+            
+            # 显示更醒目的Toast（橙色警告色，显示更长时间，屏幕中央）
+            self.toast.show_message(
+                message, 
+                duration=8000,  # 显示8秒
+                icon="⚠️",
+                color="rgba(255, 140, 0, 240)",  # 深橙色背景（警告色）
+                position="center"  # 屏幕中央显示
+            )
+            
+            # 状态栏持续显示（timeout=0表示不自动消失）
+            status_message = _("⚠️ 主力合约提前切换: {} → {} (当前日期早于新合约月份)").format(
+                switch_data.old_actual_symbol,
+                switch_data.new_actual_symbol
+            )
+            self.statusBar().showMessage(status_message, 0)  # 0表示永久显示
+            
+            # 设置状态栏样式为警告色
+            self.statusBar().setStyleSheet(
+                "QStatusBar { background-color: #FFF3CD; color: #856404; font-weight: bold; }"
+            )
+        else:
+            # 正常切换 - 温和提示
+            message = _("主力合约切换: {} → {}").format(
+                switch_data.old_actual_symbol,
+                switch_data.new_actual_symbol
+            )
+            
+            # 显示Toast提示（温和的浮动通知，顶部显示）
+            self.toast.show_message(
+                message, 
+                duration=5000,  # 显示5秒
+                icon="🔄",
+                color="rgba(30, 144, 255, 230)",  # 道奇蓝色背景
+                position="top"  # 顶部显示，不遮挡内容
+            )
+            
+            # 状态栏显示30秒后消失
+            status_message = _("📢 主力合约切换: {} → {}").format(
+                switch_data.old_actual_symbol,
+                switch_data.new_actual_symbol
+            )
+            self.statusBar().showMessage(status_message, 30000)
+            
+            # 恢复状态栏默认样式
+            self.statusBar().setStyleSheet("")
 
     def add_action(
         self,

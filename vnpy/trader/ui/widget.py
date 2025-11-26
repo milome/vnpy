@@ -46,6 +46,123 @@ COLOR_ASK = QtGui.QColor(160, 255, 160)
 COLOR_BLACK = QtGui.QColor("black")
 
 
+class ToastNotification(QtWidgets.QLabel):
+    """
+    Toast提示组件 - 温和的浮动通知，自动淡入淡出消失。
+    
+    用于显示主力合约切换等重要但不紧急的通知。
+    """
+    
+    def __init__(self, parent: QtWidgets.QWidget = None) -> None:
+        super().__init__(parent)
+        
+        # 设置样式
+        self.setStyleSheet("""
+            QLabel {
+                background-color: rgba(50, 50, 50, 220);
+                color: #ffffff;
+                padding: 12px 20px;
+                border-radius: 8px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+        """)
+        
+        self.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.setWindowFlags(
+            QtCore.Qt.WindowType.FramelessWindowHint | 
+            QtCore.Qt.WindowType.WindowStaysOnTopHint |
+            QtCore.Qt.WindowType.Tool
+        )
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        
+        # 动画效果
+        self.opacity_effect = QtWidgets.QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self.opacity_effect)
+        
+        # 淡入动画
+        self.fade_in_animation = QtCore.QPropertyAnimation(self.opacity_effect, b"opacity")
+        self.fade_in_animation.setDuration(300)
+        self.fade_in_animation.setStartValue(0.0)
+        self.fade_in_animation.setEndValue(1.0)
+        
+        # 淡出动画
+        self.fade_out_animation = QtCore.QPropertyAnimation(self.opacity_effect, b"opacity")
+        self.fade_out_animation.setDuration(500)
+        self.fade_out_animation.setStartValue(1.0)
+        self.fade_out_animation.setEndValue(0.0)
+        self.fade_out_animation.finished.connect(self.hide)
+        
+        # 定时器（显示时长）
+        self.timer = QtCore.QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(self.start_fade_out)
+        
+        self.hide()
+    
+    def show_message(self, message: str, duration: int = 4000, 
+                     icon: str = "🔄", color: str = None,
+                     position: str = "top") -> None:
+        """
+        显示Toast消息。
+        
+        Args:
+            message: 消息内容
+            duration: 显示时长（毫秒），默认4秒
+            icon: 消息图标，默认为刷新图标
+            color: 背景颜色，默认深灰色
+            position: 显示位置，"top"=顶部中央，"center"=屏幕中央
+        """
+        # 设置消息内容
+        self.setText(f"  {icon}  {message}  ")
+        
+        # 自定义颜色
+        if color:
+            self.setStyleSheet(f"""
+                QLabel {{
+                    background-color: {color};
+                    color: #ffffff;
+                    padding: 12px 20px;
+                    border-radius: 8px;
+                    font-size: 14px;
+                    font-weight: bold;
+                }}
+            """)
+        
+        # 调整大小
+        self.adjustSize()
+        
+        # 计算位置
+        if self.parent():
+            parent = self.parent()
+            parent_rect = parent.geometry()
+            
+            # 水平居中
+            x = parent_rect.x() + (parent_rect.width() - self.width()) // 2
+            
+            if position == "center":
+                # 屏幕中央
+                y = parent_rect.y() + (parent_rect.height() - self.height()) // 2
+            else:
+                # 顶部（紧贴标题栏下方，不遮挡内容）
+                y = parent_rect.y() + 35  # 紧贴标题栏
+            
+            self.move(x, y)
+        
+        # 显示并开始动画
+        self.show()
+        self.raise_()
+        self.fade_in_animation.start()
+        
+        # 设置定时器
+        self.timer.start(duration)
+    
+    def start_fade_out(self) -> None:
+        """开始淡出动画"""
+        self.fade_out_animation.start()
+
+
 class BaseCell(QtWidgets.QTableWidgetItem):
     """
     General cell used in tablewidgets.
@@ -806,25 +923,17 @@ class TradingWidget(QtWidgets.QWidget):
         self.chase_check.setChecked(True)  # 默认启用
 
         # 追价配置选项组
-        self.chase_times_spin: QtWidgets.QSpinBox = QtWidgets.QSpinBox()
-        self.chase_times_spin.setRange(1, 10)
-        self.chase_times_spin.setValue(3)
-        self.chase_times_spin.setSuffix(_("次"))
-        self.chase_times_spin.setToolTip(_("最大追价次数"))
+        # 移除追价次数控件（与重试次数重复，只保留重试次数）
+        # 移除最大滑点控件（使用买一/卖一价格时滑点限制无意义）
 
-        self.max_slippage_spin: QtWidgets.QDoubleSpinBox = QtWidgets.QDoubleSpinBox()
-        self.max_slippage_spin.setRange(0.01, 5.0)
-        self.max_slippage_spin.setValue(0.5)
-        self.max_slippage_spin.setSuffix(_("%"))
-        self.max_slippage_spin.setDecimals(2)
-        self.max_slippage_spin.setToolTip(_("最大滑点容忍度"))
+        # 超时重试配置
+        self.max_retry_times_spin: QtWidgets.QSpinBox = QtWidgets.QSpinBox()
+        self.max_retry_times_spin.setRange(1, 10)
+        self.max_retry_times_spin.setValue(2)
+        self.max_retry_times_spin.setSuffix(_("次"))
+        self.max_retry_times_spin.setToolTip(_("超时后最大重委托次数"))
 
-        self.chase_step_spin: QtWidgets.QDoubleSpinBox = QtWidgets.QDoubleSpinBox()
-        self.chase_step_spin.setRange(0.01, 1.0)
-        self.chase_step_spin.setValue(0.05)
-        self.chase_step_spin.setSuffix(_("%"))
-        self.chase_step_spin.setDecimals(2)
-        self.chase_step_spin.setToolTip(_("每次追价步长"))
+        # 移除追价步长控件（不再需要，直接使用买一/卖一价格）
 
         # 移除OPPONENT事件连接，现在通过订单类型下拉框处理
 
@@ -865,17 +974,13 @@ class TradingWidget(QtWidgets.QWidget):
         # 追价配置区域
         grid.addWidget(QtWidgets.QLabel(_("追价设置")), 8, 0)
         grid.addWidget(self.chase_check, 8, 1, 1, 2)
-        grid.addWidget(QtWidgets.QLabel(_("追价次数")), 9, 0)
-        grid.addWidget(self.chase_times_spin, 9, 1, 1, 2)
-        grid.addWidget(QtWidgets.QLabel(_("最大滑点")), 10, 0)
-        grid.addWidget(self.max_slippage_spin, 10, 1, 1, 2)
-        grid.addWidget(QtWidgets.QLabel(_("追价步长")), 11, 0)
-        grid.addWidget(self.chase_step_spin, 11, 1, 1, 2)
+        grid.addWidget(QtWidgets.QLabel(_("重试次数")), 9, 0)
+        grid.addWidget(self.max_retry_times_spin, 9, 1, 1, 2)
 
-        grid.addWidget(QtWidgets.QLabel(_("接口")), 12, 0)
-        grid.addWidget(self.gateway_combo, 12, 1, 1, 2)
-        grid.addWidget(send_button, 13, 0, 1, 3)
-        grid.addWidget(cancel_button, 14, 0, 1, 3)
+        grid.addWidget(QtWidgets.QLabel(_("接口")), 10, 0)
+        grid.addWidget(self.gateway_combo, 10, 1, 1, 2)
+        grid.addWidget(send_button, 11, 0, 1, 3)
+        grid.addWidget(cancel_button, 12, 0, 1, 3)
 
         # Market depth display area
         bid_color: str = "rgb(255,174,201)"
@@ -1130,16 +1235,13 @@ class TradingWidget(QtWidgets.QWidget):
         enabled = (state == 2)
 
         # 控制追价参数控件的可用性
-        self.chase_times_spin.setEnabled(enabled)
-        self.max_slippage_spin.setEnabled(enabled)
-        self.chase_step_spin.setEnabled(enabled)
+        self.max_retry_times_spin.setEnabled(enabled)
 
         # 记录追价状态变化到日志
         if enabled:
             config = self.get_chase_config()
             self.main_engine.write_log(
-                f"[追价] 已启用 - 最大{config['max_chase_times']}次, "
-                f"滑点{config['max_slippage_pct']}%, 步长{config['chase_step_pct']}%"
+                f"[追价] 已启用 - 重试{config['max_retry_times']}次"
             )
         else:
             self.main_engine.write_log("[追价] 已禁用")
@@ -1148,10 +1250,11 @@ class TradingWidget(QtWidgets.QWidget):
         """获取当前追价配置"""
         return {
             "enabled": self.chase_check.isChecked(),
-            "max_chase_times": self.chase_times_spin.value(),
-            "max_slippage_pct": self.max_slippage_spin.value(),
-            "chase_step_pct": self.chase_step_spin.value(),
+            "max_chase_times": 10,  # 使用较大的默认值（不再在UI中显示，避免与重试次数重复）
             "chase_interval": 0.5,  # 固定追价间隔
+            "timeout_seconds": 3.0,  # 超时阈值（秒）
+            "enable_timeout_cancel": True,  # 是否启用超时撤单
+            "max_retry_times": self.max_retry_times_spin.value(),  # 最大重委托次数
         }
 
     def on_direction_changed(self) -> None:
@@ -1542,8 +1645,8 @@ class TradingWidget(QtWidgets.QWidget):
         # 添加追价配置到reference中（如果启用追价）
         chase_config = self.get_chase_config()
         if chase_config["enabled"]:
-            # 将追价配置编码到reference中
-            chase_suffix = f"_Chase{chase_config['max_chase_times']}_Slip{chase_config['max_slippage_pct']}_Step{chase_config['chase_step_pct']}"
+            # 将追价配置编码到reference中（只保留重试次数，移除滑点限制）
+            chase_suffix = f"_Retry{chase_config['max_retry_times']}"
             reference += chase_suffix
 
         req: OrderRequest = OrderRequest(
@@ -1560,7 +1663,7 @@ class TradingWidget(QtWidgets.QWidget):
         # 记录订单信息到日志
         order_info = f"订单提交: {symbol} {req.direction.value} {volume}@{price:.3f}"
         if chase_config["enabled"]:
-            chase_info = f"[追价: {chase_config['max_chase_times']}次, 滑点≤{chase_config['max_slippage_pct']}%]"
+            chase_info = f"[追价: 重试{chase_config['max_retry_times']}次]"
             self.main_engine.write_log(f"{order_info} {chase_info}")
         else:
             self.main_engine.write_log(order_info)
@@ -1577,6 +1680,15 @@ class TradingWidget(QtWidgets.QWidget):
         for order in order_list:
             req: CancelRequest = order.create_cancel_request()
             self.main_engine.cancel_order(req, order.gateway_name)
+        
+        # 清理所有gateway的追价订单（包括等待tick数据的订单，即使它们不在active_orders中）
+        # 这对于Futu gateway特别重要，因为等待tick数据时订单状态是CANCELLED，不在active_orders中
+        for gateway_name, gateway in self.main_engine.gateways.items():
+            if hasattr(gateway, 'cancel_all_chase_orders'):
+                try:
+                    gateway.cancel_all_chase_orders()
+                except Exception as e:
+                    self.main_engine.write_log(f"清理{gateway_name}的追价订单时发生异常：{str(e)}")
 
     def update_with_cell(self, cell: BaseCell) -> None:
         """"""
