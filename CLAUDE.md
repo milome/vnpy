@@ -3968,6 +3968,24 @@ if req.symbol.endswith("main") and req.exchange == Exchange.HKFE:
     symbol = main_symbol_hk  # 使用主连代码查询
 ```
 
+**文件2**: `vnpy_futu/vnpy_futu/datafeed.py` - `query_bar_history()` 方法
+
+```python
+# 处理主力合约历史数据查询
+# 直接使用主连代码，不转换为HK_FUTURE格式
+if req.symbol.endswith("main") and req.exchange == Exchange.HKFE:
+    futu_symbol = f"HK.{req.symbol}"  # HK.MHImain
+```
+
+### 修改涉及的数据获取路径
+
+DataManager下载历史数据有两个路径，均已修改：
+
+| 路径 | 文件 | 方法 | 状态 |
+|------|------|------|------|
+| Gateway查询 | `futu_gateway.py` | `query_bar_history()` | ✅ 已修改 |
+| Datafeed查询 | `datafeed.py` | `query_bar_history()` | ✅ 已修改 |
+
 ### 效果对比
 
 | 场景 | 修改前 | 修改后 |

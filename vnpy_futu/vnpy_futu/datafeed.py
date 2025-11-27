@@ -141,6 +141,16 @@ class Datafeed(BaseDatafeed):
             # 转换合约代码
             futu_symbol = convert_symbol_vt2futu(req.symbol, req.exchange)
             
+            # 处理主力合约历史数据查询
+            # 说明：查询历史数据时，直接使用主连代码（如HK.MHImain），不转换为HK_FUTURE格式
+            # 这样返回的是主连历史数据，自动包含各时段的主力合约数据，避免以下问题：
+            # - 当提前切换主力合约后（如当前是11月但主力已切换到12月合约MHI2512）
+            # - 如果使用当前主力合约查询历史数据，数据不能真实反映当时的成交情况
+            # - 直接使用主连代码查询，富途会返回各时段真正的主力合约数据
+            if req.symbol.endswith("main") and req.exchange == Exchange.HKFE:
+                futu_symbol = f"HK.{req.symbol}"
+                safe_output(output, f"查询历史数据：使用主连代码 {futu_symbol}（包含各时段主力合约数据）")
+            
             # 转换K线周期
             ktype = INTERVAL_VT2FUTU[req.interval]
             
