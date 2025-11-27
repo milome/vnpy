@@ -1970,7 +1970,8 @@ class ChartWindow(QtWidgets.QWidget):
     K线图表窗口，作为独立窗口显示实时K线数据。
     
     功能：
-    - 默认显示最近7天的1分钟K线数据
+    - 支持多周期K线显示（1分钟、5分钟、1小时、4小时、1天）
+    - 支持从数据库或CSV文件加载数据
     - 根据tickdata实时更新K线
     - 支持切换不同合约
     - 底部滚动条可以快速切换时间范围
@@ -1978,6 +1979,19 @@ class ChartWindow(QtWidgets.QWidget):
     
     # 默认显示的合约
     DEFAULT_SYMBOL: str = "MHImain.HKFE"
+    
+    # 周期选项映射
+    INTERVAL_MAP: dict = {
+        "1分钟": "1m",
+        "5分钟": "5m",
+        "1小时": "1h",
+        "4小时": "4h",
+        "1天": "1d"
+    }
+    
+    # 数据源选项
+    DATA_SOURCE_DB: str = "数据库"
+    DATA_SOURCE_CSV: str = "CSV文件"
     
     signal_tick: QtCore.Signal = QtCore.Signal(Event)
     signal_history: QtCore.Signal = QtCore.Signal(object)
@@ -1992,6 +2006,15 @@ class ChartWindow(QtWidgets.QWidget):
         # 当前显示的合约
         self.current_vt_symbol: str = ""
         
+        # 当前选择的周期
+        self.current_interval: str = "1m"
+        
+        # 当前数据源
+        self.current_data_source: str = self.DATA_SOURCE_DB
+        
+        # CSV文件路径
+        self.csv_file_path: str = ""
+        
         # K线生成器（用于将tick合成K线）
         self.bg: "BarGenerator" = None
         
@@ -2003,6 +2026,19 @@ class ChartWindow(QtWidgets.QWidget):
         
         # 历史数据缓存（用于滚动条）
         self.history_data: list = []
+        
+        # 当前未完成的K线（用于大周期实时更新）
+        self._current_bar: "BarData" = None
+        self._current_bar_period: "datetime" = None
+        self._current_bar_index: int = -1
+        
+        # 周期开始时的基准成交量（用于计算周期内成交量）
+        self._period_start_volume: float = 0
+        self._period_start_turnover: float = 0
+        
+        # 数据缺口状态
+        self._has_data_gap: bool = False
+        self._gap_info: str = ""
         
         self.init_ui()
         self.register_event()
@@ -2029,22 +2065,97 @@ class ChartWindow(QtWidgets.QWidget):
         self.switch_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("切换"))
         self.switch_button.clicked.connect(self.switch_chart)
         
+        # 周期选择下拉框
+        self.interval_combo: QtWidgets.QComboBox = QtWidgets.QComboBox()
+        for name in self.INTERVAL_MAP.keys():
+            self.interval_combo.addItem(name)
+        self.interval_combo.setCurrentText("1分钟")
+        self.interval_combo.setToolTip(_("选择K线周期"))
+        self.interval_combo.setFixedWidth(80)
+        self.interval_combo.currentTextChanged.connect(self.on_interval_changed)
+        
+        # 数据源选择下拉框
+        self.datasource_combo: QtWidgets.QComboBox = QtWidgets.QComboBox()
+        self.datasource_combo.addItem(self.DATA_SOURCE_DB)
+        self.datasource_combo.addItem(self.DATA_SOURCE_CSV)
+        self.datasource_combo.setCurrentText(self.DATA_SOURCE_DB)
+        self.datasource_combo.setToolTip(_("选择数据加载来源"))
+        self.datasource_combo.setFixedWidth(80)
+        self.datasource_combo.currentTextChanged.connect(self.on_datasource_changed)
+        
+        # CSV文件选择按钮
+        self.csv_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("选择文件"))
+        self.csv_button.clicked.connect(self.select_csv_file)
+        self.csv_button.setToolTip(_("选择CSV数据文件"))
+        self.csv_button.setFixedWidth(70)
+        self.csv_button.setEnabled(False)  # 默认禁用，只有选择CSV数据源时启用
+        
+        # CSV文件路径显示
+        self.csv_path_label: QtWidgets.QLabel = QtWidgets.QLabel("")
+        self.csv_path_label.setStyleSheet("color: #666; font-size: 11px;")
+        self.csv_path_label.setToolTip("")
+        
+        # 日期时间选择器（只需设置起始时间，结束时间默认为最新）
+        self.start_datetime: QtWidgets.QDateTimeEdit = QtWidgets.QDateTimeEdit()
+        self.start_datetime.setDisplayFormat("yyyy-MM-dd HH:mm")
+        self.start_datetime.setCalendarPopup(True)
+        # 默认开始时间：7天前
+        default_start = QtCore.QDateTime.currentDateTime().addDays(-7)
+        self.start_datetime.setDateTime(default_start)
+        self.start_datetime.setToolTip(_("历史数据开始时间，结束时间默认为最新"))
+        
         # 刷新按钮
-        self.refresh_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("刷新"))
+        self.refresh_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("加载"))
         self.refresh_button.clicked.connect(self.refresh_chart)
+        self.refresh_button.setToolTip(_("从起始时间加载数据到最新"))
+        
+        # 跳转到指定日期
+        self.goto_date: QtWidgets.QDateTimeEdit = QtWidgets.QDateTimeEdit()
+        self.goto_date.setDisplayFormat("MM-dd HH:mm")
+        self.goto_date.setCalendarPopup(True)
+        self.goto_date.setDateTime(QtCore.QDateTime.currentDateTime())
+        self.goto_date.setToolTip(_("选择要跳转到的日期时间"))
+        self.goto_date.setFixedWidth(110)
+        
+        self.goto_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("跳转"))
+        self.goto_button.clicked.connect(self.goto_datetime)
+        self.goto_button.setToolTip(_("跳转到指定日期时间"))
         
         # 跳转到最新按钮
         self.latest_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("最新"))
         self.latest_button.clicked.connect(self.goto_latest)
         self.latest_button.setToolTip(_("跳转到最新K线"))
         
-        # 顶部布局
-        hbox: QtWidgets.QHBoxLayout = QtWidgets.QHBoxLayout()
-        hbox.addWidget(QtWidgets.QLabel(_("合约:")))
-        hbox.addWidget(self.symbol_line, 1)
-        hbox.addWidget(self.switch_button)
-        hbox.addWidget(self.refresh_button)
-        hbox.addWidget(self.latest_button)
+        # 保存CSV按钮
+        self.save_csv_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("保存CSV"))
+        self.save_csv_button.clicked.connect(self.save_to_csv)
+        self.save_csv_button.setToolTip(_("将当前加载的数据保存为CSV文件"))
+        
+        # 顶部布局 - 第一行：合约选择、周期、数据源
+        hbox1: QtWidgets.QHBoxLayout = QtWidgets.QHBoxLayout()
+        hbox1.addWidget(QtWidgets.QLabel(_("合约:")))
+        hbox1.addWidget(self.symbol_line, 1)
+        hbox1.addWidget(QtWidgets.QLabel(_("周期:")))
+        hbox1.addWidget(self.interval_combo)
+        hbox1.addWidget(QtWidgets.QLabel(_("数据源:")))
+        hbox1.addWidget(self.datasource_combo)
+        hbox1.addWidget(self.csv_button)
+        hbox1.addWidget(self.csv_path_label)
+        hbox1.addWidget(self.switch_button)
+        
+        # 顶部布局 - 第二行：时间范围选择（结束时间默认为最新）
+        hbox2: QtWidgets.QHBoxLayout = QtWidgets.QHBoxLayout()
+        hbox2.addWidget(QtWidgets.QLabel(_("起始时间:")))
+        hbox2.addWidget(self.start_datetime)
+        hbox2.addWidget(self.refresh_button)
+        hbox2.addSpacing(20)
+        hbox2.addWidget(QtWidgets.QLabel(_("跳转:")))
+        hbox2.addWidget(self.goto_date)
+        hbox2.addWidget(self.goto_button)
+        hbox2.addWidget(self.latest_button)
+        hbox2.addSpacing(20)
+        hbox2.addWidget(self.save_csv_button)
+        hbox2.addStretch()
         
         # 创建K线图表
         self.chart = ChartWidget()
@@ -2100,19 +2211,155 @@ class ChartWindow(QtWidgets.QWidget):
         # 总体布局
         vbox: QtWidgets.QVBoxLayout = QtWidgets.QVBoxLayout()
         vbox.setContentsMargins(10, 10, 10, 10)
-        vbox.addLayout(hbox)
+        vbox.addLayout(hbox1)
+        vbox.addLayout(hbox2)
         vbox.addLayout(chart_layout, 1)
         vbox.addLayout(slider_layout)
         vbox.addWidget(self.status_label)
         
         self.setLayout(vbox)
-        self.resize(1000, 700)
+        self.resize(1100, 750)
     
     def register_event(self) -> None:
         """注册事件监听"""
         self.signal_tick.connect(self.process_tick_event)
         self.signal_history.connect(self.process_history_data)
         self.event_engine.register(EVENT_TICK, self.signal_tick.emit)
+    
+    def on_interval_changed(self, text: str) -> None:
+        """周期选择改变时的处理"""
+        self.current_interval = self.INTERVAL_MAP.get(text, "1m")
+        # 如果已加载合约，自动刷新
+        if self.current_vt_symbol:
+            self.refresh_chart()
+    
+    def on_datasource_changed(self, text: str) -> None:
+        """数据源选择改变时的处理"""
+        self.current_data_source = text
+        
+        # 根据数据源启用/禁用CSV文件选择按钮
+        if text == self.DATA_SOURCE_CSV:
+            self.csv_button.setEnabled(True)
+            # 如果已选择了CSV文件，显示路径
+            if self.csv_file_path:
+                self.csv_path_label.setText(self.csv_file_path.split("/")[-1])
+            else:
+                self.csv_path_label.setText(_("请选择文件"))
+        else:
+            self.csv_button.setEnabled(False)
+            self.csv_path_label.setText("")
+    
+    def select_csv_file(self) -> None:
+        """选择CSV数据文件"""
+        file_path, selected_filter = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            _("选择CSV数据文件"),
+            "",
+            "CSV Files (*.csv);;All Files (*)"
+        )
+        
+        if file_path:
+            self.csv_file_path = file_path
+            # 显示文件名（不显示完整路径）
+            file_name = file_path.split("/")[-1].split("\\")[-1]
+            self.csv_path_label.setText(file_name)
+            self.csv_path_label.setToolTip(file_path)
+            
+            # 如果已选择合约，自动加载
+            if self.current_vt_symbol:
+                self.refresh_chart()
+    
+    def save_to_csv(self) -> None:
+        """将当前加载的数据保存为CSV文件"""
+        if not self.history_data:
+            QtWidgets.QMessageBox.warning(
+                self,
+                _("警告"),
+                _("没有可保存的数据，请先加载数据")
+            )
+            return
+        
+        # 生成默认文件名
+        from datetime import datetime
+        interval_name = self.interval_combo.currentText()
+        default_name = f"{self.current_vt_symbol}_{self.current_interval}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        
+        file_path, selected_filter = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            _("保存CSV文件"),
+            default_name,
+            "CSV Files (*.csv);;All Files (*)"
+        )
+        
+        if not file_path:
+            return
+        
+        try:
+            import csv
+            
+            with open(file_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                
+                # 写入表头
+                writer.writerow([
+                    'datetime', 'open', 'high', 'low', 'close', 
+                    'volume', 'turnover', 'open_interest'
+                ])
+                
+                # 写入数据
+                for bar in self.history_data:
+                    writer.writerow([
+                        bar.datetime.strftime('%Y-%m-%d %H:%M:%S'),
+                        bar.open_price,
+                        bar.high_price,
+                        bar.low_price,
+                        bar.close_price,
+                        bar.volume,
+                        bar.turnover if bar.turnover else 0,
+                        bar.open_interest if bar.open_interest else 0
+                    ])
+            
+            self.main_engine.write_log(f"[保存CSV] 已保存 {len(self.history_data)} 根K线到 {file_path}")
+            
+            QtWidgets.QMessageBox.information(
+                self,
+                _("成功"),
+                _("已保存 {} 根K线到:\n{}").format(len(self.history_data), file_path)
+            )
+            
+        except Exception as e:
+            error_msg = str(e).replace("{", "{{").replace("}", "}}")
+            self.main_engine.write_log(f"[保存CSV] 保存失败: {error_msg}")
+            QtWidgets.QMessageBox.critical(
+                self,
+                _("错误"),
+                _("保存失败: {}").format(str(e))
+            )
+    
+    def _get_interval_enum(self) -> "Interval":
+        """根据当前选择的周期返回Interval枚举"""
+        from vnpy.trader.constant import Interval
+        
+        interval_map = {
+            "1m": Interval.MINUTE,
+            "5m": Interval.MINUTE_5,
+            "1h": Interval.HOUR,
+            "4h": Interval.HOUR_4,
+            "1d": Interval.DAILY
+        }
+        return interval_map.get(self.current_interval, Interval.MINUTE)
+    
+    def _get_future_bars(self) -> int:
+        """根据当前周期返回未来空间的K线数量"""
+        # 未来2小时的空间，根据不同周期计算K线数量
+        future_bars_map = {
+            "1m": 120,    # 2小时 = 120分钟
+            "5m": 24,     # 2小时 = 24根5分钟K线
+            "1h": 2,      # 2小时 = 2根1小时K线
+            "4h": 1,      # 4小时周期，预留1根
+            "1d": 1       # 日线周期，预留1根
+        }
+        return future_bars_map.get(self.current_interval, 120)
     
     def switch_chart(self) -> None:
         """切换到新的合约图表"""
@@ -2129,6 +2376,22 @@ class ChartWindow(QtWidgets.QWidget):
         self.history_loaded = False
         self.history_data = []
         
+        # 重置当前K线状态
+        self._current_bar = None
+        self._current_bar_period = None
+        self._current_bar_index = -1
+        
+        # 重置成交量追踪状态
+        self._period_start_volume = 0
+        self._period_start_turnover = 0
+        self._bar_historical_volume = 0
+        self._bar_historical_turnover = 0
+        self._need_init_baseline = True
+        
+        # 重置数据缺口状态
+        self._has_data_gap = False
+        self._gap_info = ""
+        
         # 清空图表
         self.chart.clear_all()
         
@@ -2141,8 +2404,9 @@ class ChartWindow(QtWidgets.QWidget):
         from vnpy.trader.utility import BarGenerator
         self.bg = BarGenerator(self.on_bar)
         
-        # 更新窗口标题
-        self.setWindowTitle(_("K线图表 - {}").format(vt_symbol))
+        # 更新窗口标题（显示合约和周期）
+        interval_name = self.interval_combo.currentText()
+        self.setWindowTitle(_("K线图表 - {} - {}").format(vt_symbol, interval_name))
         
         # 更新状态
         self.status_label.setText(_("正在加载 {} 的历史数据...").format(vt_symbol))
@@ -2158,15 +2422,119 @@ class ChartWindow(QtWidgets.QWidget):
         if self.current_vt_symbol:
             self.history_loaded = False
             self.history_data = []
+            
+            # 重置当前K线状态
+            self._current_bar = None
+            self._current_bar_period = None
+            self._current_bar_index = -1
+            
+            # 重置成交量追踪状态
+            self._period_start_volume = 0
+            self._period_start_turnover = 0
+            self._bar_historical_volume = 0
+            self._bar_historical_turnover = 0
+            self._need_init_baseline = True
+            
+            # 重置数据缺口状态
+            self._has_data_gap = False
+            self._gap_info = ""
+            
             self.chart.clear_all()
+            self.status_label.setStyleSheet("color: #888; font-size: 12px;")
             self.status_label.setText(_("正在刷新 {} 的数据...").format(self.current_vt_symbol))
             self.load_history_data(self.current_vt_symbol)
     
     def goto_latest(self) -> None:
-        """跳转到最新K线（包含未来空间）"""
+        """
+        跳转到最新K线（包含未来空间）
+        
+        确保各个周期都能正确跳转到最新的实时K线
+        """
+        if not self.history_data:
+            return
+        
+        # 设置滚动条到最右边
         self.time_slider.setValue(100)
+        
         # 扩展限制并移动到扩展后的末尾
         self.extend_chart_x_limit(move_to_end=True)
+        
+        # 更新状态显示
+        if self.history_data:
+            last_bar = self.history_data[-1]
+            interval_name = self.interval_combo.currentText()
+            
+            # 检查是否是当前进行中的K线
+            is_current = ""
+            if hasattr(self, '_current_bar') and self._current_bar is not None:
+                if self._current_bar.datetime == last_bar.datetime:
+                    is_current = _(" (进行中)")
+            
+            self.status_label.setText(
+                _("已跳转到最新 | {} | {} | 最后K线: {}{}").format(
+                    self.current_vt_symbol,
+                    interval_name,
+                    last_bar.datetime.strftime("%m-%d %H:%M"),
+                    is_current
+                )
+            )
+    
+    def goto_datetime(self) -> None:
+        """跳转到指定日期时间"""
+        if not self.history_data:
+            return
+        
+        # 获取目标日期时间
+        target_qdt = self.goto_date.dateTime()
+        target_py = target_qdt.toPython()
+        
+        # 在历史数据中查找最接近的K线索引
+        target_ix = None
+        min_diff = None
+        
+        for ix, bar in enumerate(self.history_data):
+            # 比较时间差（忽略时区）
+            bar_dt = bar.datetime.replace(tzinfo=None)
+            target_dt = target_py.replace(tzinfo=None) if hasattr(target_py, 'tzinfo') else target_py
+            
+            diff = abs((bar_dt - target_dt).total_seconds())
+            
+            if min_diff is None or diff < min_diff:
+                min_diff = diff
+                target_ix = ix
+        
+        if target_ix is not None:
+            # 计算滚动条位置（让目标K线显示在视图中央）
+            visible_bars = self.chart._bar_count
+            right_ix = target_ix + visible_bars // 2
+            
+            total_bars = len(self.history_data)
+            future_bars = self._get_future_bars()
+            max_right_ix = total_bars + future_bars
+            
+            right_ix = max(visible_bars, min(max_right_ix, right_ix))
+            
+            # 更新图表视图
+            self.chart._right_ix = right_ix
+            self.chart._update_x_range()
+            
+            # 更新滚动条位置
+            if max_right_ix > visible_bars:
+                slider_value = int((right_ix - visible_bars) / (max_right_ix - visible_bars) * 100)
+                slider_value = max(0, min(100, slider_value))
+                self.time_slider.blockSignals(True)
+                self.time_slider.setValue(slider_value)
+                self.time_slider.blockSignals(False)
+            
+            # 更新状态
+            bar = self.history_data[target_ix]
+            self.status_label.setText(
+                _("已跳转到 {} | 索引 {}/{}").format(
+                    bar.datetime.strftime("%m-%d %H:%M"),
+                    target_ix + 1,
+                    total_bars
+                )
+            )
     
     def on_time_slider_changed(self, value: int) -> None:
         """时间滚动条值改变时更新图表视图（横向滚动）"""
@@ -2180,8 +2548,8 @@ class ChartWindow(QtWidgets.QWidget):
         # 获取当前显示的K线数量
         visible_bars = self.chart._bar_count
         
-        # 扩展未来2小时的空间（1分钟K线 = 120根）
-        future_bars = 120
+        # 根据当前周期获取未来空间K线数量
+        future_bars = self._get_future_bars()
         
         # 先确保图表的x轴限制已扩展
         self.extend_chart_x_limit()
@@ -2220,8 +2588,8 @@ class ChartWindow(QtWidgets.QWidget):
         self.chart._bar_count = bar_count
         self.chart._update_x_range()
         
-        # 扩展未来2小时的空间（1分钟K线 = 120根）
-        future_bars = 120
+        # 根据当前周期获取未来空间K线数量
+        future_bars = self._get_future_bars()
         max_right_ix = total_bars + future_bars
         
         # 同步更新时间滚动条位置
@@ -2238,52 +2606,71 @@ class ChartWindow(QtWidgets.QWidget):
     def load_history_data(self, vt_symbol: str) -> None:
         """加载历史K线数据"""
         from threading import Thread
-        from datetime import datetime, timedelta
+        from datetime import datetime
         from tzlocal import get_localzone_name
+        
+        # 获取用户选择的起始时间
+        start_qdt = self.start_datetime.dateTime()
+        
+        # 转换为Python datetime
+        start_py = start_qdt.toPython()
+        
+        # 获取当前选择的周期和数据源
+        interval_enum = self._get_interval_enum()
+        data_source = self.current_data_source
+        csv_path = self.csv_file_path
         
         def _load():
             try:
                 from vnpy.trader.utility import extract_vt_symbol, ZoneInfo
                 from vnpy.trader.constant import Interval
-                from vnpy.trader.object import HistoryRequest
+                from vnpy.trader.object import HistoryRequest, BarData
                 from vnpy.trader.database import get_database
                 from vnpy.trader.datafeed import get_datafeed
                 
                 symbol, exchange = extract_vt_symbol(vt_symbol)
                 
-                # 计算时间范围（最近7天）
-                end: datetime = datetime.now(ZoneInfo(get_localzone_name()))
-                start: datetime = end - timedelta(days=7)
+                # 起始时间使用用户选择，结束时间使用当前最新时间
+                local_tz = ZoneInfo(get_localzone_name())
+                start: datetime = start_py.replace(tzinfo=local_tz)
+                end: datetime = datetime.now(local_tz)  # 结束时间始终为当前最新
                 
-                req: HistoryRequest = HistoryRequest(
-                    symbol=symbol,
-                    exchange=exchange,
-                    interval=Interval.MINUTE,
-                    start=start,
-                    end=end
-                )
-                
-                # 尝试从gateway获取历史数据
-                contract = self.main_engine.get_contract(vt_symbol)
                 data = None
                 
-                if contract:
-                    if contract.history_data:
-                        data = self.main_engine.query_history(req, contract.gateway_name)
-                    else:
-                        # 从数据源获取
-                        datafeed = get_datafeed()
-                        data = datafeed.query_bar_history(req)
+                # 根据数据源加载数据
+                if data_source == self.DATA_SOURCE_CSV:
+                    # 从CSV文件加载
+                    data = self._load_from_csv(csv_path, symbol, exchange, interval_enum, start, end)
                 else:
-                    # 从数据库加载
-                    database = get_database()
-                    data = database.load_bar_data(
-                        symbol,
-                        exchange,
-                        Interval.MINUTE,
-                        start,
-                        end
+                    # 从数据库或网关加载
+                    req: HistoryRequest = HistoryRequest(
+                        symbol=symbol,
+                        exchange=exchange,
+                        interval=interval_enum,
+                        start=start,
+                        end=end
                     )
+                    
+                    # 尝试从gateway获取历史数据
+                    contract = self.main_engine.get_contract(vt_symbol)
+                    
+                    if contract:
+                        if contract.history_data:
+                            data = self.main_engine.query_history(req, contract.gateway_name)
+                        else:
+                            # 从数据源获取
+                            datafeed = get_datafeed()
+                            data = datafeed.query_bar_history(req)
+                    else:
+                        # 从数据库加载
+                        database = get_database()
+                        data = database.load_bar_data(
+                            symbol,
+                            exchange,
+                            interval_enum,
+                            start,
+                            end
+                        )
                 
                 # 发送历史数据更新信号
                 if data:
@@ -2300,6 +2687,657 @@ class ChartWindow(QtWidgets.QWidget):
         # 在后台线程加载
         thread: Thread = Thread(target=_load)
         thread.start()
+    
+    def _load_from_csv(
+        self,
+        csv_path: str,
+        symbol: str,
+        exchange: "Exchange",
+        interval: "Interval",
+        start: "datetime",
+        end: "datetime"
+    ) -> list:
+        """从CSV文件加载K线数据"""
+        import csv
+        from datetime import datetime
+        from vnpy.trader.object import BarData
+        from vnpy.trader.constant import Interval
+        
+        if not csv_path:
+            self.main_engine.write_log("未选择CSV文件")
+            return []
+        
+        try:
+            bars: list[BarData] = []
+            
+            with open(csv_path, "r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                
+                for row in reader:
+                    try:
+                        # 解析日期时间（支持多种格式）
+                        dt_str = row.get("datetime", row.get("date", row.get("time", "")))
+                        if not dt_str:
+                            continue
+                        
+                        # 尝试多种日期格式
+                        dt = None
+                        for fmt in [
+                            "%Y-%m-%d %H:%M:%S",
+                            "%Y-%m-%d %H:%M",
+                            "%Y/%m/%d %H:%M:%S",
+                            "%Y/%m/%d %H:%M",
+                            "%Y-%m-%dT%H:%M:%S",
+                            "%Y-%m-%d"
+                        ]:
+                            try:
+                                dt = datetime.strptime(dt_str, fmt)
+                                break
+                            except ValueError:
+                                continue
+                        
+                        if dt is None:
+                            continue
+                        
+                        # 添加时区
+                        if dt.tzinfo is None:
+                            from tzlocal import get_localzone_name
+                            from vnpy.trader.utility import ZoneInfo
+                            dt = dt.replace(tzinfo=ZoneInfo(get_localzone_name()))
+                        
+                        # 过滤时间范围
+                        if dt < start or dt > end:
+                            continue
+                        
+                        # 创建BarData对象
+                        bar = BarData(
+                            symbol=symbol,
+                            exchange=exchange,
+                            datetime=dt,
+                            interval=interval,
+                            open_price=float(row.get("open", row.get("open_price", 0))),
+                            high_price=float(row.get("high", row.get("high_price", 0))),
+                            low_price=float(row.get("low", row.get("low_price", 0))),
+                            close_price=float(row.get("close", row.get("close_price", 0))),
+                            volume=float(row.get("volume", 0)),
+                            turnover=float(row.get("turnover", row.get("amount", 0))),
+                            open_interest=float(row.get("open_interest", row.get("oi", 0))),
+                            gateway_name="CSV"
+                        )
+                        bars.append(bar)
+                        
+                    except (ValueError, KeyError) as e:
+                        continue
+            
+            # 按时间排序
+            bars.sort(key=lambda x: x.datetime)
+            
+            self.main_engine.write_log(f"从CSV加载了 {len(bars)} 根K线数据")
+            return bars
+            
+        except Exception as e:
+            error_msg = str(e).replace("{", "{{").replace("}", "}}")
+            self.main_engine.write_log(f"CSV文件读取失败: {error_msg}")
+            return []
+    
+    def _detect_and_fill_gap(
+        self,
+        history: list,
+        vt_symbol: str,
+        interval: "Interval"
+    ) -> list:
+        """
+        检测并填充数据缺口
+        
+        对于所有周期的K线，检测历史数据与当前时间的gap：
+        - 1分钟周期：先从数据库加载，没有则从FUTU API获取
+        - 大周期（>1分钟）：先从数据库加载1分钟数据，没有则从FUTU API获取，然后合成
+        
+        注意：所有大周期合成都使用相同的 _synthesize_bars_from_minute 方法，
+        确保合成逻辑一致。
+        
+        Args:
+            history: 已加载的历史K线数据
+            vt_symbol: 合约代码
+            interval: K线周期
+            
+        Returns:
+            填充后的K线数据列表
+        """
+        from datetime import datetime, timedelta
+        from vnpy.trader.constant import Interval
+        from vnpy.trader.utility import extract_vt_symbol, ZoneInfo
+        from vnpy.trader.database import get_database
+        from tzlocal import get_localzone_name
+        
+        if not history:
+            return history
+        
+        try:
+            # 获取最后一根K线的时间
+            last_bar = history[-1]
+            last_bar_time = last_bar.datetime
+            
+            # 获取当前时间
+            local_tz = ZoneInfo(get_localzone_name())
+            now = datetime.now(local_tz)
+            
+            # 计算需要补齐的时间范围
+            gap_start = last_bar_time + timedelta(minutes=1)
+            gap_end = now
+            
+            # 如果没有gap，直接返回
+            if gap_start >= gap_end:
+                self._has_data_gap = False
+                return history
+            
+            # 计算gap的大小（小时）
+            gap_hours = (gap_end - gap_start).total_seconds() / 3600
+            
+            interval_name = self.interval_combo.currentText() if hasattr(self, 'interval_combo') else str(interval)
+            self.main_engine.write_log(
+                f"[数据补齐] 检测到{interval_name}数据缺口: {gap_start.strftime('%m-%d %H:%M')} - {gap_end.strftime('%m-%d %H:%M')} (约{gap_hours:.1f}小时)"
+            )
+            
+            # 从数据库加载1分钟数据来填充gap（仅1分钟周期尝试数据库）
+            symbol, exchange = extract_vt_symbol(vt_symbol)
+            minute_bars = []
+            
+            if interval == Interval.MINUTE:
+                # 1分钟周期：先尝试数据库
+                database = get_database()
+                minute_bars = database.load_bar_data(
+                    symbol,
+                    exchange,
+                    Interval.MINUTE,
+                    gap_start,
+                    gap_end
+                )
+                
+                if minute_bars:
+                    self.main_engine.write_log(f"[数据补齐] 从数据库加载了 {len(minute_bars)} 根1分钟K线用于补齐")
+            
+            # 如果没有从数据库获取到数据，尝试FUTU API
+            if not minute_bars:
+                self.main_engine.write_log("[数据补齐] 尝试从FUTU API获取1分钟数据...")
+                
+                minute_bars = self._fetch_bars_from_futu(
+                    symbol, exchange, Interval.MINUTE, gap_start, gap_end
+                )
+                
+                if not minute_bars:
+                    # 标记存在数据缺口，无法补齐
+                    self._has_data_gap = True
+                    self._gap_info = f"{gap_start.strftime('%m-%d %H:%M')} - {gap_end.strftime('%m-%d %H:%M')}"
+                    
+                    self.main_engine.write_log(
+                        f"[数据补齐] 未能获取到1分钟数据用于补齐。"
+                    )
+                    return history
+                
+                self.main_engine.write_log(f"[数据补齐] 从FUTU API获取了 {len(minute_bars)} 根1分钟K线")
+            
+            # 根据目标周期处理补齐数据
+            if interval == Interval.MINUTE:
+                # 1分钟周期：直接使用加载的1分钟数据
+                self._has_data_gap = False
+                self.main_engine.write_log(f"[数据补齐] 补齐了 {len(minute_bars)} 根1分钟K线")
+                
+                # 合并历史数据和补齐数据
+                result = list(history)
+                
+                # 检查是否有重复的时间戳
+                existing_times = {bar.datetime for bar in result}
+                for bar in minute_bars:
+                    if bar.datetime not in existing_times:
+                        result.append(bar)
+                
+                # 按时间排序
+                result.sort(key=lambda x: x.datetime)
+                return result
+            else:
+                # 大周期：从1分钟数据合成（使用统一的合成方法）
+                synthesized_bars = self._synthesize_bars_from_minute(
+                    minute_bars, interval, symbol, exchange
+                )
+                
+                if synthesized_bars:
+                    self.main_engine.write_log(f"[数据补齐] 从1分钟数据合成了 {len(synthesized_bars)} 根{interval_name}K线")
+                    self._has_data_gap = False
+                    
+                    # 合并历史数据和补齐数据
+                    # 注意：最后一根可能是未完成的K线，需要特殊处理
+                    result = list(history)
+                    
+                    for bar in synthesized_bars:
+                        # 检查是否与最后一根历史K线是同一周期
+                        if result and self._is_same_period(result[-1], bar, interval):
+                            # 更新最后一根K线
+                            result[-1] = self._merge_bars(result[-1], bar)
+                        else:
+                            result.append(bar)
+                    
+                    return result
+            
+            self._has_data_gap = False
+            return history
+            
+        except Exception as e:
+            error_msg = str(e).replace("{", "{{").replace("}", "}}")
+            self.main_engine.write_log(f"[数据补齐] 填充失败: {error_msg}")
+            self._has_data_gap = False
+            return history
+    
+    def _fetch_bars_from_futu(
+        self,
+        symbol: str,
+        exchange: "Exchange",
+        interval: "Interval",
+        start: "datetime",
+        end: "datetime"
+    ) -> list:
+        """
+        从FUTU API获取K线数据
+        
+        Args:
+            symbol: 合约代码
+            exchange: 交易所
+            interval: K线周期
+            start: 开始时间
+            end: 结束时间
+            
+        Returns:
+            K线数据列表，失败返回空列表
+        """
+        from vnpy.trader.object import HistoryRequest
+        
+        try:
+            # 尝试从main_engine获取datafeed
+            datafeed = None
+            
+            # 尝试获取已连接的datafeed
+            if hasattr(self.main_engine, 'get_datafeed'):
+                datafeed = self.main_engine.get_datafeed()
+            
+            # 如果没有现成的datafeed，尝试创建FUTU datafeed
+            if datafeed is None:
+                try:
+                    from vnpy_futu.datafeed import Datafeed as FutuDatafeed
+                    datafeed = FutuDatafeed()
+                    if not datafeed.init(output=self.main_engine.write_log):
+                        self.main_engine.write_log("[FUTU API] 无法初始化FUTU数据服务，请确保富途牛牛已启动")
+                        return []
+                except ImportError:
+                    self.main_engine.write_log("[FUTU API] 未安装vnpy_futu模块")
+                    return []
+                except Exception as e:
+                    error_msg = str(e).replace("{", "{{").replace("}", "}}")
+                    self.main_engine.write_log(f"[FUTU API] 初始化失败: {error_msg}")
+                    return []
+            
+            # 创建历史数据请求
+            req = HistoryRequest(
+                symbol=symbol,
+                exchange=exchange,
+                interval=interval,
+                start=start,
+                end=end
+            )
+            
+            # 查询数据
+            bars = datafeed.query_bar_history(req, output=self.main_engine.write_log)
+            
+            if bars:
+                self.main_engine.write_log(f"[FUTU API] 成功获取 {len(bars)} 根K线数据")
+            else:
+                self.main_engine.write_log("[FUTU API] 未获取到数据")
+            
+            return bars
+            
+        except Exception as e:
+            error_msg = str(e).replace("{", "{{").replace("}", "}}")
+            self.main_engine.write_log(f"[FUTU API] 获取数据失败: {error_msg}")
+            return []
+    
+    def _synthesize_bars_from_minute(
+        self,
+        minute_bars: list,
+        target_interval: "Interval",
+        symbol: str,
+        exchange: "Exchange"
+    ) -> list:
+        """
+        从1分钟K线合成大周期K线
+        
+        支持的周期：5分钟、1小时、4小时、日线
+        4小时K线按照HKFE交易时段边界合成
+        
+        特殊处理：
+        - 第三根4小时K线（01:15-03:00 + 09:15-11:29）跨越周末或金融假期时，
+          需要正确合并数据
+        
+        Args:
+            minute_bars: 1分钟K线数据列表
+            target_interval: 目标周期
+            symbol: 合约代码
+            exchange: 交易所
+            
+        Returns:
+            合成的K线数据列表
+        """
+        from vnpy.trader.constant import Interval
+        from vnpy.trader.object import BarData
+        
+        if not minute_bars:
+            return []
+        
+        # 对于4小时周期，使用特殊的合成逻辑处理跨假期情况
+        if target_interval == Interval.HOUR_4:
+            return self._synthesize_4hour_bars(minute_bars, symbol, exchange)
+        
+        # 其他周期使用标准逻辑
+        period_bars: dict = {}
+        
+        for bar in minute_bars:
+            period_start = self._get_period_start(bar.datetime, target_interval)
+            if period_start is None:
+                continue
+            
+            if period_start not in period_bars:
+                period_bars[period_start] = []
+            period_bars[period_start].append(bar)
+        
+        # 合成K线
+        result: list[BarData] = []
+        
+        for period_start in sorted(period_bars.keys()):
+            bars = period_bars[period_start]
+            if not bars:
+                continue
+            
+            # 按时间排序
+            bars.sort(key=lambda x: x.datetime)
+            
+            # 计算OHLCV
+            synthesized = BarData(
+                symbol=symbol,
+                exchange=exchange,
+                datetime=period_start,
+                interval=target_interval,
+                open_price=bars[0].open_price,
+                high_price=max(b.high_price for b in bars),
+                low_price=min(b.low_price for b in bars),
+                close_price=bars[-1].close_price,
+                volume=sum(b.volume for b in bars),
+                turnover=sum(b.turnover for b in bars),
+                open_interest=bars[-1].open_interest,
+                gateway_name="SYNTHESIZED"
+            )
+            result.append(synthesized)
+        
+        return result
+    
+    def _synthesize_4hour_bars(
+        self,
+        minute_bars: list,
+        symbol: str,
+        exchange: "Exchange"
+    ) -> list:
+        """
+        专门合成4小时K线，正确处理跨周末和金融假期的情况
+        
+        第三根4小时K线（01:15-03:00 + 09:15-11:29）特殊处理：
+        - 周末：周五夜盘01:15开始，周一早盘11:29结束
+        - 金融假期：假期前夜盘01:15开始，假期后第一个交易日11:29结束
+        """
+        from datetime import timedelta
+        from vnpy.trader.constant import Interval
+        from vnpy.trader.object import BarData
+        
+        if not minute_bars:
+            return []
+        
+        # 按时间排序
+        sorted_bars = sorted(minute_bars, key=lambda x: x.datetime)
+        
+        # 分组逻辑：维护一个"待完成的第三周期"
+        period_bars: dict = {}
+        pending_period3_start = None  # 待完成的第三周期起始时间
+        pending_period3_bars = []     # 待完成的第三周期数据
+        
+        for bar in sorted_bars:
+            dt = bar.datetime
+            hour = dt.hour
+            minute = dt.minute
+            time_value = hour * 100 + minute
+            
+            # 判断属于哪个时段
+            if 1715 <= time_value <= 2114:
+                # 时段1: 17:15-21:14
+                period_start = dt.replace(hour=17, minute=15, second=0, microsecond=0)
+                if period_start not in period_bars:
+                    period_bars[period_start] = []
+                period_bars[period_start].append(bar)
+                
+            elif 2115 <= time_value <= 2359:
+                # 时段2前半: 21:15-23:59
+                period_start = dt.replace(hour=21, minute=15, second=0, microsecond=0)
+                if period_start not in period_bars:
+                    period_bars[period_start] = []
+                period_bars[period_start].append(bar)
+                
+            elif 0 <= time_value <= 114:
+                # 时段2后半: 00:00-01:14
+                period_start = (dt - timedelta(days=1)).replace(hour=21, minute=15, second=0, microsecond=0)
+                if period_start not in period_bars:
+                    period_bars[period_start] = []
+                period_bars[period_start].append(bar)
+                
+            elif 115 <= time_value <= 300:
+                # 时段3前半: 01:15-03:00（夜盘尾段）
+                # 如果有待完成的第三周期，先完成它
+                if pending_period3_start is not None and pending_period3_bars:
+                    if pending_period3_start not in period_bars:
+                        period_bars[pending_period3_start] = []
+                    period_bars[pending_period3_start].extend(pending_period3_bars)
+                    pending_period3_bars = []
+                
+                # 开始新的第三周期
+                pending_period3_start = dt.replace(hour=1, minute=15, second=0, microsecond=0)
+                pending_period3_bars = [bar]
+                
+            elif 915 <= time_value <= 1129:
+                # 时段3后半: 09:15-11:29（早盘）
+                if pending_period3_start is not None:
+                    # 有未完成的第三周期（来自之前的01:15-03:00），继续添加数据
+                    pending_period3_bars.append(bar)
+                else:
+                    # 没有夜盘数据（意外停盘情况），创建新周期
+                    # 使用当天01:15作为起始时间
+                    period_start = dt.replace(hour=1, minute=15, second=0, microsecond=0)
+                    if period_start not in period_bars:
+                        period_bars[period_start] = []
+                    period_bars[period_start].append(bar)
+                
+            elif (1130 <= time_value <= 1200) or (1300 <= time_value <= 1629):
+                # 时段4: 11:30-12:00 + 13:00-16:29
+                # 如果有待完成的第三周期，先完成它
+                if pending_period3_start is not None and pending_period3_bars:
+                    if pending_period3_start not in period_bars:
+                        period_bars[pending_period3_start] = []
+                    period_bars[pending_period3_start].extend(pending_period3_bars)
+                    pending_period3_start = None
+                    pending_period3_bars = []
+                
+                period_start = dt.replace(hour=11, minute=30, second=0, microsecond=0)
+                if period_start not in period_bars:
+                    period_bars[period_start] = []
+                period_bars[period_start].append(bar)
+        
+        # 处理最后可能剩余的待完成第三周期
+        if pending_period3_start is not None and pending_period3_bars:
+            if pending_period3_start not in period_bars:
+                period_bars[pending_period3_start] = []
+            period_bars[pending_period3_start].extend(pending_period3_bars)
+        
+        # 合成K线
+        result: list[BarData] = []
+        
+        for period_start in sorted(period_bars.keys()):
+            bars = period_bars[period_start]
+            if not bars:
+                continue
+            
+            # 按时间排序
+            bars.sort(key=lambda x: x.datetime)
+            
+            # 计算OHLCV
+            synthesized = BarData(
+                symbol=symbol,
+                exchange=exchange,
+                datetime=period_start,
+                interval=Interval.HOUR_4,
+                open_price=bars[0].open_price,
+                high_price=max(b.high_price for b in bars),
+                low_price=min(b.low_price for b in bars),
+                close_price=bars[-1].close_price,
+                volume=sum(b.volume for b in bars),
+                turnover=sum(b.turnover for b in bars),
+                open_interest=bars[-1].open_interest,
+                gateway_name="SYNTHESIZED"
+            )
+            result.append(synthesized)
+        
+        return result
+    
+    def _get_period_start(self, dt: "datetime", interval: "Interval") -> "datetime":
+        """
+        根据周期获取K线的起始时间
+        
+        4小时K线按照HKFE交易时段边界：
+        1. 17:15-21:14：第一根4小时K线（时间戳：17:15）
+        2. 21:15-01:14：第二根4小时K线（时间戳：21:15）
+        3. 01:15-03:00 + 09:15-11:29：第三根4小时K线（时间戳：01:15）
+        4. 11:30-12:00 + 13:00-16:29：第四根4小时K线（时间戳：11:30）
+        
+        特殊情况：
+        - 周末：周五夜盘01:15开始的周期，延续到周一11:29结束
+        - 金融假期：假期前01:15开始的周期，延续到假期后第一个交易日11:29结束
+        """
+        from datetime import timedelta
+        from vnpy.trader.constant import Interval
+        
+        hour = dt.hour
+        minute = dt.minute
+        time_value = hour * 100 + minute
+        
+        if interval == Interval.MINUTE_5:
+            # 5分钟周期：按5分钟对齐
+            aligned_minute = (minute // 5) * 5
+            return dt.replace(minute=aligned_minute, second=0, microsecond=0)
+        
+        elif interval == Interval.HOUR:
+            # 1小时周期：按小时对齐
+            return dt.replace(minute=0, second=0, microsecond=0)
+        
+        elif interval == Interval.HOUR_4:
+            # 4小时周期：按HKFE交易时段边界
+            if 1715 <= time_value <= 2114:
+                # 时段1: 17:15-21:14
+                return dt.replace(hour=17, minute=15, second=0, microsecond=0)
+            
+            elif 2115 <= time_value <= 2359:
+                # 时段2前半: 21:15-23:59
+                return dt.replace(hour=21, minute=15, second=0, microsecond=0)
+            
+            elif 0 <= time_value <= 114:
+                # 时段2后半: 00:00-01:14（属于前一天21:15开始的周期）
+                return (dt - timedelta(days=1)).replace(hour=21, minute=15, second=0, microsecond=0)
+            
+            elif 115 <= time_value <= 300:
+                # 时段3前半: 01:15-03:00
+                return dt.replace(hour=1, minute=15, second=0, microsecond=0)
+            
+            elif 915 <= time_value <= 1129:
+                # 时段3后半: 09:15-11:29
+                # 需要判断是否跨越周末或金融假期
+                # 如果是周一（weekday=0），回溯到上周六的01:15
+                weekday = dt.weekday()
+                if weekday == 0:  # 周一
+                    # 回溯到上周六（2天前）的01:15
+                    return (dt - timedelta(days=2)).replace(hour=1, minute=15, second=0, microsecond=0)
+                else:
+                    # 非周一，使用当天的01:15
+                    return dt.replace(hour=1, minute=15, second=0, microsecond=0)
+            
+            elif (1130 <= time_value <= 1200) or (1300 <= time_value <= 1629):
+                # 时段4: 11:30-12:00 + 13:00-16:29
+                return dt.replace(hour=11, minute=30, second=0, microsecond=0)
+            
+            else:
+                # 非交易时段
+                return None
+        
+        elif interval == Interval.DAILY:
+            # 日线：按日期对齐
+            return dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        else:
+            # 默认按分钟对齐
+            return dt.replace(second=0, microsecond=0)
+    
+    def _is_same_period(self, bar1: "BarData", bar2: "BarData", interval: "Interval") -> bool:
+        """判断两根K线是否属于同一周期"""
+        period1 = self._get_period_start(bar1.datetime, interval)
+        period2 = self._get_period_start(bar2.datetime, interval)
+        return period1 == period2
+    
+    def _merge_bars(self, bar1: "BarData", bar2: "BarData") -> "BarData":
+        """合并两根K线（用于更新未完成的K线）"""
+        from vnpy.trader.object import BarData
+        
+        return BarData(
+            symbol=bar1.symbol,
+            exchange=bar1.exchange,
+            datetime=bar1.datetime,  # 保持原始时间戳
+            interval=bar1.interval,
+            open_price=bar1.open_price,  # 保持原始开盘价
+            high_price=max(bar1.high_price, bar2.high_price),
+            low_price=min(bar1.low_price, bar2.low_price),
+            close_price=bar2.close_price,  # 使用新的收盘价
+            volume=bar1.volume + bar2.volume,
+            turnover=bar1.turnover + bar2.turnover,
+            open_interest=bar2.open_interest,
+            gateway_name=bar1.gateway_name
+        )
+    
+    def _create_current_bar_from_tick(self, tick: "TickData") -> "BarData":
+        """
+        根据tick数据创建当前未完成的K线
+        用于大周期K线的实时更新
+        """
+        from vnpy.trader.object import BarData
+        
+        interval_enum = self._get_interval_enum()
+        period_start = self._get_period_start(tick.datetime, interval_enum)
+        
+        if period_start is None:
+            return None
+        
+        return BarData(
+            symbol=tick.symbol,
+            exchange=tick.exchange,
+            datetime=period_start,
+            interval=interval_enum,
+            open_price=tick.last_price,
+            high_price=tick.last_price,
+            low_price=tick.last_price,
+            close_price=tick.last_price,
+            volume=0,
+            turnover=0,
+            open_interest=tick.open_interest,
+            gateway_name=tick.gateway_name
+        )
     
     def subscribe_tick(self, vt_symbol: str) -> None:
         """订阅行情数据"""
@@ -2339,19 +3377,166 @@ class ChartWindow(QtWidgets.QWidget):
         if not self.history_loaded:
             return
         
-        # 用tick更新K线
-        if self.bg:
-            self.bg.update_tick(tick)
+        # 获取当前周期
+        interval_enum = self._get_interval_enum()
+        from vnpy.trader.constant import Interval
+        
+        if interval_enum == Interval.MINUTE:
+            # 1分钟周期：使用原有的BarGenerator
+            if self.bg:
+                self.bg.update_tick(tick)
+                
+                # 实时更新当前K线
+                if self.bg.bar:
+                    from vnpy.trader.object import BarData
+                    bar: BarData = copy(self.bg.bar)
+                    bar.datetime = bar.datetime.replace(second=0, microsecond=0)
+                    self.chart.update_bar(bar)
+        else:
+            # 大周期：直接更新当前未完成的K线
+            self._update_current_bar_with_tick(tick, interval_enum)
+    
+    def _update_current_bar_with_tick(self, tick: "TickData", interval: "Interval") -> None:
+        """
+        用tick数据更新当前大周期K线
+        
+        根据tick时间判断是否属于当前周期：
+        - 如果属于当前周期，更新当前K线
+        - 如果属于新周期，完成当前K线并创建新K线
+        
+        成交量计算：
+        - tick.volume 是当日累计成交量
+        - 需要记录周期开始时的基准成交量，用当前累计量减去基准得到周期内成交量
+        - 如果K线来自历史数据（有历史成交量），需要累加
+        """
+        from vnpy.trader.object import BarData
+        
+        # 获取tick所属的周期
+        tick_period = self._get_period_start(tick.datetime, interval)
+        
+        if tick_period is None:
+            # tick时间不在交易时段内
+            return
+        
+        # 获取当前累计成交量和成交额
+        current_volume = tick.volume if tick.volume else 0
+        current_turnover = tick.turnover if tick.turnover else 0
+        
+        # 检查是否有当前K线
+        if not hasattr(self, '_current_bar') or self._current_bar is None:
+            # 记录周期开始时的基准成交量
+            self._period_start_volume = current_volume
+            self._period_start_turnover = current_turnover
+            self._bar_historical_volume = 0
+            self._bar_historical_turnover = 0
+            self._need_init_baseline = False
             
-            # 实时更新当前K线
-            if self.bg.bar:
-                from vnpy.trader.object import BarData
-                bar: BarData = copy(self.bg.bar)
-                bar.datetime = bar.datetime.replace(second=0, microsecond=0)
-                self.chart.update_bar(bar)
+            # 创建新的当前K线（初始成交量为0，因为这是周期的第一个tick）
+            self._current_bar = BarData(
+                symbol=tick.symbol,
+                exchange=tick.exchange,
+                datetime=tick_period,
+                interval=interval,
+                open_price=tick.last_price,
+                high_price=tick.last_price,
+                low_price=tick.last_price,
+                close_price=tick.last_price,
+                volume=0,
+                turnover=0,
+                open_interest=tick.open_interest if tick.open_interest else 0,
+                gateway_name=tick.gateway_name
+            )
+            self._current_bar_period = tick_period
+            
+            # 添加到历史数据
+            self.history_data.append(self._current_bar)
+            self._current_bar_index = len(self.history_data) - 1
+            
+        elif self._current_bar_period is None or tick_period != self._current_bar_period:
+            # 新周期开始，完成当前K线
+            if self._current_bar_period is not None:
+                self.main_engine.write_log(
+                    f"[K线切换] {self._current_bar_period.strftime('%m-%d %H:%M')} -> {tick_period.strftime('%m-%d %H:%M')}"
+                )
+            else:
+                self.main_engine.write_log(
+                    f"[K线开始] 开始新周期: {tick_period.strftime('%m-%d %H:%M')}"
+                )
+            
+            # 记录新周期开始时的基准成交量
+            self._period_start_volume = current_volume
+            self._period_start_turnover = current_turnover
+            self._bar_historical_volume = 0
+            self._bar_historical_turnover = 0
+            self._need_init_baseline = False
+            
+            # 创建新的当前K线（初始成交量为0）
+            self._current_bar = BarData(
+                symbol=tick.symbol,
+                exchange=tick.exchange,
+                datetime=tick_period,
+                interval=interval,
+                open_price=tick.last_price,
+                high_price=tick.last_price,
+                low_price=tick.last_price,
+                close_price=tick.last_price,
+                volume=0,
+                turnover=0,
+                open_interest=tick.open_interest if tick.open_interest else 0,
+                gateway_name=tick.gateway_name
+            )
+            self._current_bar_period = tick_period
+            
+            # 添加到历史数据
+            self.history_data.append(self._current_bar)
+            self._current_bar_index = len(self.history_data) - 1
+            
+        else:
+            # 更新当前K线
+            
+            # 如果需要初始化基准（来自历史数据的当前K线）
+            if hasattr(self, '_need_init_baseline') and self._need_init_baseline:
+                self._period_start_volume = current_volume
+                self._period_start_turnover = current_turnover
+                self._need_init_baseline = False
+                self.main_engine.write_log(
+                    f"[成交量基准] 初始化基准: {current_volume}, 历史成交量: {self._bar_historical_volume}"
+                )
+            
+            self._current_bar.high_price = max(self._current_bar.high_price, tick.last_price)
+            self._current_bar.low_price = min(self._current_bar.low_price, tick.last_price)
+            self._current_bar.close_price = tick.last_price
+            
+            # 计算周期内的成交量
+            # = 历史成交量（来自加载数据）+ tick增量成交量（当前累计 - 基准）
+            tick_delta_volume = 0
+            tick_delta_turnover = 0
+            
+            if current_volume >= self._period_start_volume:
+                tick_delta_volume = current_volume - self._period_start_volume
+            
+            if current_turnover >= self._period_start_turnover:
+                tick_delta_turnover = current_turnover - self._period_start_turnover
+            
+            # 获取历史成交量
+            historical_volume = getattr(self, '_bar_historical_volume', 0)
+            historical_turnover = getattr(self, '_bar_historical_turnover', 0)
+            
+            self._current_bar.volume = historical_volume + tick_delta_volume
+            self._current_bar.turnover = historical_turnover + tick_delta_turnover
+            
+            if tick.open_interest:
+                self._current_bar.open_interest = tick.open_interest
+            
+            # 更新历史数据中的当前K线
+            if self._current_bar_index >= 0 and self._current_bar_index < len(self.history_data):
+                self.history_data[self._current_bar_index] = self._current_bar
+        
+        # 更新图表显示
+        self.chart.update_bar(self._current_bar)
     
     def on_bar(self, bar: "BarData") -> None:
-        """K线合成回调"""
+        """K线合成回调（仅用于1分钟周期）"""
         self.chart.update_bar(bar)
         # 更新历史数据缓存
         self.history_data.append(bar)
@@ -2368,11 +3553,27 @@ class ChartWindow(QtWidgets.QWidget):
         if first_bar.vt_symbol != self.current_vt_symbol:
             return
         
+        # 获取当前周期
+        interval_enum = self._get_interval_enum()
+        from vnpy.trader.constant import Interval
+        
+        # 尝试检测并填充数据缺口（所有周期都检测）
+        self.status_label.setText(_("正在检测数据缺口并补齐..."))
+        history = self._detect_and_fill_gap(
+            history,
+            self.current_vt_symbol,
+            interval_enum
+        )
+        
         # 缓存历史数据
         self.history_data = list(history)
         
+        # 标记最后一根K线是否为当前未完成的K线
+        self._mark_current_bar(history, interval_enum)
+        
         # 先设置未来空间，再更新历史数据
-        self.chart.set_future_bars(120)  # 2小时 = 120分钟
+        future_bars = self._get_future_bars()
+        self.chart.set_future_bars(future_bars)
         
         # 更新图表
         self.chart.update_history(history)
@@ -2385,21 +3586,118 @@ class ChartWindow(QtWidgets.QWidget):
             self.time_start_label.setText(start_time)
             self.time_end_label.setText(end_time)
         
-        # 更新状态
+        # 更新状态（显示周期和数据源）
+        interval_name = self.interval_combo.currentText()
+        source_name = self.datasource_combo.currentText()
+        
+        # 检查是否有当前未完成的K线
+        current_bar_info = ""
+        if hasattr(self, '_current_bar') and self._current_bar:
+            current_bar_info = _(" | 当前K线进行中")
+        
+        # 检查是否有数据缺口
+        gap_warning = ""
+        if hasattr(self, '_has_data_gap') and self._has_data_gap:
+            gap_warning = _(" | ⚠️数据有缺口")
+            # 设置状态标签为警告颜色
+            self.status_label.setStyleSheet("color: #ff6600; font-size: 12px;")
+        else:
+            self.status_label.setStyleSheet("color: #888; font-size: 12px;")
+        
         self.status_label.setText(
-            _("{} | {} 根K线 | 实时更新中").format(
+            _("{} | {} | {} | {} 根K线{}{}").format(
                 self.current_vt_symbol,
-                len(history)
+                interval_name,
+                source_name,
+                len(history),
+                current_bar_info,
+                gap_warning
             )
         )
+        
+        # 如果有数据缺口，显示详细提示
+        if hasattr(self, '_has_data_gap') and self._has_data_gap and hasattr(self, '_gap_info'):
+            self.status_label.setToolTip(
+                _("数据缺口: {}\n\n如需补齐，请先到数据管理器下载1分钟数据").format(self._gap_info)
+            )
+        else:
+            self.status_label.setToolTip("")
         
         # 确保滚动条在最右边
         self.time_slider.setValue(100)
     
+    def _mark_current_bar(self, history: list, interval: "Interval") -> None:
+        """
+        标记当前未完成的K线
+        
+        检查最后一根K线是否属于当前正在进行的周期，
+        如果是，则标记为当前K线，用于后续tick更新。
+        
+        成交量处理：
+        - 标记现有K线时，记录该K线已有的成交量作为"历史成交量"
+        - 后续tick更新时，需要在历史成交量基础上累加
+        """
+        from datetime import datetime
+        from vnpy.trader.constant import Interval
+        from vnpy.trader.utility import ZoneInfo
+        from tzlocal import get_localzone_name
+        
+        self._current_bar = None
+        self._current_bar_period = None
+        self._current_bar_index = -1
+        self._period_start_volume = 0
+        self._period_start_turnover = 0
+        # 标记已有的历史成交量（来自加载的数据）
+        self._bar_historical_volume = 0
+        self._bar_historical_turnover = 0
+        # 标记是否需要在第一个tick时初始化基准
+        self._need_init_baseline = True
+        
+        if not history or interval == Interval.MINUTE:
+            return
+        
+        try:
+            # 获取当前时间
+            local_tz = ZoneInfo(get_localzone_name())
+            now = datetime.now(local_tz)
+            
+            # 获取当前时间应该属于的周期
+            current_period = self._get_period_start(now, interval)
+            
+            if current_period is None:
+                return
+            
+            # 检查最后一根K线是否属于当前周期
+            last_bar = history[-1]
+            last_bar_period = self._get_period_start(last_bar.datetime, interval)
+            
+            if last_bar_period == current_period:
+                # 最后一根K线是当前未完成的K线
+                self._current_bar = last_bar
+                self._current_bar_period = current_period
+                self._current_bar_index = len(history) - 1
+                
+                # 记录历史成交量（来自加载的数据，需要在tick更新时累加）
+                self._bar_historical_volume = last_bar.volume if last_bar.volume else 0
+                self._bar_historical_turnover = last_bar.turnover if last_bar.turnover else 0
+                
+                self.main_engine.write_log(
+                    f"[当前K线] 标记当前未完成K线: {current_period.strftime('%m-%d %H:%M')}, "
+                    f"已有成交量: {self._bar_historical_volume}"
+                )
+            else:
+                # 需要创建一个新的当前K线
+                # 这种情况下，最后一根历史K线是完整的，当前周期还没有K线
+                pass
+                
+        except Exception as e:
+            error_msg = str(e).replace("{", "{{").replace("}", "}}")
+            self.main_engine.write_log(f"[当前K线] 标记失败: {error_msg}")
+    
     def extend_chart_x_limit(self, move_to_end: bool = False) -> None:
         """扩展图表的x轴限制，允许显示未来空间"""
-        # 扩展未来2小时的空间（1分钟K线 = 120根）
-        future_bars = 120
+        # 根据当前周期获取未来空间K线数量
+        future_bars = self._get_future_bars()
         
         # 使用ChartWidget的新方法设置未来空间
         self.chart.set_future_bars(future_bars)
@@ -2425,4 +3723,5 @@ class ChartWindow(QtWidgets.QWidget):
         """显示窗口"""
         super().show()
         self.activateWindow()
+        self.raise_()
         self.raise_()

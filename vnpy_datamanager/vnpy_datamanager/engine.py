@@ -194,19 +194,31 @@ class ManagerEngine(BaseEngine):
         Query bar data from datafeed.
         For 4-hour bars, aggregate from 1-hour or 1-minute data instead of downloading.
         """
+        # 安全调用 output 回调
+        def safe_output(msg: str):
+            if callable(output):
+                try:
+                    output(msg)
+                except:
+                    pass
+        
         interval_enum = Interval(interval)
         
         # 如果是5分钟数据，从已有1分钟数据合成
         if interval_enum == Interval.MINUTE_5:
+            safe_output("开始合成5分钟K线数据...")
             self.main_engine.write_log(f"[5分钟数据合成] 开始合成 {symbol}.{exchange.value} 的5分钟K线数据")
             count = self.aggregate_5minute_bars(symbol, exchange, start, datetime.now(DB_TZ))
+            safe_output(f"合成完成，共 {count} 条5分钟K线")
             self.main_engine.write_log(f"[5分钟数据合成] 合成完成，共 {count} 条数据")
             return count
         
         # 如果是4小时数据，从已有数据合成
         if interval_enum == Interval.HOUR_4:
+            safe_output("开始合成4小时K线数据...")
             self.main_engine.write_log(f"[4小时数据合成] 开始合成 {symbol}.{exchange.value} 的4小时K线数据")
             count = self.aggregate_4hour_bars(symbol, exchange, start, datetime.now(DB_TZ))
+            safe_output(f"合成完成，共 {count} 条4小时K线")
             self.main_engine.write_log(f"[4小时数据合成] 合成完成，共 {count} 条数据")
             return count
         
@@ -223,24 +235,33 @@ class ManagerEngine(BaseEngine):
 
         # If history data provided in gateway, then query
         if contract and contract.history_data:
+            safe_output(f"正在从网关 {contract.gateway_name} 查询历史数据...")
             self.main_engine.write_log(f"[调试] 开始查询历史数据：{vt_symbol}，网关：{contract.gateway_name}")
             data: list[BarData] = self.main_engine.query_history(
                 req, contract.gateway_name
             )
-            self.main_engine.write_log(f"[调试] 查询返回数据量：{len(data) if data else 0} 条")
+            data_count = len(data) if data else 0
+            safe_output(f"K线数据获取完成，共 {data_count} 条")
+            self.main_engine.write_log(f"[调试] 查询返回数据量：{data_count} 条")
         # Otherwise use datafeed to query data
         else:
+            safe_output(f"正在从数据源查询历史数据...")
             self.main_engine.write_log(f"[调试] 使用datafeed查询历史数据：{vt_symbol}")
             data = self.datafeed.query_bar_history(req, output)
-            self.main_engine.write_log(f"[调试] datafeed返回数据量：{len(data) if data else 0} 条")
+            data_count = len(data) if data else 0
+            safe_output(f"K线数据获取完成，共 {data_count} 条")
+            self.main_engine.write_log(f"[调试] datafeed返回数据量：{data_count} 条")
 
         if data:
+            safe_output(f"开始保存 {len(data)} 条数据到数据库...")
             self.main_engine.write_log(f"[调试] 开始保存 {len(data)} 条数据到数据库")
             self.database.save_bar_data(data)
             count = len(data)
+            safe_output(f"数据保存完成，共 {count} 条")
             self.main_engine.write_log(f"[调试] 数据保存完成，准备返回count={count}")
             return count
 
+        safe_output("没有查询到数据")
         self.main_engine.write_log(f"[调试] 没有查询到数据，返回0")
         return 0
 
@@ -269,6 +290,65 @@ class ManagerEngine(BaseEngine):
 
         return 0
 
+    def _is_hkfe_trading_time(self, bar_dt: datetime) -> bool:
+        """
+        判断给定时间是否在香港期货交易时段内
+        
+        香港期货交易时段：
+        - 日盘：09:15 - 12:00, 13:00 - 16:30
+        - 夜盘：17:15 - 03:00（次日凌晨）
+        
+        Args:
+            bar_dt: K线时间（带时区信息）
+        
+        Returns:
+            True 如果在交易时段内，否则 False
+        """
+        hour = bar_dt.hour
+        minute = bar_dt.minute
+        time_value = hour * 100 + minute  # 用于比较的时间值，如 09:15 = 915
+        
+        # 日盘早段：09:15 - 12:00
+        if 915 <= time_value <= 1200:
+            return True
+        
+        # 日盘午段：13:00 - 16:30
+        if 1300 <= time_value <= 1630:
+            return True
+        
+        # 夜盘：17:15 - 23:59
+        if 1715 <= time_value <= 2359:
+            return True
+        
+        # 夜盘：00:00 - 03:00（次日凌晨）
+        if 0 <= time_value <= 300:
+            return True
+        
+        return False
+
+    def _get_hkfe_5minute_period(self, bar_dt: datetime) -> Optional[datetime]:
+        """
+        计算1分钟K线所属的5分钟周期起始时间（港期专用）
+        
+        会过滤非交易时段的数据，并正确处理交易时段边界。
+        
+        Args:
+            bar_dt: K线时间（带时区信息）
+        
+        Returns:
+            5分钟周期的起始时间，如果不在交易时段则返回 None
+        """
+        # 先检查是否在交易时段
+        if not self._is_hkfe_trading_time(bar_dt):
+            return None
+        
+        # 计算5分钟K线的起始时间
+        minute = bar_dt.minute
+        period_start_minute = (minute // 5) * 5
+        period_start = bar_dt.replace(minute=period_start_minute, second=0, microsecond=0)
+        
+        return period_start
+
     def aggregate_5minute_bars(
         self,
         symbol: str,
@@ -277,7 +357,11 @@ class ManagerEngine(BaseEngine):
         end: Optional[datetime] = None
     ) -> int:
         """
-        从1分钟数据合成5分钟K线数据
+        从1分钟数据合成5分钟K线数据（香港期货专用，过滤非交易时段）
+        
+        香港期货交易时段：
+        - 日盘：09:15 - 12:00, 13:00 - 16:30
+        - 夜盘：17:15 - 03:00（次日凌晨）
         
         Args:
             symbol: 合约代码
@@ -344,61 +428,74 @@ class ManagerEngine(BaseEngine):
             self.main_engine.write_log(f"[5分钟数据合成] 未找到1分钟数据: {symbol}.{exchange.value}")
             return 0
         
-        self.main_engine.write_log(f"[5分钟数据合成] 加载了 {len(minute_bars)} 条1分钟数据，开始合成...")
+        self.main_engine.write_log(f"[5分钟数据合成] 加载了 {len(minute_bars)} 条1分钟数据，开始按港期时段合成...")
         
-        # 合成5分钟K线
-        aggregated_bars: list[BarData] = []
-        current_5m_bar: Optional[BarData] = None
+        # 按5分钟周期分组（过滤非交易时段）
+        period_bars: dict[datetime, list[BarData]] = {}
+        skipped_count = 0
         
         for i, bar in enumerate(minute_bars):
-            # 每处理1000条数据，记录一次进度
-            if i > 0 and i % 1000 == 0:
+            # 每处理10000条数据，记录一次进度
+            if i > 0 and i % 10000 == 0:
                 self.main_engine.write_log(f"[5分钟数据合成] 已处理 {i}/{len(minute_bars)} 条1分钟数据...")
+            
             # 统一时区处理
             if bar.datetime.tzinfo:
                 bar_dt = bar.datetime
             else:
                 bar_dt = bar.datetime.replace(tzinfo=DB_TZ)
             
-            # 计算5分钟K线的起始时间（0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55分钟）
-            minute = bar_dt.minute
-            period_start_minute = (minute // 5) * 5
-            # 保持时区信息
-            period_start = bar_dt.replace(minute=period_start_minute, second=0, microsecond=0)
+            # 获取该K线所属的5分钟周期（会过滤非交易时段）
+            period_start = self._get_hkfe_5minute_period(bar_dt)
             
-            # 如果是新的5分钟周期，保存上一个并创建新的
-            if current_5m_bar is None or current_5m_bar.datetime != period_start:
-                # 保存上一个5分钟K线
-                if current_5m_bar is not None:
-                    aggregated_bars.append(current_5m_bar)
-                
-                # 创建新的5分钟K线
-                current_5m_bar = BarData(
-                    symbol=bar.symbol,
-                    exchange=bar.exchange,
-                    datetime=period_start,
-                    interval=Interval.MINUTE_5,
-                    open_price=bar.open_price,
-                    high_price=bar.high_price,
-                    low_price=bar.low_price,
-                    close_price=bar.close_price,
-                    volume=bar.volume,
-                    turnover=bar.turnover,
-                    open_interest=bar.open_interest,
-                    gateway_name="DB"
-                )
-            else:
-                # 更新当前5分钟K线
-                current_5m_bar.high_price = max(current_5m_bar.high_price, bar.high_price)
-                current_5m_bar.low_price = min(current_5m_bar.low_price, bar.low_price)
-                current_5m_bar.close_price = bar.close_price
-                current_5m_bar.volume += bar.volume
-                current_5m_bar.turnover += bar.turnover
-                current_5m_bar.open_interest = bar.open_interest
+            if period_start is None:
+                # 非交易时段数据，跳过
+                skipped_count += 1
+                continue
+            
+            # 添加到对应周期
+            if period_start not in period_bars:
+                period_bars[period_start] = []
+            period_bars[period_start].append(bar)
         
-        # 保存最后一个5分钟K线
-        if current_5m_bar is not None:
-            aggregated_bars.append(current_5m_bar)
+        if skipped_count > 0:
+            self.main_engine.write_log(f"[5分钟数据合成] 跳过非交易时段数据 {skipped_count} 条")
+        
+        # 合成5分钟K线
+        aggregated_bars: list[BarData] = []
+        
+        for period_start in sorted(period_bars.keys()):
+            bars = period_bars[period_start]
+            if not bars:
+                continue
+            
+            # 计算OHLCV
+            open_price = bars[0].open_price
+            close_price = bars[-1].close_price
+            high_price = max(bar.high_price for bar in bars)
+            low_price = min(bar.low_price for bar in bars)
+            volume = sum(bar.volume for bar in bars)
+            turnover = sum(bar.turnover for bar in bars)
+            open_interest = bars[-1].open_interest
+            
+            # 创建5分钟K线
+            bar_5m = BarData(
+                symbol=symbol,
+                exchange=exchange,
+                datetime=period_start,
+                interval=Interval.MINUTE_5,
+                open_price=open_price,
+                high_price=high_price,
+                low_price=low_price,
+                close_price=close_price,
+                volume=volume,
+                turnover=turnover,
+                open_interest=open_interest,
+                gateway_name="DB"
+            )
+            aggregated_bars.append(bar_5m)
+        
+        self.main_engine.write_log(f"[5分钟数据合成] 合成完成，共 {len(aggregated_bars)} 根5分钟K线")
         
         # 保存到数据库
         if aggregated_bars:
@@ -406,6 +503,75 @@ class ManagerEngine(BaseEngine):
             return len(aggregated_bars)
         
         return 0
+
+    def _get_hkfe_4hour_period(self, bar_dt: datetime) -> tuple[datetime, int]:
+        """
+        根据香港期货交易时段，判断1分钟K线属于哪个4小时周期
+        
+        精确的4小时时间边界（闭区间）：
+        1. 17:15-21:14：第一根4小时K线（时间戳：17:15，开盘价=17:15的1分钟开盘价，收盘价=21:14的1分钟收盘价）
+        2. 21:15-次日01:14：第二根4小时K线（时间戳：21:15，开盘价=21:15的1分钟开盘价，收盘价=01:14的1分钟收盘价）
+        3. 01:15-03:00 + 09:15-11:29：第三根4小时K线（时间戳：01:15，开盘价=01:15的1分钟开盘价，收盘价=11:29的1分钟收盘价）
+        4. 11:30-12:00 + 13:00-16:29：第四根4小时K线（时间戳：11:30，开盘价=11:30的1分钟开盘价，收盘价=16:29的1分钟收盘价）
+        
+        特殊情况处理：
+        1. 意外停盘：如果在16:29前意外停盘，当日最后一根4小时K线到停盘时间截止。次日开盘09:15到11:29算作一根独立的4小时K线。
+        2. 金融假期：如果在夜盘收盘后遇到金融假期，完整的4小时K线开始时间是01:15，结束时间是金融假期后开盘的早11:29。
+        
+        Args:
+            bar_dt: K线时间（带时区信息）
+        
+        Returns:
+            (period_start, period_index): 周期起始时间和周期索引(1-4)
+        """
+        hour = bar_dt.hour
+        minute = bar_dt.minute
+        time_value = hour * 100 + minute  # 用于比较的时间值，如 17:15 = 1715
+        
+        # 判断属于哪个时段（闭区间）
+        if 1715 <= time_value <= 2114:
+            # 时段1: 17:15-21:14 → 时间戳 17:15
+            period_start = bar_dt.replace(hour=17, minute=15, second=0, microsecond=0)
+            return (period_start, 1)
+        
+        elif 2115 <= time_value <= 2359:
+            # 时段2前半: 21:15-23:59 → 时间戳 21:15（当日）
+            period_start = bar_dt.replace(hour=21, minute=15, second=0, microsecond=0)
+            return (period_start, 2)
+        
+        elif 0 <= time_value <= 114:
+            # 时段2后半: 00:00-01:14 → 时间戳 21:15（前一日）
+            # 需要回溯到前一日的21:15
+            period_start = (bar_dt - timedelta(days=1)).replace(hour=21, minute=15, second=0, microsecond=0)
+            return (period_start, 2)
+        
+        elif 115 <= time_value <= 300:
+            # 时段3前半: 01:15-03:00 → 时间戳 01:15（当日）
+            period_start = bar_dt.replace(hour=1, minute=15, second=0, microsecond=0)
+            return (period_start, 3)
+        
+        elif 915 <= time_value <= 1129:
+            # 时段3后半: 09:15-11:29
+            # 需要判断是否跨越周末或金融假期
+            # 如果是周一（weekday=0），回溯到上周六的01:15
+            weekday = bar_dt.weekday()
+            if weekday == 0:  # 周一
+                # 回溯到上周六（2天前）的01:15
+                period_start = (bar_dt - timedelta(days=2)).replace(hour=1, minute=15, second=0, microsecond=0)
+            else:
+                # 非周一，使用当天的01:15
+                period_start = bar_dt.replace(hour=1, minute=15, second=0, microsecond=0)
+            return (period_start, 3)
+        
+        elif (1130 <= time_value <= 1200) or (1300 <= time_value <= 1629):
+            # 时段4: 11:30-12:00 + 13:00-16:29 → 时间戳 11:30
+            period_start = bar_dt.replace(hour=11, minute=30, second=0, microsecond=0)
+            return (period_start, 4)
+        
+        else:
+            # 非交易时段（03:01-09:14, 12:01-12:59, 16:30-17:14）
+            # 返回None表示不属于任何4小时周期
+            return (None, 0)
 
     def aggregate_4hour_bars(
         self,
@@ -415,7 +581,17 @@ class ManagerEngine(BaseEngine):
         end: Optional[datetime] = None
     ) -> int:
         """
-        从1小时或1分钟数据合成4小时K线数据
+        从1分钟数据合成4小时K线数据（香港期货专用）
+        
+        精确的4小时时间边界（闭区间）：
+        1. 17:15-21:14：第一根4小时K线（时间戳：17:15，开盘价=17:15的1分钟开盘价，收盘价=21:14的1分钟收盘价）
+        2. 21:15-次日01:14：第二根4小时K线（时间戳：21:15，开盘价=21:15的1分钟开盘价，收盘价=01:14的1分钟收盘价）
+        3. 01:15-03:00 + 09:15-11:29：第三根4小时K线（时间戳：01:15，开盘价=01:15的1分钟开盘价，收盘价=11:29的1分钟收盘价）
+        4. 11:30-12:00 + 13:00-16:29：第四根4小时K线（时间戳：11:30，开盘价=11:30的1分钟开盘价，收盘价=16:29的1分钟收盘价）
+        
+        特殊情况处理：
+        1. 意外停盘：如果在16:29前意外停盘，当日最后一根4小时K线到停盘时间截止。次日开盘09:15到11:29算作一根独立的4小时K线。
+        2. 金融假期：如果在夜盘收盘后遇到金融假期，完整的4小时K线开始时间是01:15，结束时间是金融假期后开盘的早11:29。
         
         Args:
             symbol: 合约代码
@@ -426,8 +602,6 @@ class ManagerEngine(BaseEngine):
         Returns:
             合成的K线数量
         """
-        from typing import Optional as Opt
-        
         # 确定时间范围
         if end is None:
             end = datetime.now(DB_TZ)
@@ -454,17 +628,8 @@ class ManagerEngine(BaseEngine):
             if start and start >= end:
                 return 0
         
-        # 如果没有指定开始时间，尝试从1小时或1分钟数据的开始时间开始
+        # 如果没有指定开始时间，尝试从1分钟数据的开始时间开始
         if start is None:
-            # 查找1小时数据
-            hour_start = None
-            for overview in overviews:
-                if (overview.symbol == symbol and 
-                    overview.exchange == exchange and 
-                    overview.interval == Interval.HOUR):
-                    hour_start = overview.start
-                    break
-            
             # 查找1分钟数据
             minute_start = None
             for overview in overviews:
@@ -474,105 +639,94 @@ class ManagerEngine(BaseEngine):
                     minute_start = overview.start
                     break
             
-            # 选择最早的时间
-            if hour_start and minute_start:
-                start = min(hour_start, minute_start)
-            elif hour_start:
-                start = hour_start
-            elif minute_start:
+            if minute_start:
                 start = minute_start
+                # 统一时区处理
+                if start.tzinfo is None:
+                    start = start.replace(tzinfo=DB_TZ)
             else:
-                # 没有基础数据，无法合成
+                # 没有1分钟数据，无法合成
+                self.main_engine.write_log(f"[4小时数据合成] 未找到1分钟数据，无法合成: {symbol}.{exchange.value}")
                 return 0
-            
-            # 统一时区处理
-            if start and start.tzinfo is None:
-                start = start.replace(tzinfo=DB_TZ)
         
-        # 优先使用1小时数据，如果没有则使用1分钟数据
-        source_bars: list[BarData] = []
-        source_interval: Optional[Interval] = None
-        
-        # 尝试加载1小时数据
-        self.main_engine.write_log(f"[4小时数据合成] 开始加载数据: {symbol}.{exchange.value}")
-        hour_bars = self.database.load_bar_data(
-            symbol, exchange, Interval.HOUR, start, end
+        # 只使用1分钟数据来合成4小时K线（确保精确性）
+        self.main_engine.write_log(f"[4小时数据合成] 开始加载1分钟数据: {symbol}.{exchange.value}")
+        minute_bars = self.database.load_bar_data(
+            symbol, exchange, Interval.MINUTE, start, end
         )
         
-        if hour_bars:
-            source_bars = hour_bars
-            source_interval = Interval.HOUR
-            self.main_engine.write_log(f"[4小时数据合成] 使用1小时数据，共 {len(hour_bars)} 条")
-        else:
-            # 如果没有1小时数据，尝试使用1分钟数据
-            minute_bars = self.database.load_bar_data(
-                symbol, exchange, Interval.MINUTE, start, end
-            )
-            if minute_bars:
-                source_bars = minute_bars
-                source_interval = Interval.MINUTE
-                self.main_engine.write_log(f"[4小时数据合成] 使用1分钟数据，共 {len(minute_bars)} 条")
-        
-        if not source_bars:
-            self.main_engine.write_log(f"[4小时数据合成] 未找到基础数据: {symbol}.{exchange.value}")
+        if not minute_bars:
+            self.main_engine.write_log(f"[4小时数据合成] 未找到1分钟数据: {symbol}.{exchange.value}")
             return 0
         
-        self.main_engine.write_log(f"[4小时数据合成] 开始合成，共 {len(source_bars)} 条源数据...")
+        self.main_engine.write_log(f"[4小时数据合成] 加载了 {len(minute_bars)} 条1分钟数据，开始按港期时段合成...")
         
-        # 合成4小时K线
-        aggregated_bars: list[BarData] = []
-        current_4h_bar: Optional[BarData] = None
+        # 按4小时周期分组
+        period_bars: dict[datetime, list[BarData]] = {}
+        skipped_count = 0
         
-        for i, bar in enumerate(source_bars):
-            # 每处理1000条数据，记录一次进度
-            if i > 0 and i % 1000 == 0:
-                self.main_engine.write_log(f"[4小时数据合成] 已处理 {i}/{len(source_bars)} 条数据...")
-            # 计算4小时K线的起始时间（0:00, 4:00, 8:00, 12:00, 16:00, 20:00）
+        for i, bar in enumerate(minute_bars):
+            # 每处理10000条数据，记录一次进度
+            if i > 0 and i % 10000 == 0:
+                self.main_engine.write_log(f"[4小时数据合成] 已处理 {i}/{len(minute_bars)} 条数据...")
+            
             # 统一时区处理
             if bar.datetime.tzinfo:
                 bar_dt = bar.datetime
             else:
                 bar_dt = bar.datetime.replace(tzinfo=DB_TZ)
             
-            hour = bar_dt.hour
-            # 计算属于哪个4小时周期
-            period_start_hour = (hour // 4) * 4
-            # 保持时区信息
-            period_start = bar_dt.replace(hour=period_start_hour, minute=0, second=0, microsecond=0)
+            # 获取该K线所属的4小时周期
+            period_start, period_index = self._get_hkfe_4hour_period(bar_dt)
             
-            # 如果是新的4小时周期，保存上一个并创建新的
-            if current_4h_bar is None or current_4h_bar.datetime != period_start:
-                # 保存上一个4小时K线
-                if current_4h_bar is not None:
-                    aggregated_bars.append(current_4h_bar)
-                
-                # 创建新的4小时K线
-                current_4h_bar = BarData(
-                    symbol=bar.symbol,
-                    exchange=bar.exchange,
-                    datetime=period_start,
-                    interval=Interval.HOUR_4,
-                    open_price=bar.open_price,
-                    high_price=bar.high_price,
-                    low_price=bar.low_price,
-                    close_price=bar.close_price,
-                    volume=bar.volume,
-                    turnover=bar.turnover,
-                    open_interest=bar.open_interest,
-                    gateway_name="DB"
-                )
-            else:
-                # 更新当前4小时K线
-                current_4h_bar.high_price = max(current_4h_bar.high_price, bar.high_price)
-                current_4h_bar.low_price = min(current_4h_bar.low_price, bar.low_price)
-                current_4h_bar.close_price = bar.close_price
-                current_4h_bar.volume += bar.volume
-                current_4h_bar.turnover += bar.turnover
-                current_4h_bar.open_interest = bar.open_interest
+            if period_start is None:
+                # 非交易时段数据，跳过
+                skipped_count += 1
+                continue
+            
+            # 添加到对应周期
+            if period_start not in period_bars:
+                period_bars[period_start] = []
+            period_bars[period_start].append(bar)
         
-        # 保存最后一个4小时K线
-        if current_4h_bar is not None:
-            aggregated_bars.append(current_4h_bar)
+        if skipped_count > 0:
+            self.main_engine.write_log(f"[4小时数据合成] 跳过非交易时段数据 {skipped_count} 条")
+        
+        # 合成4小时K线
+        aggregated_bars: list[BarData] = []
+        
+        for period_start in sorted(period_bars.keys()):
+            bars = period_bars[period_start]
+            if not bars:
+                continue
+            
+            # 计算OHLCV
+            open_price = bars[0].open_price
+            close_price = bars[-1].close_price
+            high_price = max(bar.high_price for bar in bars)
+            low_price = min(bar.low_price for bar in bars)
+            volume = sum(bar.volume for bar in bars)
+            turnover = sum(bar.turnover for bar in bars)
+            open_interest = bars[-1].open_interest
+            
+            # 创建4小时K线
+            bar_4h = BarData(
+                symbol=symbol,
+                exchange=exchange,
+                datetime=period_start,
+                interval=Interval.HOUR_4,
+                open_price=open_price,
+                high_price=high_price,
+                low_price=low_price,
+                close_price=close_price,
+                volume=volume,
+                turnover=turnover,
+                open_interest=open_interest,
+                gateway_name="DB"
+            )
+            aggregated_bars.append(bar_4h)
+        
+        self.main_engine.write_log(f"[4小时数据合成] 合成完成，共 {len(aggregated_bars)} 根4小时K线")
         
         # 保存到数据库
         if aggregated_bars:
