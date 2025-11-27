@@ -3,7 +3,6 @@ Implements main window of the trading platform.
 """
 
 from types import ModuleType
-import webbrowser
 from functools import partial
 from importlib import import_module
 from typing import TypeVar
@@ -27,7 +26,8 @@ from .widget import (
     TradingWidget,
     AboutDialog,
     GlobalDialog,
-    ToastNotification
+    ToastNotification,
+    ChartWindow
 )
 from ..engine import MainEngine, BaseApp
 from ..utility import get_icon_path, TRADER_DIR
@@ -78,6 +78,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.trading_widget, trading_dock = self.create_dock(
             TradingWidget, _("交易"), QtCore.Qt.DockWidgetArea.LeftDockWidgetArea
         )
+        
         tick_widget, tick_dock = self.create_dock(
             TickMonitor, _("行情"), QtCore.Qt.DockWidgetArea.RightDockWidgetArea
         )
@@ -154,6 +155,15 @@ class MainWindow(QtWidgets.QMainWindow):
         # Help menu
         help_menu: QtWidgets.QMenu = bar.addMenu(_("帮助"))
 
+        # K线图表
+        self.add_action(
+            help_menu,
+            _("K线图表"),
+            get_icon_path(__file__, "chart.ico"),
+            self.open_chart_window,
+            True
+        )
+
         self.add_action(
             help_menu,
             _("查询合约"),
@@ -174,14 +184,6 @@ class MainWindow(QtWidgets.QMainWindow):
             _("测试邮件"),
             get_icon_path(__file__, "email.ico"),
             self.send_test_email
-        )
-
-        self.add_action(
-            help_menu,
-            _("社区论坛"),
-            get_icon_path(__file__, "forum.ico"),
-            self.open_forum,
-            True
         )
 
         self.add_action(
@@ -246,7 +248,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 position="center"  # 屏幕中央显示
             )
             
-            # 状态栏持续显示（timeout=0表示不自动消失）
+            # 状态栏持续显示警告
             status_message = _("⚠️ 主力合约提前切换: {} → {} (当前日期早于新合约月份)").format(
                 switch_data.old_actual_symbol,
                 switch_data.new_actual_symbol
@@ -404,10 +406,16 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         self.main_engine.send_email("VeighNa Trader", "testing", None)
 
-    def open_forum(self) -> None:
+    def open_chart_window(self) -> None:
         """
+        打开K线图表窗口。
         """
-        webbrowser.open("https://www.vnpy.com/forum/")
+        chart_window: ChartWindow | None = self.widgets.get("chart_window", None)
+        if not chart_window:
+            chart_window = ChartWindow(self.main_engine, self.event_engine)
+            self.widgets["chart_window"] = chart_window
+        
+        chart_window.show()
 
     def edit_global_setting(self) -> None:
         """
