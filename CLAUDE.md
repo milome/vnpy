@@ -4212,6 +4212,349 @@ def _get_period_start(self, dt: datetime, interval: Interval) -> datetime:
 | `multi-timeframe-webapp/scripts/aggregate_4hour.py` | `get_4hour_period()` | 独立脚本4小时合成 |
 | `multi-timeframe-webapp/frontend/src/utils/timeframeAggregator.ts` | `getPeriodStartTime()` | 前端4小时合成 |
 
+---
+
+## Multi-Timeframe WebApp 项目 (2025-11)
+
+### 概述
+
+`multi-timeframe-webapp` 是一个独立的 React + TypeScript Web 应用，用于开发和验证多周期K线图表功能。该项目实现了与 VNPy 主项目相同的4小时K线时间边界逻辑，可作为前端参考实现。
+
+### 项目结构
+
+```
+multi-timeframe-webapp/
+├── data/                    # K线CSV测试数据
+│   ├── 1min_MHImain_HKFE.csv
+│   ├── 5min_MHImain_HKFE.csv
+│   ├── 1hour_MHImain_HKFE.csv
+│   ├── 4hour_MHImain_HKFE.csv
+│   └── 1day_MHImain_HKFE.csv
+├── frontend/                # React前端应用
+│   ├── src/
+│   │   ├── components/      # UI组件
+│   │   ├── hooks/           # React Hooks
+│   │   ├── services/        # 数据服务
+│   │   ├── utils/           # 工具函数
+│   │   └── tests/           # 单元测试
+│   └── package.json
+└── scripts/                 # Python脚本
+    ├── aggregate_4hour.py   # 4小时K线合成
+    ├── regenerate_4hour.py  # 重新生成4小时数据
+    └── check_data_integrity.py  # 数据完整性检查
+```
+
+### 前端技术栈
+
+| 技术 | 版本 | 用途 |
+|------|------|------|
+| React | 18.x | UI框架 |
+| TypeScript | 5.x | 类型安全 |
+| Vite | 5.x | 构建工具 |
+| **TradingView Lightweight Charts** | 4.x | **主要K线图表库** |
+| Apache ECharts | 5.x | 备用图表方案 |
+| Vitest | 1.x | 单元测试 |
+
+### 双图表引擎架构
+
+项目实现了两套完整的图表引擎，可以互换使用：
+
+| 引擎 | 组件 | Hooks | 特点 |
+|------|------|-------|------|
+| **TradingView** | `TradingViewChart` | `useDrawingOrder`, `usePriceLineDrag` 等 | 专业交易图表，性能优秀 |
+| ECharts | `EChartsTradingChart` | `useEChartsDrawingOrder`, `useEChartsPriceLineDrag` 等 | 功能丰富，定制性强 |
+
+### 核心组件
+
+#### 1. TradingViewChart（主要）
+
+基于 **TradingView Lightweight Charts** 实现的专业交易图表：
+
+```typescript
+import { createChart, CandlestickSeries } from 'lightweight-charts'
+
+// 核心功能
+- 多周期K线显示（1m/5m/1h/4h/1d）
+- 1分钟K线 + 4小时叠加显示
+- 十字光标联动
+- 价格线拖拽（止损/止盈/入场）
+- 订单标记显示
+- 画线下单功能
+```
+
+**文件位置**: `frontend/src/components/TradingViewChart.tsx`
+
+#### 2. EChartsTradingChart（备用）
+
+基于 Apache ECharts 的备选实现，功能对等。
+
+**文件位置**: `frontend/src/components/EChartsTradingChart.tsx`
+
+#### 3. MultiTimeframeChart
+
+多周期切换容器组件：
+- 周期切换（1m/5m/1h/4h/1d）
+- 数据加载管理
+- 状态指示器
+
+#### 4. TradingPanel
+
+交易面板组件：
+- 订单输入
+- 价格线管理
+- 止损设置
+
+### 交易功能 Hooks
+
+项目实现了一套完整的交易功能 Hooks，每个功能都有 TradingView 和 ECharts 两个版本：
+
+#### TradingView 版本
+
+| Hook | 功能 | 说明 |
+|------|------|------|
+| `useDrawingOrder` | **画线下单** | 在图表上画线创建订单 |
+| `usePriceLineDrag` | **价格线拖拽** | 拖拽止损/止盈线调整价格 |
+| `useEntryLineDrag` | **入场线拖拽** | 拖拽入场价格线 |
+| `useAutoTrailingStopLoss` | **自动追踪止损** | 价格上涨时自动提高止损 |
+| `useDualStopLoss` | **双止损** | 同时设置两个止损价位 |
+
+#### ECharts 版本
+
+| Hook | 功能 |
+|------|------|
+| `useEChartsDrawingOrder` | 画线下单 |
+| `useEChartsPriceLineDrag` | 价格线拖拽 |
+| `useEChartsEntryLineDrag` | 入场线拖拽 |
+| `useEChartsAutoTrailingStopLoss` | 自动追踪止损 |
+| `useEChartsDualStopLoss` | 双止损 |
+
+### 画线下单功能详解
+
+画线下单是项目的核心交易功能，允许用户通过在图表上画线来创建订单：
+
+```typescript
+// useDrawingOrder Hook 核心逻辑
+export function useDrawingOrder({
+  chart,
+  series,
+  onOrderCreated,
+}: DrawingOrderProps) {
+  // 绘制模式状态
+  const [drawingMode, setDrawingMode] = useState<DrawingMode>('none')
+  
+  // 支持的绘制模式
+  // - 'buy': 画买入订单线
+  // - 'sell': 画卖出订单线
+  // - 'stopLoss': 画止损线
+  // - 'takeProfit': 画止盈线
+  // - 'none': 无绘制
+  
+  // 用户点击图表时创建订单
+  const handleClick = (param: MouseEventParams) => {
+    const price = series.coordinateToPrice(param.point.y)
+    const order = createOrder(price, drawingMode)
+    onOrderCreated(order)
+  }
+}
+```
+
+### 价格线管理器
+
+`PriceLineManager` 负责管理图表上的所有价格线（止损/止盈/入场）：
+
+```typescript
+// frontend/src/utils/priceLineManager.ts
+export class PriceLineManager {
+  // 添加价格线
+  addPriceLine(type: PriceLineType, price: number): void
+  
+  // 更新价格线位置
+  updatePriceLine(id: string, newPrice: number): void
+  
+  // 删除价格线
+  removePriceLine(id: string): void
+  
+  // 获取所有价格线
+  getAllPriceLines(): PriceLine[]
+}
+```
+
+### 订单标记管理器
+
+`OrderMarkerManager` 在图表上显示订单标记：
+
+```typescript
+// frontend/src/utils/orderMarkerManager.ts
+export class OrderMarkerManager {
+  // 添加订单标记
+  addOrderMarker(order: TradingOrder): void
+  
+  // 更新订单状态
+  updateOrderStatus(orderId: string, status: OrderStatus): void
+  
+  // 显示成交/取消动画
+  showFillAnimation(orderId: string): void
+}
+
+### 核心工具函数
+
+#### timeframeAggregator.ts
+
+实现 HKFE 4小时K线时间边界计算：
+
+```typescript
+export function getPeriodStartTime(
+  timestamp: number,
+  interval: string
+): number {
+  if (interval === '4h') {
+    const date = new Date(timestamp);
+    const hour = date.getHours();
+    const minute = date.getMinutes();
+    const timeValue = hour * 100 + minute;
+    
+    // 时段1: 17:15-21:14
+    if (timeValue >= 1715 && timeValue <= 2114) {
+      return setTime(date, 17, 15);
+    }
+    // 时段2: 21:15-01:14（跨日）
+    else if (timeValue >= 2115 || timeValue <= 114) {
+      if (timeValue >= 2115) {
+        return setTime(date, 21, 15);
+      } else {
+        return setTime(prevDay(date), 21, 15);
+      }
+    }
+    // 时段3: 01:15-03:00 + 09:15-11:29（跨休市）
+    else if (timeValue >= 115 && timeValue <= 300) {
+      return setTime(date, 1, 15);
+    }
+    else if (timeValue >= 915 && timeValue <= 1129) {
+      // 周一：回溯到周六01:15
+      if (date.getDay() === 1) {
+        return setTime(prevDays(date, 2), 1, 15);
+      }
+      return setTime(date, 1, 15);
+    }
+    // 时段4: 11:30-12:00 + 13:00-16:29（跨午休）
+    else if ((timeValue >= 1130 && timeValue <= 1200) ||
+             (timeValue >= 1300 && timeValue <= 1629)) {
+      return setTime(date, 11, 30);
+    }
+  }
+  // ... 其他周期处理
+}
+```
+
+#### fourHourCandleRenderer.ts
+
+4小时K线渲染器：
+- 自定义蜡烛图绘制
+- 时段分隔线
+- 周末/假期标记
+
+### Python 脚本
+
+#### aggregate_4hour.py
+
+从1分钟数据合成4小时K线：
+
+```python
+def get_4hour_period(dt: datetime) -> Tuple[datetime, int]:
+    """
+    获取给定时间所属的4小时周期
+    
+    返回: (周期开始时间, 周期序号1-4)
+    """
+    hour = dt.hour
+    minute = dt.minute
+    time_value = hour * 100 + minute
+    
+    # 时段1: 17:15-21:14
+    if 1715 <= time_value <= 2114:
+        return dt.replace(hour=17, minute=15), 1
+    
+    # 时段2: 21:15-01:14
+    elif time_value >= 2115 or time_value <= 114:
+        if time_value >= 2115:
+            return dt.replace(hour=21, minute=15), 2
+        else:
+            return (dt - timedelta(days=1)).replace(hour=21, minute=15), 2
+    
+    # 时段3: 01:15-03:00 + 09:15-11:29
+    elif 115 <= time_value <= 300:
+        return dt.replace(hour=1, minute=15), 3
+    elif 915 <= time_value <= 1129:
+        # 周一处理
+        if dt.weekday() == 0:
+            return (dt - timedelta(days=2)).replace(hour=1, minute=15), 3
+        return dt.replace(hour=1, minute=15), 3
+    
+    # 时段4: 11:30-12:00 + 13:00-16:29
+    elif (1130 <= time_value <= 1200) or (1300 <= time_value <= 1629):
+        return dt.replace(hour=11, minute=30), 4
+```
+
+### 测试套件
+
+位于 `frontend/src/tests/`：
+
+| 测试文件 | 测试内容 |
+|---------|---------|
+| `timeframeBoundary.test.ts` | 4小时时间边界计算 |
+| `fourHourCandleRenderer.test.ts` | K线渲染逻辑 |
+| `dataTransform.test.ts` | 数据转换 |
+| `echartsIntegration.test.ts` | ECharts集成 |
+| `usePriceLineDrag.test.ts` | 价格线拖拽Hook |
+| `useDrawingOrder.test.ts` | 画线下单Hook |
+
+运行测试：
+```bash
+cd multi-timeframe-webapp/frontend
+npm install
+npm test
+```
+
+### 数据格式
+
+CSV文件格式：
+```csv
+datetime,open,high,low,close,volume,turnover,open_interest
+2024-11-01 17:15:00,22500,22550,22480,22530,1234,27670200,0
+```
+
+### 使用说明
+
+#### 启动开发服务器
+```bash
+cd multi-timeframe-webapp/frontend
+npm install
+npm run dev
+```
+
+#### 生成4小时数据
+```bash
+cd multi-timeframe-webapp/scripts
+python aggregate_4hour.py
+```
+
+#### 运行测试
+```bash
+cd multi-timeframe-webapp/frontend
+npm test
+```
+
+### 与VNPy主项目的关系
+
+| 功能 | VNPy主项目 | multi-timeframe-webapp |
+|------|-----------|------------------------|
+| 4小时边界计算 | `widget.py` | `timeframeAggregator.ts` |
+| K线合成 | `engine.py` | `aggregate_4hour.py` |
+| 图表渲染 | PyQtGraph | Apache ECharts |
+| 数据源 | 数据库/CSV/API | CSV文件 |
+
+两个项目使用相同的4小时时间边界规则，确保K线显示一致。
+
 ### K线合成流程
 
 ```
