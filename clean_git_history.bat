@@ -57,4 +57,3 @@ echo    git push origin --force --tags
 echo 3. Notify team members to re-clone repository
 echo.
 pause
-
