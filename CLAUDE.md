@@ -3793,3 +3793,135 @@ if self._right_ix <= data_count and self._right_ix >= (data_count - self._bar_co
 |--------|------|------|
 | 时间滚动条 | 底部 | 左右拖动浏览不同时间段，可扩展到未来2小时 |
 | 缩放滚动条 | 右侧 | 上下拖动调整显示K线数量（50-500根） |
+
+---
+
+## 富途 API 格式不一致问题修复 (2025-11)
+
+### ⚠️ 重要：开发注意事项
+
+**富途 API 在不同场景下返回的合约代码格式不一致，这是一个容易引入 bug 的陷阱！**
+
+### 问题描述
+
+富途 API 存在格式不一致问题：
+
+| 场景 | 格式 | 示例 |
+|------|------|------|
+| 订阅行情 | `HK_FUTURE.xxx` | `HK_FUTURE.MHImain` |
+| 行情推送（回调） | `HK.xxx` | `HK.MHImain` |
+| `convert_symbol_vt2futu()` 输出 | `HK_FUTURE.xxx` | `HK_FUTURE.MHImain` |
+| `self.ticks` 字典 key | `HK.xxx` | `HK.MHImain` |
+
+### 问题影响
+
+这种不一致导致以下代码模式会失败：
+
+```python
+# ❌ 错误示例：格式不匹配导致查找失败
+futu_code = convert_symbol_vt2futu(symbol, exchange)  # 返回 HK_FUTURE.MHImain
+tick = self.ticks.get(futu_code)  # 找不到！因为 key 是 HK.MHImain
+
+# ❌ 错误示例：主力合约切换后复制 tick 数据失败
+new_futu_code = convert_symbol_vt2futu(new_symbol, exchange)  # HK_FUTURE.MHI2512
+if new_futu_code in self.ticks:  # 永远为 False！
+    # 这段代码永远不会执行
+```
+
+### 正确做法
+
+**必须同时检查两种格式**：
+
+```python
+# ✅ 正确示例：交叉查找两种格式
+futu_code = convert_symbol_vt2futu(symbol, exchange)  # HK_FUTURE.MHImain
+tick = self.ticks.get(futu_code)
+
+# 如果找不到，尝试备用格式
+if not tick and futu_code.startswith("HK_FUTURE."):
+    alt_futu_code = futu_code.replace("HK_FUTURE.", "HK.", 1)  # HK.MHImain
+    tick = self.ticks.get(alt_futu_code)
+```
+
+### 已修复的位置
+
+1. **`_get_tick_for_chase()` 方法**：追价逻辑获取 tick 数据
+2. **`_handle_main_contract_switch()` 方法**：主力合约切换时复制 tick 数据
+
+### 开发检查清单
+
+在修改 `futu_gateway.py` 涉及 tick 数据查找时，请检查：
+
+- [ ] 是否使用 `self.ticks.get(futu_code)` 查找 tick？
+- [ ] 是否同时检查了 `HK_FUTURE.` 和 `HK.` 两种格式？
+- [ ] 主力合约相关逻辑是否正确处理了格式转换？
+
+---
+
+## 追价整体超时机制 (2025-11)
+
+### 问题背景
+
+当 tick 数据无法获取时（如主力合约切换后格式不匹配），追价订单会一直等待，永不超时。
+
+### 解决方案
+
+新增整体超时机制，从首次下单开始计算总等待时间：
+
+### 配置项
+
+**`ChaseConfig` 类新增**：
+
+```python
+# 整体超时配置（从首次下单开始计算）
+self.overall_timeout_seconds = 30.0  # 整体超时阈值（秒），超过后强制停止追价
+```
+
+### 超时处理流程
+
+```
+首次下单 → 追价循环（等待tick、撤单、重委托）
+    ↓
+每秒检查：overall_elapsed = 当前时间 - original_order_time
+    ↓
+如果 overall_elapsed >= 30秒：
+    1. 记录超时日志 ⚠️
+    2. 撤销当前未成交订单
+    3. 从追价列表移除
+    4. 推送 REJECTED 订单事件 → UI 显示失败
+    5. 停止追价
+```
+
+### 新增方法
+
+**`_notify_chase_timeout_failure()`**：
+
+```python
+def _notify_chase_timeout_failure(self, chase_order: ChaseOrder, elapsed_seconds: float) -> None:
+    """推送追价整体超时失败事件，通知UI显示错误"""
+    order = OrderData(
+        status=Status.REJECTED,
+        reference=f"追价超时({elapsed_seconds:.1f}秒)"
+        # ...
+    )
+    self.on_order(order)  # 触发 UI 显示
+    self.write_log(f"❌ 追价委托失败！...")
+```
+
+### 日志示例
+
+```
+⚠️ 订单6449157整体超时！从首次下单已等待30.5秒，超过阈值30.0秒
+订单详情: symbol=MHImain, direction=Direction.LONG, volume=1, 重试次数=2
+订单6449157整体超时，已发送撤单请求
+❌ 追价委托失败！订单6449157 (MHImain LONG 1手) 等待30.5秒后超时，无法获取有效tick数据完成委托
+```
+
+### 文件修改
+
+- **Gateway**: `vnpy_futu/vnpy_futu/futu_gateway.py`
+  - `ChaseConfig` 类：新增 `overall_timeout_seconds` 配置
+  - `_check_timeout_orders()` 方法：新增整体超时检查逻辑
+  - `_get_tick_for_chase()` 方法：修复 `HK_FUTURE.` vs `HK.` 格式问题
+  - `_handle_main_contract_switch()` 方法：修复 tick 数据复制的格式问题
+  - `_notify_chase_timeout_failure()` 方法：新增超时失败通知

@@ -101,9 +101,12 @@ class ChaseConfig:
         self.chase_interval = 0.5
         
         # 超时配置
-        self.timeout_seconds = 3.0  # 超时阈值（秒）
+        self.timeout_seconds = 3.0  # 单次超时阈值（秒）
         self.enable_timeout_cancel = True  # 是否启用超时撤单
         self.max_retry_times = 2  # 最大重委托次数
+        
+        # 整体超时配置（从首次下单开始计算）
+        self.overall_timeout_seconds = 30.0  # 整体超时阈值（秒），超过后强制停止追价
 
         # 解析reference中的追价配置
         # 检查是否有追价相关参数（Retry表示启用了追价）
@@ -391,7 +394,35 @@ class FutuGateway(BaseGateway):
             if not chase_order.config.enable_timeout_cancel:
                 continue
             
-            # 检查是否超过超时阈值
+            # 🛡️ 检查整体超时（从首次下单开始计算）
+            overall_elapsed = current_time - chase_order.original_order_time
+            if overall_elapsed >= chase_order.config.overall_timeout_seconds:
+                self.write_log(f"⚠️ 订单{orderid}整体超时！从首次下单已等待{overall_elapsed:.1f}秒，超过阈值{chase_order.config.overall_timeout_seconds}秒")
+                self.write_log(f"订单详情: symbol={chase_order.symbol}, direction={chase_order.direction}, volume={chase_order.volume}, 重试次数={chase_order.retry_count}")
+                
+                # 尝试撤销当前订单（如果还未撤销）
+                order_status = self._get_order_status(orderid)
+                if order_status and order_status not in [Status.ALLTRADED, Status.CANCELLED, Status.REJECTED]:
+                    cancel_req = CancelRequest(
+                        orderid=orderid,
+                        symbol=chase_order.symbol,
+                        exchange=chase_order.exchange
+                    )
+                    self._cancel_order_internal(cancel_req)
+                    self.write_log(f"订单{orderid}整体超时，已发送撤单请求")
+                
+                # 从追价列表中移除
+                self._safe_del_chase_order(orderid)
+                if chase_order.orderid != orderid:
+                    self._safe_del_chase_order(chase_order.orderid)
+                if chase_order.original_orderid != orderid:
+                    self._safe_del_chase_order(chase_order.original_orderid)
+                
+                # 推送订单失败事件，触发UI弹窗通知
+                self._notify_chase_timeout_failure(chase_order, overall_elapsed)
+                continue
+            
+            # 检查是否超过单次超时阈值
             elapsed = current_time - chase_order.order_time
             if elapsed >= chase_order.config.timeout_seconds:
                 # 检查订单状态：如果订单已经成交，立即移除，不再继续追价
@@ -656,10 +687,22 @@ class FutuGateway(BaseGateway):
             
             # 3. 更新ticks缓存中的主力合约数据
             # 如果新实际合约已有tick数据，复制并更新名称
-            if new_futu_code in self.ticks:
-                new_tick = self.ticks[new_futu_code]
+            # 注意：富途API推送的行情数据使用"HK.xxx"格式而非"HK_FUTURE.xxx"
+            # 需要同时检查两种格式
+            new_tick = self.ticks.get(new_futu_code)
+            if not new_tick and new_futu_code.startswith("HK_FUTURE."):
+                alt_new_futu_code = new_futu_code.replace("HK_FUTURE.", "HK.", 1)
+                new_tick = self.ticks.get(alt_new_futu_code)
+                if new_tick:
+                    self.write_log(f"使用备用格式找到新合约tick: {alt_new_futu_code}")
+            
+            if new_tick:
                 # 创建主力合约的tick副本，使用主力合约的symbol
-                main_tick = self.get_tick(main_futu_code)
+                # 注意：需要使用与富途推送一致的格式（HK.xxx而非HK_FUTURE.xxx）
+                actual_main_futu_code = main_futu_code
+                if main_futu_code.startswith("HK_FUTURE."):
+                    actual_main_futu_code = main_futu_code.replace("HK_FUTURE.", "HK.", 1)
+                main_tick = self.get_tick(actual_main_futu_code)
                 # 复制价格数据
                 main_tick.last_price = new_tick.last_price
                 main_tick.open_price = new_tick.open_price
@@ -675,7 +718,7 @@ class FutuGateway(BaseGateway):
                 # 更新名称以反映实际合约
                 main_tick.name = main_contract.name
                 
-                self.write_log(f"已更新主力合约tick缓存: {main_futu_code}")
+                self.write_log(f"已更新主力合约tick缓存: {actual_main_futu_code}")
                 
                 # 4. 推送tick事件，让UI立即刷新显示
                 self.on_tick(copy(main_tick))
@@ -1485,6 +1528,40 @@ class FutuGateway(BaseGateway):
 
         return order.vt_orderid
 
+    def _notify_chase_timeout_failure(self, chase_order: ChaseOrder, elapsed_seconds: float) -> None:
+        """
+        推送追价整体超时失败事件，通知UI显示错误
+        
+        Args:
+            chase_order: 超时的追价订单
+            elapsed_seconds: 已等待的秒数
+        """
+        from datetime import datetime as dt
+        
+        # 创建一个REJECTED状态的订单事件
+        order = OrderData(
+            symbol=chase_order.symbol,
+            exchange=chase_order.exchange,
+            orderid=chase_order.original_orderid,
+            direction=chase_order.direction,
+            offset=chase_order.offset,
+            price=chase_order.original_price,
+            volume=chase_order.volume,
+            traded=0,
+            status=Status.REJECTED,
+            datetime=dt.now(CHINA_TZ),
+            gateway_name=self.gateway_name,
+            reference=f"追价超时({elapsed_seconds:.1f}秒)"
+        )
+        
+        # 推送订单事件
+        self.on_order(order)
+        
+        # 写入醒目的错误日志
+        self.write_log(f"❌ 追价委托失败！订单{chase_order.original_orderid} "
+                      f"({chase_order.symbol} {chase_order.direction.value} {chase_order.volume}手) "
+                      f"等待{elapsed_seconds:.1f}秒后超时，无法获取有效tick数据完成委托")
+
     def _cancel_order_internal(self, req: CancelRequest) -> Tuple[bool, bool, bool]:
         """
         内部撤单方法，返回详细的撤单结果
@@ -1958,6 +2035,14 @@ class FutuGateway(BaseGateway):
         tick = self.ticks.get(futu_code)
         if tick and tick.last_price > 0:
             return tick
+        
+        # 1.5 富途API返回的行情数据使用"HK.xxx"格式而非"HK_FUTURE.xxx"
+        # 如果futu_code是"HK_FUTURE.xxx"格式，也尝试"HK.xxx"格式查找
+        if futu_code.startswith("HK_FUTURE."):
+            alt_futu_code = futu_code.replace("HK_FUTURE.", "HK.", 1)
+            tick = self.ticks.get(alt_futu_code)
+            if tick and tick.last_price > 0:
+                return tick
         
         # 2. 如果symbol是主力合约（以"main"结尾），尝试解析并查找实际合约的tick数据
         if symbol.endswith("main"):
