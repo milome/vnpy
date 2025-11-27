@@ -1,0 +1,571 @@
+# Implementation Plan - Multi-Timeframe Web Application
+
+## Project: Multi-Timeframe K-Line Chart Visualization
+
+### Executive Summary
+Build a web application for quantitative trading research that displays multiple timeframe candlestick charts simultaneously (4H, 1H, 5M, 1M) with interactive features and real-time data capability.
+
+---
+
+## Phase 1: Project Setup and Foundation
+
+### 1.1 Project Initialization
+- [ ] Choose framework (React/Vue)
+- [ ] Initialize project with build tools (Vite/Webpack)
+- [ ] Set up TypeScript configuration
+- [ ] Configure linting and formatting (ESLint, Prettier)
+- [ ] Set up testing framework (Jest/Vitest)
+- [ ] Create project directory structure
+
+### 1.2 Backend Setup (if using Spring Boot)
+- [ ] Initialize Spring Boot project
+- [ ] Configure Spring Cloud dependencies
+- [ ] Set up project structure (controllers, services, models)
+- [ ] Configure CORS for frontend integration
+- [ ] Set up logging and error handling
+
+### 1.3 Development Environment
+- [ ] Set up Git repository
+- [ ] Create .gitignore
+- [ ] Document setup instructions in README
+- [ ] Configure development/production environment variables
+
+**Estimated Complexity:** Low-Medium
+**Dependencies:** None
+
+---
+
+## Phase 2: Data Layer Implementation
+
+### 2.1 CSV Data Processing
+- [ ] Create data directory structure
+- [ ] Define CSV data format/schema for MHImain contract
+- [ ] Implement CSV parser/reader
+- [ ] Validate CSV data structure (timestamp, OHLCV)
+- [ ] Write unit tests for CSV parser
+
+### 2.2 Data Models
+- [ ] Define K-line data model (timestamp, open, high, low, close, volume)
+- [ ] Define timeframe enum (1M, 5M, 1H, 4H)
+- [ ] Create data transformation utilities
+- [ ] Implement data aggregation logic (1M → 5M → 1H → 4H)
+
+### 2.3 Data Service Layer
+- [ ] Create service to read CSV data
+- [ ] Implement data caching mechanism
+- [ ] Create API endpoint to fetch K-line data by timeframe
+- [ ] Implement data range filtering (date/time range)
+- [ ] Write integration tests for data service
+
+**Estimated Complexity:** Medium
+**Dependencies:** Phase 1
+
+---
+
+## Phase 3: Chart Visualization Core
+
+### 3.1 Chart Library Selection and Setup
+- [ ] Evaluate charting libraries (ECharts, TradingView Lightweight Charts, D3.js)
+- [ ] Install and configure chosen library
+- [ ] Create basic chart component wrapper
+- [ ] Set up chart container with responsive sizing
+
+### 3.2 Single Timeframe K-Line Rendering
+- [ ] Implement candlestick series rendering
+- [ ] Configure OHLC data binding
+- [ ] Style bullish candles (green/red)
+- [ ] Style bearish candles (with transparency)
+- [ ] Add volume bars (optional)
+- [ ] Write unit tests for chart component
+
+### 3.3 Multi-Timeframe Overlay
+- [ ] Implement multiple candlestick series on single chart
+- [ ] Configure line thickness hierarchy (4H > 1H > 5M > 1M)
+- [ ] Implement transparency for bearish candles
+- [ ] Ensure proper z-index layering (largest timeframe behind)
+- [ ] Optimize rendering performance
+- [ ] Test visual appearance and readability
+
+**Estimated Complexity:** High
+**Dependencies:** Phase 2
+
+---
+
+## Phase 4: Interactive Features
+
+### 4.1 Zoom and Pan
+- [ ] Implement mouse wheel zoom
+- [ ] Implement pinch-to-zoom (touch devices)
+- [ ] Implement click-and-drag panning
+- [ ] Set zoom limits (min/max)
+- [ ] Implement zoom reset functionality
+- [ ] Test zoom/pan performance with large datasets
+
+### 4.2 Time Axis and Grid
+- [ ] Configure time axis formatting
+- [ ] Implement dynamic time label density
+- [ ] Add price axis on right side
+- [ ] Configure grid lines
+- [ ] Implement crosshair cursor
+
+### 4.3 Drawing Tools
+- [ ] Implement line drawing tool
+- [ ] Implement horizontal/vertical line tools
+- [ ] Implement trendline tool
+- [ ] Add drawing tool selector UI
+- [ ] Implement drawing persistence (save/load)
+- [ ] Add delete/edit drawing functionality
+- [ ] Write tests for drawing tools
+
+### 4.4 Drawing-to-Order Interface (Placeholder)
+- [ ] Design order interface API structure
+- [ ] Create placeholder function for order submission
+- [ ] Implement drawing-to-order trigger points
+- [ ] Document interface for future integration
+
+**Estimated Complexity:** High
+**Dependencies:** Phase 3
+
+---
+
+## Phase 5: Frontend UI/UX
+
+### 5.1 Main Layout
+- [ ] Create application shell/layout
+- [ ] Design header with contract info (MHImain, HKFE)
+- [ ] Create chart container area
+- [ ] Add timeframe selector/toggle
+- [ ] Implement responsive design
+
+### 5.2 Control Panel
+- [ ] Add zoom controls (buttons)
+- [ ] Add drawing tool buttons
+- [ ] Add timeframe visibility toggles
+- [ ] Add chart settings panel
+- [ ] Implement keyboard shortcuts
+
+### 5.3 Styling and Theming
+- [ ] Define color scheme (dark/light theme)
+- [ ] Style candlesticks (bullish/bearish colors)
+- [ ] Style UI controls and buttons
+- [ ] Ensure accessibility standards
+- [ ] Test on multiple screen sizes
+
+**Estimated Complexity:** Medium
+**Dependencies:** Phase 3, 4
+
+---
+
+## Phase 6: WebSocket Integration (Preparation)
+
+### 6.1 WebSocket Infrastructure
+- [ ] Design WebSocket API specification
+- [ ] Define message format for tick data
+- [ ] Implement WebSocket server endpoint (backend)
+- [ ] Implement WebSocket client (frontend)
+- [ ] Add connection status indicator
+
+### 6.2 Real-Time Data Handling
+- [ ] Implement tick data receiver
+- [ ] Create tick-to-K-line aggregation logic
+- [ ] Implement real-time chart update mechanism
+- [ ] Handle reconnection logic
+- [ ] Implement data buffering for network interruptions
+
+### 6.3 vnpy Integration Interface
+- [ ] Document vnpy data format requirements
+- [ ] Create adapter for vnpy tick data
+- [ ] Implement data validation
+- [ ] Create mock data generator for testing
+- [ ] Write integration tests
+
+**Estimated Complexity:** Medium-High
+**Dependencies:** Phase 2, 3
+**Note:** Can be implemented in parallel with Phase 5
+
+---
+
+## Phase 7: Testing and Quality Assurance
+
+### 7.1 Unit Testing
+- [ ] Write unit tests for data models
+- [ ] Write unit tests for data transformations
+- [ ] Write unit tests for chart components
+- [ ] Achieve 80%+ code coverage
+
+### 7.2 Integration Testing
+- [ ] Test CSV data loading end-to-end
+- [ ] Test chart rendering with real data
+- [ ] Test interactive features (zoom, pan, draw)
+- [ ] Test WebSocket connection and data flow
+
+### 7.3 Performance Testing
+- [ ] Test with large datasets (1+ years of 1M data)
+- [ ] Measure rendering performance (FPS)
+- [ ] Test memory usage
+- [ ] Optimize bottlenecks
+
+### 7.4 User Acceptance Testing
+- [ ] Test drawing tools usability
+- [ ] Test chart readability with multiple timeframes
+- [ ] Verify transparency effectiveness
+- [ ] Gather feedback from quantitative researchers
+
+**Estimated Complexity:** Medium
+**Dependencies:** All previous phases
+
+---
+
+## Phase 8: Deployment and Documentation
+
+### 8.1 Build and Deployment
+- [ ] Configure production build
+- [ ] Optimize bundle size
+- [ ] Set up CI/CD pipeline
+- [ ] Configure deployment environment
+- [ ] Deploy to staging/production
+
+### 8.2 Documentation
+- [ ] Write user guide
+- [ ] Document API endpoints
+- [ ] Document WebSocket protocol
+- [ ] Create developer documentation
+- [ ] Document drawing-to-order interface
+
+### 8.3 Monitoring and Maintenance
+- [ ] Set up error logging
+- [ ] Configure performance monitoring
+- [ ] Create maintenance checklist
+- [ ] Document troubleshooting procedures
+
+**Estimated Complexity:** Low-Medium
+**Dependencies:** Phase 7
+
+---
+
+## Technical Stack Summary
+
+### Frontend
+- Framework: React or Vue (to be decided)
+- Language: TypeScript
+- Charting: ECharts / TradingView Lightweight Charts / D3.js (to be evaluated)
+- State Management: Context API / Vuex / Pinia
+- Build Tool: Vite
+- Testing: Vitest + Testing Library
+
+### Backend
+- Framework: Spring Boot + Spring Cloud
+- Language: Java
+- WebSocket: Spring WebSocket
+- Data: CSV files → SQLite (future)
+
+### Data
+- Source: CSV files in /data directory
+- Contract: MHImain (小恒指期货主连)
+- Exchange: HKFE
+- Format: timestamp, symbol, timeframe, open, high, low, close, volume
+
+---
+
+## Risk Assessment
+
+### Technical Risks
+- **Chart Performance**: Rendering 4 timeframes simultaneously may impact performance
+  - *Mitigation*: Use canvas-based charting library, implement data windowing
+
+- **Data Synchronization**: Aligning multiple timeframes precisely
+  - *Mitigation*: Implement robust timestamp alignment logic, thorough testing
+
+- **WebSocket Reliability**: Real-time data connection stability
+  - *Mitigation*: Implement reconnection logic, data buffering
+
+### Timeline Risks
+- **Chart Library Learning Curve**: May take longer than expected
+  - *Mitigation*: Allocate buffer time, start with simpler library if needed
+
+---
+
+## Success Criteria
+
+- [ ] Successfully displays 4 timeframes (4H, 1H, 5M, 1M) on single chart
+- [ ] Line thickness decreases appropriately for smaller timeframes
+- [ ] Bearish candles have transparency showing underlying timeframes
+- [ ] Zoom and pan work smoothly with large datasets
+- [ ] Drawing tools are functional and intuitive
+- [ ] CSV data loads correctly for MHImain contract
+- [ ] WebSocket interface is ready for vnpy integration
+- [ ] Drawing-to-order interface is documented and stubbed
+- [ ] Application passes all tests (unit, integration, performance)
+- [ ] User can effectively analyze multi-timeframe patterns
+
+---
+
+## Next Steps
+
+1. **Immediate**: Choose frontend framework (React vs Vue)
+2. **Immediate**: Evaluate and select charting library
+3. **Week 1**: Complete Phase 1 (Project Setup)
+4. **Week 1-2**: Complete Phase 2 (Data Layer)
+5. **Week 2-4**: Complete Phase 3 (Chart Core)
+6. **Week 4-6**: Complete Phase 4 & 5 (Interactive Features & UI)
+7. **Week 6-7**: Complete Phase 6 (WebSocket Prep)
+8. **Week 7-8**: Complete Phase 7 & 8 (Testing & Deployment)
+
+---
+
+## Notes
+
+- Start with React + ECharts as recommended stack (proven for financial charts)
+- Focus on getting single timeframe working perfectly before multi-timeframe overlay
+- Test transparency and visual hierarchy early and often
+- Keep WebSocket interface simple and well-documented for vnpy integration
+- Use TDD approach as specified in constitution
+- Prioritize performance - financial data visualization requires smooth interaction
+
+---
+
+## Phase D12: 4小时K线时间边界更新与画线绘制实现
+
+### 关联决策
+参见 `.speckit.clarify` D12: 4小时K线时间边界划分与画线绘制方式
+
+### D12.1 时间边界配置更新
+- [ ] 更新 `timeframeAggregator.ts` 中的 `TRADING_PERIODS` 配置
+- [ ] 修正边界为精确的 `xx:14` 和 `xx:15` 分界点
+- [ ] 验证第三根K线跨休市时间段正确性 (01:15-03:00 + 09:15-11:29)
+- [ ] 验证第四根K线跨午休时间段正确性 (11:30-12:00 + 13:00-16:29)
+- [ ] 编写单元测试验证边界判断
+
+### D12.2 4小时K线画线渲染器实现
+- [ ] 创建 `FourHourCandleRenderer.ts` 画线渲染器模块
+- [ ] 实现开盘价/收盘价水平线绘制
+- [ ] 实现实体竖线连接绘制
+- [ ] 实现上影线/下影线绘制逻辑 (区分阳线/阴线)
+- [ ] 实现颜色判断逻辑 (涨跌颜色)
+- [ ] 编写渲染器单元测试
+
+### D12.3 特殊情况处理
+- [ ] 实现意外停盘检测逻辑
+- [ ] 实现金融假期检测逻辑
+- [ ] 实现跨假期4小时K线合并逻辑
+- [ ] 编写特殊情况单元测试
+
+### D12.4 集成与验证
+- [ ] 集成画线渲染器到 `MultiTimeframeChart` 组件
+- [ ] 替换/补充现有4小时K线渲染
+- [ ] 验证与其他周期K线的层叠显示效果
+- [ ] 性能测试与优化
+
+**精确时间边界定义:**
+| K线 | 开始时间 | 结束时间 | 时间戳 |
+|-----|----------|----------|--------|
+| 1   | 17:15    | 21:14    | 17:15  |
+| 2   | 21:15    | 01:14    | 21:15  |
+| 3   | 01:15    | 11:29    | 01:15  |
+| 4   | 11:30    | 16:29    | 11:30  |
+
+**Estimated Complexity:** Medium-High
+**Dependencies:** Phase 3 (Chart Core), 现有 timeframeAggregator.ts
+**Priority:** High - 核心功能更新
+
+---
+
+## Phase E: ECharts交易功能移植计划
+
+### 目标
+将TradingView Lightweight Charts组件中实现的所有交易功能移植到ECharts组件中，使ECharts成为完整的交易图表解决方案。
+
+### 功能对比
+
+| 功能 | TradingView | ECharts (目标) |
+|------|:-----------:|:-------------:|
+| 1分钟K线显示 | ✅ | ✅ 已有 |
+| 4小时K线画线绘制 (D12) | ✅ | ✅ 已有 |
+| 日期范围筛选 | ✅ | ✅ 已有 |
+| 画线下单 | ✅ | 🎯 待移植 |
+| 价格线管理 | ✅ | 🎯 待移植 |
+| 价格线拖拽 | ✅ | 🎯 待移植 |
+| 自动追踪止损 | ✅ | 🎯 待移植 |
+| 双止损保护 | ✅ | 🎯 待移植 |
+| 入场线创建止损/止盈 | ✅ | 🎯 待移植 |
+| 订单管理 | ✅ | 🎯 待移植 |
+| 十字光标数据显示 | ✅ | 🎯 待移植 |
+| 工具栏UI | ✅ | 🎯 待移植 |
+| 订单列表面板 | ✅ | 🎯 待移植 |
+
+---
+
+### E1: ECharts价格线管理器 (预计2小时)
+
+#### E1.1 定义接口和基础类
+- [ ] 创建 `utils/echartsPlm.ts` (ECharts Price Line Manager)
+- [ ] 定义与TradingView版本兼容的接口
+- [ ] 实现ECharts markLine配置生成
+
+#### E1.2 实现核心方法
+- [ ] `createPriceLine()` - 创建价格线
+- [ ] `removeLine()` - 删除价格线
+- [ ] `updateLine()` - 更新价格线位置
+- [ ] `getAllLines()` - 获取所有价格线
+- [ ] `getLinesByOrderId()` - 按订单ID获取价格线
+
+#### E1.3 实现业务方法
+- [ ] `createEntryLine()` - 创建入场线
+- [ ] `createStopLossLine()` - 创建止损线
+- [ ] `createTakeProfitLine()` - 创建止盈线
+- [ ] `createPendingLine()` - 创建挂单线
+- [ ] `createPreviewLine()` - 创建预览线
+- [ ] `removeLinesByOrderId()` - 按订单删除所有线
+
+#### E1.4 单元测试
+- [ ] 编写价格线CRUD测试
+- [ ] 编写业务方法测试
+
+**关键技术点:**
+- ECharts使用 `markLine` 配置绘制水平价格线
+- 需要动态更新series配置来添加/删除线
+- 线样式通过 `lineStyle` 配置
+
+---
+
+### E2: ECharts订单标记管理器 (预计1小时)
+
+#### E2.1 创建标记管理器
+- [ ] 创建 `utils/echartsMarkerManager.ts`
+- [ ] 实现使用ECharts `markPoint` 绘制成交标记
+
+#### E2.2 实现标记方法
+- [ ] `addFilledOrderMarker()` - 添加成交标记
+- [ ] `removeMarker()` - 删除标记
+- [ ] `clearAllMarkers()` - 清除所有标记
+
+---
+
+### E3: 画线下单功能移植 (预计3小时)
+
+#### E3.1 移植useDrawingOrder Hook
+- [ ] 创建ECharts版本的画线下单状态管理
+- [ ] 实现画线模式开启/关闭
+
+#### E3.2 实现十字光标价格获取
+- [ ] 监听ECharts `mousemove` 事件
+- [ ] 使用 `convertFromPixel` 将坐标转换为价格
+- [ ] 实现价格吸附（可选）
+
+#### E3.3 实现预览价格线
+- [ ] 在鼠标移动时显示预览线
+- [ ] 预览线跟随光标Y坐标
+
+#### E3.4 集成OrderDialog
+- [ ] 点击图表时弹出下单对话框
+- [ ] 确认下单后创建订单和价格线
+
+---
+
+### E4: 价格线拖拽功能 (预计3小时)
+
+#### E4.1 拖拽检测
+- [ ] 监听 `mousedown` 事件
+- [ ] 检测鼠标是否靠近可拖拽的价格线
+- [ ] 计算像素距离阈值
+
+#### E4.2 拖拽过程
+- [ ] 监听 `mousemove` 更新价格线位置
+- [ ] 实时更新ECharts配置
+- [ ] 显示拖拽提示
+
+#### E4.3 拖拽确认/取消
+- [ ] `mouseup` 确认拖拽
+- [ ] `Escape` 取消拖拽
+- [ ] 恢复原位置逻辑
+
+---
+
+### E5: 自动追踪止损 (预计1小时)
+
+- [ ] 移植 `useAutoTrailingStopLoss` Hook
+- [ ] 实现挂单拖拽时自动更新止损线
+- [ ] 保持止损偏移量配置
+
+---
+
+### E6: 双止损保护 (预计2小时)
+
+- [ ] 移植 `useDualStopLoss` Hook
+- [ ] 实现影子止损线绘制
+- [ ] 实现滞后跟随效果
+- [ ] 拖拽取消时恢复原止损
+
+---
+
+### E7: 入场线创建止损/止盈 (预计2小时)
+
+- [ ] 移植 `useEntryLineDrag` Hook
+- [ ] 从入场线向上拖拽创建止盈
+- [ ] 从入场线向下拖拽创建止损
+- [ ] 方向检测和线类型确定
+
+---
+
+### E8: 十字光标K线数据显示 (预计1小时)
+
+- [ ] 监听ECharts `axispointer` 事件
+- [ ] 获取当前光标位置的K线数据
+- [ ] 创建数据显示面板组件
+- [ ] 显示OHLCV和涨跌幅
+
+---
+
+### E9: UI组件移植 (预计2小时)
+
+#### E9.1 工具栏
+- [ ] 画线下单按钮
+- [ ] 自动止损开关和偏移量输入
+- [ ] 调试按钮
+
+#### E9.2 订单列表面板
+- [ ] 挂单列表
+- [ ] 持仓列表
+- [ ] 模拟成交/撤单按钮
+
+#### E9.3 状态提示
+- [ ] 画线模式提示
+- [ ] 拖拽状态提示
+- [ ] 双止损保护提示
+- [ ] 入场线创建提示
+
+---
+
+### E10: 集成测试和优化 (预计2小时)
+
+- [ ] 端到端功能测试
+- [ ] 性能优化（减少不必要的重渲染）
+- [ ] 修复集成问题
+- [ ] 用户体验优化
+
+---
+
+### 实施顺序
+
+```
+E1 (价格线管理器)
+    ↓
+E2 (订单标记) ← 可并行
+    ↓
+E3 (画线下单) ← 依赖 E1
+    ↓
+E4 (价格线拖拽) ← 依赖 E1, E3
+    ↓
+E5 (自动追踪止损) ← 依赖 E4
+E6 (双止损保护) ← 依赖 E4
+E7 (入场线创建) ← 依赖 E4
+    ↓
+E8 (十字光标显示) ← 可独立
+E9 (UI组件) ← 依赖 E3-E7
+    ↓
+E10 (集成测试)
+```
+
+**Estimated Total Time:** 17-19小时
+**Dependencies:** D12完成, OrderService, 现有Hooks
+**Priority:** Medium - 功能完善

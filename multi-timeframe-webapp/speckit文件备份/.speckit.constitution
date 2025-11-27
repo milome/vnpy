@@ -1,0 +1,112 @@
+# Project Constitution
+
+## Project Overview
+This is a multi-timeframe web application.
+
+## Technology Stack
+- List your main technologies here (e.g., React, TypeScript, Node.js, etc.)
+- Framework: Springboot/Spring cloud/vue/React or other framework
+- Database: csv first or reuse vnpy sqlite db
+- Testing: TDD
+
+## Code Style and Standards
+
+### General Principles
+- Follow existing code patterns and conventions in the codebase
+- Write clear, self-documenting code
+- Avoid over-engineering; keep solutions simple and focused
+- Only add complexity when directly needed for the current task
+
+### Naming Conventions
+- Files:
+- Functions:
+- Variables:
+- Classes:
+- Components:
+
+### Code Organization
+- Directory structure conventions
+- Module organization patterns
+- Import ordering preferences
+
+## Development Practices
+
+### Testing
+- Testing framework:
+- Test file location:
+- Test coverage requirements:
+- When to write tests:
+
+### Error Handling
+- Error handling patterns
+- Logging conventions
+- Error message formatting
+
+### Security
+- Authentication patterns
+- Input validation requirements
+- Security considerations for this project
+
+## Git Workflow
+
+### Branching Strategy
+- Branch naming convention:
+- Main branches:
+
+### Commit Messages
+- Format:
+- Guidelines:
+
+## AI Assistant Guidelines
+
+### What to do
+- Read existing code before proposing changes
+- Follow the existing patterns in the codebase
+- Ask for clarification when requirements are ambiguous
+- Run tests after making changes
+
+### What NOT to do
+- Don't add features beyond what was requested
+- Don't refactor code that isn't part of the task
+- Don't add comments or documentation to unchanged code
+- Don't create unnecessary abstractions
+
+## Project-Specific Rules
+
+### Architecture Patterns
+- State management approach:
+- API communication patterns:
+- Component composition patterns:
+
+### Performance Considerations
+- Optimization priorities:
+- Caching strategies:
+- Bundle size constraints:
+
+### Accessibility
+- WCAG compliance level:
+- Accessibility testing approach:
+
+## Dependencies
+
+### Adding New Dependencies
+- Approval process:
+- Evaluation criteria:
+- Preferred alternatives:
+
+### Dependency Constraints
+- License requirements:
+- Size considerations:
+
+## Documentation
+
+### Code Documentation
+- When to add comments:
+- Documentation format:
+
+### API Documentation
+- API documentation format:
+- Endpoint documentation requirements:
+
+## Notes
+Add any additional project-specific guidelines, conventions, or important context here.

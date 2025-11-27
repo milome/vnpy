@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -I http://localhost:3004/data/4hour_MHImain_HKFE.csv)",
+      "Bash(curl -s http://localhost:3004/data/4hour_MHImain_HKFE.csv)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

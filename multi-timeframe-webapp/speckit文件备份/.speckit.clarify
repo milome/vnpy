@@ -1,0 +1,379 @@
+# Clarifications and Decisions
+
+## Multi-Timeframe K-Line Chart Application
+
+This document tracks clarifications, open questions, decisions, and assumptions for the project.
+
+---
+
+## Open Questions
+
+### Critical Questions (Blocking Development)
+
+#### Q1: Frontend Framework Choice
+**Question:** Should we use React or Vue for the frontend?
+**Status:** 🟢 RESOLVED
+**Impact:** High - Affects entire frontend architecture
+**Options:**
+  - React: Larger ecosystem, more TypeScript support, better for complex state
+  - Vue: Simpler learning curve, good performance, smaller bundle size
+**Recommendation:** React (better charting library support, stronger TypeScript integration)
+**Decision:** ✅ React + TypeScript
+**Decided by:** User approved recommendation (Option A)
+**Date:** 2025-11-24
+
+#### Q2: Charting Library Selection
+**Question:** Which charting library should we use for multi-timeframe candlesticks?
+**Status:** 🟢 RESOLVED
+**Impact:** High - Core visualization functionality
+**Options:**
+  - **ECharts**:
+    - Pros: Rich features, good performance, extensive examples, Apache license
+    - Cons: Larger bundle size, learning curve for advanced features
+  - **TradingView Lightweight Charts**:
+    - Pros: Excellent performance, designed for financial data, small bundle
+    - Cons: Limited customization, may need workarounds for multi-timeframe
+  - **D3.js**:
+    - Pros: Maximum flexibility, complete control
+    - Cons: Very complex, longer development time, need to build everything
+**Recommendation:** ECharts (best balance of features, performance, and development speed)
+**Decision:** ✅ ECharts with echarts-for-react
+**Decided by:** User approved recommendation (Option A)
+**Date:** 2025-11-24
+
+#### Q3: Backend Architecture
+**Question:** Do we need a separate backend, or can we start with frontend-only?
+**Status:** 🟢 RESOLVED
+**Impact:** Medium - Affects initial development approach
+**Context:** Current requirement is to read CSV files. Could be done:
+  - Frontend-only: Read CSV directly in browser (simpler start)
+  - Backend: Spring Boot API serving data (better for future scalability)
+**Trade-offs:**
+  - Frontend-only: Faster initial development, but limited data processing
+  - Backend: More setup, but easier to add WebSocket and database later
+**Recommendation:** Start with Spring Boot backend (aligns with future WebSocket requirement)
+**Decision:** ✅ Frontend-only for Phase 1-5, add Spring Boot backend in Phase 6 for WebSocket
+**Decided by:** User approved recommendation (Option A - fast prototype approach)
+**Date:** 2025-11-24
+
+---
+
+### Design Questions
+
+#### Q4: Candlestick Transparency Details
+**Question:** What transparency level should bearish candles have?
+**Status:** 🟡 NEEDS CLARIFICATION
+**Impact:** Low - Visual appearance
+**Context:** User story mentions transparency for bearish candles to see smaller timeframes
+**Options:**
+  - 50% opacity (semi-transparent)
+  - 70% opacity (mostly visible)
+  - 30% opacity (very transparent)
+**Recommendation:** Start with 50% and make it configurable
+**Decision:** TBD
+**Decided by:**
+**Date:**
+
+#### Q5: Line Thickness Specification
+**Question:** What exact line thickness should each timeframe use?
+**Status:** 🟡 NEEDS CLARIFICATION
+**Impact:** Low - Visual appearance
+**Context:** "最大周期的K线线条最粗，剩余周期线条依次递减"
+**Options:**
+  - 4H: 4px, 1H: 3px, 5M: 2px, 1M: 1px
+  - 4H: 6px, 1H: 4px, 5M: 2px, 1M: 1px
+  - Make it configurable
+**Recommendation:** Start with 4/3/2/1 and make it configurable
+**Decision:** TBD
+**Decided by:**
+**Date:**
+
+#### Q6: Bullish vs Bearish Colors
+**Question:** What colors should be used for bullish and bearish candles?
+**Status:** 🟡 NEEDS CLARIFICATION
+**Impact:** Low - Visual appearance
+**Context:** Need to define color scheme
+**Options:**
+  - Traditional: Green (bullish), Red (bearish)
+  - Western: Green (bullish), Red (bearish)
+  - Chinese: Red (bullish), Green (bearish)
+**Recommendation:** Ask user preference, default to Green/Red (Western style)
+**Decision:** TBD
+**Decided by:**
+**Date:**
+
+---
+
+### Technical Questions
+
+#### Q7: CSV Data Format
+**Question:** What is the exact CSV column format and structure?
+**Status:** 🟡 NEEDS CLARIFICATION
+**Impact:** Medium - Data parsing implementation
+**Context:** Need to know exact format to parse correctly
+**Expected format:**
+```csv
+timestamp,symbol,open,high,low,close,volume
+2024-01-01 09:00:00,MHImain,25000,25100,24900,25050,1000
+```
+**Questions:**
+  - Is timestamp in local time or UTC?
+  - What is the date format?
+  - Are there headers in the CSV?
+  - What timeframe is the raw CSV data? (1 minute?)
+**Decision:** TBD - Need to see actual CSV file
+**Decided by:**
+**Date:**
+
+#### Q8: Data Aggregation Logic
+**Question:** How should we aggregate smaller timeframes into larger ones?
+**Status:** 🟡 NEEDS CLARIFICATION
+**Impact:** Medium - Data accuracy
+**Context:** Need to convert 1M → 5M → 1H → 4H
+**Questions:**
+  - Should aggregation happen on backend or frontend?
+  - How to handle incomplete periods (e.g., current unclosed 4H bar)?
+  - Should we align to exchange hours or calendar hours?
+**Recommendation:** Backend aggregation, aligned to calendar hours, mark incomplete bars
+**Decision:** TBD
+**Decided by:**
+**Date:**
+
+#### Q9: Drawing-to-Order Interface
+**Question:** What specific interface/API should the drawing-to-order feature use?
+**Status:** 🟡 NEEDS CLARIFICATION
+**Impact:** Low (Phase 1) - Just need to reserve interface
+**Context:** "预留画线下单的接口"
+**Questions:**
+  - What order parameters are needed (price, quantity, type)?
+  - Should it integrate with specific broker API?
+  - What order types (market, limit, stop)?
+**Recommendation:** Define simple REST API interface, implement later
+**Decision:** TBD
+**Decided by:**
+**Date:**
+
+#### Q10: WebSocket Message Format
+**Question:** What is the exact message format from vnpy?
+**Status:** 🟡 NEEDS CLARIFICATION
+**Impact:** Medium - Phase 6 implementation
+**Context:** Need to design compatible WebSocket interface
+**Questions:**
+  - What fields does vnpy tick data include?
+  - What is the message format (JSON, Protocol Buffers, etc.)?
+  - What is the message frequency?
+**Recommendation:** Document vnpy tick data format before Phase 6
+**Decision:** TBD - Can be addressed later
+**Decided by:**
+**Date:**
+
+---
+
+## Decisions Made
+
+### D1: TDD Approach
+**Decision:** Use Test-Driven Development throughout the project
+**Rationale:** Specified in project constitution
+**Impact:** All phases will include writing tests first
+**Decided by:** Project Constitution
+**Date:** 2025-11-24
+
+### D2: Data Source Priority
+**Decision:** Start with CSV files, migrate to SQLite later if needed
+**Rationale:** Specified in project constitution and requirements
+**Impact:** Initial implementation focuses on CSV parsing
+**Decided by:** Project Constitution
+**Date:** 2025-11-24
+
+### D3: Contract Specification
+**Decision:** Initial implementation for MHImain contract (小恒指期货主连) on HKFE
+**Rationale:** Specified in user story
+**Impact:** Data format and UI will show MHImain specific information
+**Decided by:** User Story
+**Date:** 2025-11-24
+
+### D4: Timeframes to Support
+**Decision:** Support 1M, 5M, 1H, 4H timeframes initially
+**Rationale:** Specified in user story
+**Impact:** Data aggregation and UI will support these four timeframes
+**Decided by:** User Story
+**Date:** 2025-11-24
+
+### D5: Frontend Framework and Tech Stack
+**Decision:** React 18 + TypeScript + Vite + ECharts
+**Rationale:** Best balance of features, performance, developer experience, and charting capabilities
+**Impact:**
+  - React ecosystem for component architecture
+  - TypeScript for type safety
+  - Vite for fast development and build
+  - ECharts for multi-timeframe candlestick rendering
+**Decided by:** User approved recommendation (Option A)
+**Date:** 2025-11-24
+
+### D6: Initial Architecture Approach
+**Decision:** Frontend-only for Phase 1-5, add backend in Phase 6
+**Rationale:** CSV data already separated by timeframe, frontend can load directly for faster prototyping
+**Impact:**
+  - Faster initial development
+  - CSV loaded via PapaParsefor browser-side parsing
+  - Backend (Spring Boot) will be added in Phase 6 for WebSocket support
+**Decided by:** User approved recommendation (Option A)
+**Date:** 2025-11-24
+
+### D7: CSV Data Format
+**Decision:** Confirmed actual CSV format from existing data files
+**Format:** `symbol,exchange,datetime,open,high,low,close,volume,turnover,open_interest`
+**Rationale:** Examined actual data files in `/data` directory
+**Impact:** CSV parser will handle this exact format
+**Decided by:** Data file inspection
+**Date:** 2025-11-24
+
+---
+
+## Assumptions
+
+### A1: Data Availability
+**Assumption:** CSV data files exist in `/data` directory with complete OHLCV data
+**Risk if wrong:** Cannot test or develop without real data
+**Validation:** ✅ VALIDATED - CSV files confirmed to exist with complete data
+
+### A2: Browser Compatibility
+**Assumption:** Target modern browsers (Chrome, Firefox, Edge, Safari latest versions)
+**Risk if wrong:** May need polyfills or compatibility layers
+**Validation:** Document browser requirements
+
+### A3: Data Volume
+**Assumption:** CSV files contain 1-minute data, potentially years of history
+**Risk if wrong:** Performance issues if data volume is much larger
+**Validation:** Test with real data volume early
+
+### A4: Single Symbol Display
+**Assumption:** UI displays one symbol (MHImain) at a time, no multi-symbol view needed initially
+**Risk if wrong:** Architecture may need to support multiple symbols
+**Validation:** Clarify with user
+
+### A5: Desktop-First Design
+**Assumption:** Primary use case is desktop browser, mobile is secondary
+**Risk if wrong:** May need more mobile optimization
+**Validation:** Implement responsive design but prioritize desktop
+
+### A6: Real-Time Data Frequency
+**Assumption:** Real-time tick data arrives at reasonable frequency (< 100 ticks/second)
+**Risk if wrong:** May need more aggressive data throttling/aggregation
+**Validation:** Test with vnpy data rates in Phase 6
+
+---
+
+## Clarifications Needed from User
+
+### High Priority (Before Starting Phase 2)
+1. ✅ **Framework Choice:** React or Vue? - **DECIDED: React + TypeScript**
+2. ✅ **Charting Library:** ECharts, TradingView, or D3.js? - **DECIDED: ECharts**
+3. ✅ **Backend Setup:** Start with backend or frontend-only? - **DECIDED: Frontend-only (Phase 1-5)**
+4. ✅ **CSV Format:** Can you provide a sample CSV file or exact format specification? - **VALIDATED: Format confirmed**
+
+### Medium Priority (Before Phase 3)
+5. ⏳ **Color Scheme:** Bullish/bearish colors preference?
+6. ⏳ **Transparency:** Preferred opacity level for bearish candles?
+7. ⏳ **Line Thickness:** Exact pixel values for each timeframe?
+
+### Low Priority (Can be decided later)
+8. ⏳ **Drawing Features:** Which specific drawing tools are most important?
+9. ⏳ **Order Interface:** What order types and parameters are needed?
+10. ⏳ **vnpy Format:** Can you provide vnpy WebSocket message format documentation?
+
+---
+
+## Technical Constraints
+
+### TC1: Performance Requirements
+**Constraint:** Chart must render smoothly (60fps) with 10,000+ candles
+**Rationale:** User experience requirement for smooth zoom/pan
+**Impact:** Must use canvas-based rendering, implement data windowing
+
+### TC2: Data Precision
+**Constraint:** Financial data requires precise decimal handling
+**Rationale:** Trading accuracy requirement
+**Impact:** Use appropriate numeric types, avoid floating-point errors
+
+### TC3: Time Handling
+**Constraint:** Must correctly handle timezone, DST, and market hours
+**Rationale:** Financial data is time-sensitive
+**Impact:** Use proper date/time libraries, store timestamps in UTC
+
+---
+
+## Risk Register
+
+### R1: Multi-Timeframe Rendering Performance
+**Risk:** Rendering 4 timeframes simultaneously may be too slow
+**Probability:** Medium
+**Impact:** High
+**Mitigation:**
+  - Use canvas-based charting library
+  - Implement data windowing (only render visible range)
+  - Test early with real data volumes
+  - Consider WebGL if needed
+
+### R2: Transparency Legibility
+**Risk:** Transparent overlays may make chart hard to read
+**Probability:** Low
+**Impact:** Medium
+**Mitigation:**
+  - Test with real users early
+  - Make transparency configurable
+  - Provide alternative view modes (separate charts, toggle timeframes)
+
+### R3: WebSocket Connection Stability
+**Risk:** Real-time data connection may be unstable
+**Probability:** Medium
+**Impact:** Medium
+**Mitigation:**
+  - Implement automatic reconnection
+  - Buffer data during disconnection
+  - Show connection status to user
+  - Test with network interruptions
+
+---
+
+## Notes and Context
+
+### N1: vnpy Integration
+vnpy is a Python-based open-source quantitative trading platform. The WebSocket integration will receive real-time tick data from vnpy and convert it to K-line data for multiple timeframes.
+
+### N2: Drawing Tools Use Case
+Drawing tools (trendlines, horizontal lines) are commonly used by quantitative researchers to mark support/resistance levels and identify patterns. The drawing-to-order feature allows placing orders at drawn price levels.
+
+### N3: Multi-Timeframe Analysis
+Displaying multiple timeframes simultaneously helps identify:
+- Trend alignment across timeframes
+- Support/resistance levels at different scales
+- Entry/exit points with multi-timeframe confirmation
+
+### N4: HKFE Trading Hours
+Hong Kong Futures Exchange (HKFE) trading hours:
+- Day session: 09:15 - 12:00, 13:00 - 16:30 HKT
+- Night session: 17:15 - 01:00 HKT (next day)
+May need to handle session gaps in data.
+
+---
+
+## Change Log
+
+| Date | Type | Description | Impact |
+|------|------|-------------|--------|
+| 2025-11-24 | Created | Initial clarifications document | N/A |
+| 2025-11-24 | Decision | Confirmed React + TypeScript + Vite + ECharts stack | High - Enables Phase 1-5 development |
+| 2025-11-24 | Decision | Frontend-only architecture for Phase 1-5 | Medium - Faster initial development |
+| 2025-11-24 | Validation | Confirmed CSV data format and file availability | High - Unblocks Phase 2 |
+| 2025-11-24 | Completed | Phase 1 Project Setup initialized | High - Foundation ready |
+| | | | |
+
+---
+
+## Status Legend
+- 🔴 OPEN - Requires immediate decision
+- 🟡 NEEDS CLARIFICATION - Needs input from stakeholders
+- 🟢 RESOLVED - Decision made and documented
+- ⏳ PENDING - Waiting for information
+- ✅ DECIDED - Finalized decision

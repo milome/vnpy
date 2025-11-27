@@ -1,0 +1,653 @@
+# Clarifications and Decisions
+
+## Multi-Timeframe K-Line Chart Application
+
+This document tracks clarifications, open questions, decisions, and assumptions for the project.
+
+---
+
+## Open Questions
+
+### Critical Questions (Blocking Development)
+
+#### Q1: Frontend Framework Choice
+**Question:** Should we use React or Vue for the frontend?
+**Status:** 🟢 RESOLVED
+**Impact:** High - Affects entire frontend architecture
+**Options:**
+  - React: Larger ecosystem, more TypeScript support, better for complex state
+  - Vue: Simpler learning curve, good performance, smaller bundle size
+**Recommendation:** React (better charting library support, stronger TypeScript integration)
+**Decision:** ✅ React + TypeScript
+**Decided by:** User approved recommendation (Option A)
+**Date:** 2025-11-24
+
+#### Q2: Charting Library Selection
+**Question:** Which charting library should we use for multi-timeframe candlesticks?
+**Status:** 🟢 RESOLVED
+**Impact:** High - Core visualization functionality
+**Options:**
+  - **ECharts**:
+    - Pros: Rich features, good performance, extensive examples, Apache license
+    - Cons: Larger bundle size, learning curve for advanced features
+  - **TradingView Lightweight Charts**:
+    - Pros: Excellent performance, designed for financial data, small bundle
+    - Cons: Limited customization, may need workarounds for multi-timeframe
+  - **D3.js**:
+    - Pros: Maximum flexibility, complete control
+    - Cons: Very complex, longer development time, need to build everything
+**Recommendation:** ECharts (best balance of features, performance, and development speed)
+**Decision:** ✅ ECharts with echarts-for-react
+**Decided by:** User approved recommendation (Option A)
+**Date:** 2025-11-24
+
+#### Q3: Backend Architecture
+**Question:** Do we need a separate backend, or can we start with frontend-only?
+**Status:** 🟢 RESOLVED (Updated)
+**Impact:** High - Affects entire system architecture
+**Context:** Current requirement is to read CSV files and later integrate real-time data from vnpy.
+**Options Evaluated:**
+  - **A: Frontend-only** - Read CSV directly in browser (simpler start)
+  - **B: Spring Boot backend** - Java中间层中转数据
+  - **C: vnpy内置Python Web后端** - 在vnpy中使用FastAPI构建Web服务
+**Trade-offs:**
+  - Option A: Faster initial development, but no real-time support
+  - Option B: 需要维护Java+Python双技术栈，无法复用vnpy现有代码
+  - Option C: 单一Python技术栈，可直接复用vnpy现有下单/追价逻辑
+**Decision:** ✅ Phase 1-5 纯前端 + Phase 6 使用vnpy内置FastAPI Web后端
+**Rationale:** vnpy已有PyQt5 UI实现的下单、智能追价等功能，可直接复用
+**Decided by:** User approved (方案C)
+**Date:** 2025-11-24 (initial), 2025-11-26 (updated)
+
+---
+
+### Design Questions
+
+#### Q4: Candlestick Transparency Details
+**Question:** What transparency level should bearish candles have?
+**Status:** 🟡 NEEDS CLARIFICATION
+**Impact:** Low - Visual appearance
+**Context:** User story mentions transparency for bearish candles to see smaller timeframes
+**Options:**
+  - 50% opacity (semi-transparent)
+  - 70% opacity (mostly visible)
+  - 30% opacity (very transparent)
+**Recommendation:** Start with 50% and make it configurable
+**Decision:** TBD
+**Decided by:**
+**Date:**
+
+#### Q5: Line Thickness Specification
+**Question:** What exact line thickness should each timeframe use?
+**Status:** 🟡 NEEDS CLARIFICATION
+**Impact:** Low - Visual appearance
+**Context:** "最大周期的K线线条最粗，剩余周期线条依次递减"
+**Options:**
+  - 4H: 4px, 1H: 3px, 5M: 2px, 1M: 1px
+  - 4H: 6px, 1H: 4px, 5M: 2px, 1M: 1px
+  - Make it configurable
+**Recommendation:** Start with 4/3/2/1 and make it configurable
+**Decision:** TBD
+**Decided by:**
+**Date:**
+
+#### Q6: Bullish vs Bearish Colors
+**Question:** What colors should be used for bullish and bearish candles?
+**Status:** 🟡 NEEDS CLARIFICATION
+**Impact:** Low - Visual appearance
+**Context:** Need to define color scheme
+**Options:**
+  - Traditional: Green (bullish), Red (bearish)
+  - Western: Green (bullish), Red (bearish)
+  - Chinese: Red (bullish), Green (bearish)
+**Recommendation:** Ask user preference, default to Green/Red (Western style)
+**Decision:** TBD
+**Decided by:**
+**Date:**
+
+---
+
+### Technical Questions
+
+#### Q7: CSV Data Format
+**Question:** What is the exact CSV column format and structure?
+**Status:** 🟡 NEEDS CLARIFICATION
+**Impact:** Medium - Data parsing implementation
+**Context:** Need to know exact format to parse correctly
+**Expected format:**
+```csv
+timestamp,symbol,open,high,low,close,volume
+2024-01-01 09:00:00,MHImain,25000,25100,24900,25050,1000
+```
+**Questions:**
+  - Is timestamp in local time or UTC?
+  - What is the date format?
+  - Are there headers in the CSV?
+  - What timeframe is the raw CSV data? (1 minute?)
+**Decision:** TBD - Need to see actual CSV file
+**Decided by:**
+**Date:**
+
+#### Q8: Data Aggregation Logic
+**Question:** How should we aggregate smaller timeframes into larger ones?
+**Status:** 🟡 NEEDS CLARIFICATION
+**Impact:** Medium - Data accuracy
+**Context:** Need to convert 1M → 5M → 1H → 4H
+**Questions:**
+  - Should aggregation happen on backend or frontend?
+  - How to handle incomplete periods (e.g., current unclosed 4H bar)?
+  - Should we align to exchange hours or calendar hours?
+**Recommendation:** Backend aggregation, aligned to calendar hours, mark incomplete bars
+**Decision:** TBD
+**Decided by:**
+**Date:**
+
+#### Q9: Drawing-to-Order Interface
+**Question:** What specific interface/API should the drawing-to-order feature use?
+**Status:** 🟡 NEEDS CLARIFICATION
+**Impact:** Low (Phase 1) - Just need to reserve interface
+**Context:** "预留画线下单的接口"
+**Questions:**
+  - What order parameters are needed (price, quantity, type)?
+  - Should it integrate with specific broker API?
+  - What order types (market, limit, stop)?
+**Recommendation:** Define simple REST API interface, implement later
+**Decision:** TBD
+**Decided by:**
+**Date:**
+
+#### Q10: WebSocket Implementation Architecture
+**Question:** How should WebSocket be implemented for real-time data?
+**Status:** 🟢 RESOLVED
+**Impact:** High - Core real-time functionality
+**Context:** vnpy已连接FUTU Gateway获取实时数据，需要推送到Web前端
+**Options Evaluated:**
+  - **A: vnpy WebSocket直连前端** - 简单但扩展性有限
+  - **B: Spring Boot中转** - 需要Java+Python双技术栈
+  - **C: vnpy内置FastAPI Web后端** - 复用现有代码，单一技术栈
+**Decision:** ✅ 方案C - 在vnpy中构建FastAPI Web后端
+**Architecture:**
+```
+┌─────────────────────────────────────────────────┐
+│                 vnpy (Python)                    │
+│  FUTU Gateway → 现有下单/追价逻辑 → FastAPI后端   │
+│                                    ↓            │
+│                          WebSocket + REST API    │
+└─────────────────────────────────────────────────┘
+                         ↓
+                   React 前端
+```
+**Tech Stack:** FastAPI + uvicorn + WebSocket
+**Key Benefits:**
+  - 直接复用vnpy现有PyQt5 UI的下单、智能追价逻辑
+  - 单一Python技术栈，维护成本低
+  - 数据访问无需跨进程通信，延迟最低
+**Decided by:** User approved
+**Date:** 2025-11-26
+
+---
+
+## Decisions Made
+
+### D1: TDD Approach
+**Decision:** Use Test-Driven Development throughout the project
+**Rationale:** Specified in project constitution
+**Impact:** All phases will include writing tests first
+**Decided by:** Project Constitution
+**Date:** 2025-11-24
+
+### D2: Data Source Priority
+**Decision:** Start with CSV files, migrate to SQLite later if needed
+**Rationale:** Specified in project constitution and requirements
+**Impact:** Initial implementation focuses on CSV parsing
+**Decided by:** Project Constitution
+**Date:** 2025-11-24
+
+### D3: Contract Specification
+**Decision:** Initial implementation for MHImain contract (小恒指期货主连) on HKFE
+**Rationale:** Specified in user story
+**Impact:** Data format and UI will show MHImain specific information
+**Decided by:** User Story
+**Date:** 2025-11-24
+
+### D4: Timeframes to Support
+**Decision:** Support 1M, 5M, 1H, 4H timeframes initially
+**Rationale:** Specified in user story
+**Impact:** Data aggregation and UI will support these four timeframes
+**Decided by:** User Story
+**Date:** 2025-11-24
+
+### D5: Frontend Framework and Tech Stack
+**Decision:** React 18 + TypeScript + Vite + ECharts
+**Rationale:** Best balance of features, performance, developer experience, and charting capabilities
+**Impact:**
+  - React ecosystem for component architecture
+  - TypeScript for type safety
+  - Vite for fast development and build
+  - ECharts for multi-timeframe candlestick rendering
+**Decided by:** User approved recommendation (Option A)
+**Date:** 2025-11-24
+
+### D6: Initial Architecture Approach
+**Decision:** Frontend-only for Phase 1-5, vnpy内置FastAPI后端 in Phase 6
+**Rationale:** CSV data already separated by timeframe, frontend can load directly for faster prototyping
+**Impact:**
+  - Faster initial development
+  - CSV loaded via fetch for browser-side parsing
+  - vnpy FastAPI后端 will be added in Phase 6 for WebSocket support
+**Decided by:** User approved recommendation (Option A), updated 2025-11-26
+**Date:** 2025-11-24, 2025-11-26
+
+### D7: CSV Data Format
+**Decision:** Confirmed actual CSV format from existing data files
+**Format:** `symbol,exchange,datetime,open,high,low,close,volume,turnover,open_interest`
+**Rationale:** Examined actual data files in `/data` directory
+**Impact:** CSV parser will handle this exact format
+**Decided by:** Data file inspection
+**Date:** 2025-11-24
+
+### D8: WebSocket Backend Architecture
+**Decision:** 使用vnpy内置FastAPI Web后端，而非独立Spring Boot服务
+**Rationale:**
+  - vnpy已有PyQt5 UI实现的下单、智能追价等功能，可直接复用
+  - 单一Python技术栈（FastAPI + uvicorn），维护成本最低
+  - 数据在vnpy进程内直接访问，无需跨进程通信，延迟最低
+  - 避免Java/Python双技术栈的维护负担
+**Impact:**
+  - Phase 6 在vnpy项目中添加FastAPI模块
+  - WebSocket端点: `/ws/tick`, `/ws/kline`
+  - REST API端点: `/api/order`, `/api/chase` (智能追价)
+  - 前端通过HTTP/WebSocket与vnpy后端通信
+**Tech Stack:** FastAPI + uvicorn + python-socketio
+**Decided by:** User approved
+**Date:** 2025-11-26
+
+---
+
+## Assumptions
+
+### A1: Data Availability
+**Assumption:** CSV data files exist in `/data` directory with complete OHLCV data
+**Risk if wrong:** Cannot test or develop without real data
+**Validation:** ✅ VALIDATED - CSV files confirmed to exist with complete data
+
+### A2: Browser Compatibility
+**Assumption:** Target modern browsers (Chrome, Firefox, Edge, Safari latest versions)
+**Risk if wrong:** May need polyfills or compatibility layers
+**Validation:** Document browser requirements
+
+### A3: Data Volume
+**Assumption:** CSV files contain 1-minute data, potentially years of history
+**Risk if wrong:** Performance issues if data volume is much larger
+**Validation:** Test with real data volume early
+
+### A4: Single Symbol Display
+**Assumption:** UI displays one symbol (MHImain) at a time, no multi-symbol view needed initially
+**Risk if wrong:** Architecture may need to support multiple symbols
+**Validation:** Clarify with user
+
+### A5: Desktop-First Design
+**Assumption:** Primary use case is desktop browser, mobile is secondary
+**Risk if wrong:** May need more mobile optimization
+**Validation:** Implement responsive design but prioritize desktop
+
+### A6: Real-Time Data Frequency
+**Assumption:** Real-time tick data arrives at reasonable frequency (< 100 ticks/second)
+**Risk if wrong:** May need more aggressive data throttling/aggregation
+**Validation:** Test with vnpy data rates in Phase 6
+
+---
+
+## Clarifications Needed from User
+
+### High Priority (Before Starting Phase 2)
+1. ✅ **Framework Choice:** React or Vue? - **DECIDED: React + TypeScript**
+2. ✅ **Charting Library:** ECharts, TradingView, or D3.js? - **DECIDED: ECharts**
+3. ✅ **Backend Setup:** Start with backend or frontend-only? - **DECIDED: Frontend-only (Phase 1-5)**
+4. ✅ **CSV Format:** Can you provide a sample CSV file or exact format specification? - **VALIDATED: Format confirmed**
+
+### Medium Priority (Before Phase 3)
+5. ⏳ **Color Scheme:** Bullish/bearish colors preference?
+6. ⏳ **Transparency:** Preferred opacity level for bearish candles?
+7. ⏳ **Line Thickness:** Exact pixel values for each timeframe?
+
+### Low Priority (Can be decided later)
+8. ⏳ **Drawing Features:** Which specific drawing tools are most important?
+9. ⏳ **Order Interface:** What order types and parameters are needed?
+10. ✅ **WebSocket Architecture:** vnpy内置FastAPI后端 - **DECIDED**
+
+---
+
+## Technical Constraints
+
+### TC1: Performance Requirements
+**Constraint:** Chart must render smoothly (60fps) with 10,000+ candles
+**Rationale:** User experience requirement for smooth zoom/pan
+**Impact:** Must use canvas-based rendering, implement data windowing
+
+### TC2: Data Precision
+**Constraint:** Financial data requires precise decimal handling
+**Rationale:** Trading accuracy requirement
+**Impact:** Use appropriate numeric types, avoid floating-point errors
+
+### TC3: Time Handling
+**Constraint:** Must correctly handle timezone, DST, and market hours
+**Rationale:** Financial data is time-sensitive
+**Impact:** Use proper date/time libraries, store timestamps in UTC
+
+---
+
+## Risk Register
+
+### R1: Multi-Timeframe Rendering Performance
+**Risk:** Rendering 4 timeframes simultaneously may be too slow
+**Probability:** Medium
+**Impact:** High
+**Mitigation:**
+  - Use canvas-based charting library
+  - Implement data windowing (only render visible range)
+  - Test early with real data volumes
+  - Consider WebGL if needed
+
+### R2: Transparency Legibility
+**Risk:** Transparent overlays may make chart hard to read
+**Probability:** Low
+**Impact:** Medium
+**Mitigation:**
+  - Test with real users early
+  - Make transparency configurable
+  - Provide alternative view modes (separate charts, toggle timeframes)
+
+### R3: WebSocket Connection Stability
+**Risk:** Real-time data connection may be unstable
+**Probability:** Medium
+**Impact:** Medium
+**Mitigation:**
+  - Implement automatic reconnection
+  - Buffer data during disconnection
+  - Show connection status to user
+  - Test with network interruptions
+
+---
+
+## Notes and Context
+
+### N1: vnpy Integration
+vnpy is a Python-based open-source quantitative trading platform. 
+**Current Status:**
+  - vnpy已连接FUTU Gateway获取实时数据
+  - vnpy已有PyQt5 UI实现下单、智能追价等功能
+**Phase 6 Plan:**
+  - 在vnpy中添加FastAPI Web后端模块
+  - 复用现有交易逻辑，通过REST API暴露给Web前端
+  - 通过WebSocket推送实时tick data和K-line数据
+
+### N2: Drawing Tools Use Case
+Drawing tools (trendlines, horizontal lines) are commonly used by quantitative researchers to mark support/resistance levels and identify patterns. The drawing-to-order feature allows placing orders at drawn price levels.
+
+### N3: Multi-Timeframe Analysis
+Displaying multiple timeframes simultaneously helps identify:
+- Trend alignment across timeframes
+- Support/resistance levels at different scales
+- Entry/exit points with multi-timeframe confirmation
+
+### N4: HKFE Trading Hours & 4小时K线边界
+Hong Kong Futures Exchange (HKFE) trading hours:
+- Day session: 09:15 - 12:00, 13:00 - 16:30 HKT
+- Night session: 17:15 - 03:00 HKT (next day)
+
+**4小时K线时间边界** (见D12详细说明):
+| K线 | 时间范围 | 备注 |
+|-----|----------|------|
+| 1 | 17:15-21:14 | 夜盘第一段 |
+| 2 | 21:15-01:14 | 夜盘第二段 |
+| 3 | 01:15-03:00 + 09:15-11:29 | 夜盘尾段 + 早盘 (跨休市) |
+| 4 | 11:30-12:00 + 13:00-16:29 | 午盘 (跨午休) |
+
+May need to handle session gaps and holiday gaps in data.
+
+### N5: vnpy_webtrader 复用评估
+**复用程度: 85-90%**
+
+已有功能 (可直接复用):
+- FastAPI Web框架 ✅
+- REST API: /token, /order, /position, /account, /contract ✅
+- WebSocket推送: tick/order/trade/position/account ✅
+- JWT + OAuth2 认证 ✅
+- 数据转换工具 (to_dict) ✅
+
+vnpy_futu Gateway 已有功能:
+- 智能追价完整实现 (ChaseConfig, ChaseOrder, 超时撤单重委托) ✅
+- 追价统计 ✅
+
+需要调整:
+- 架构: RPC模式 → 直连MainEngine模式
+- 新增: K线聚合WebSocket端点 /ws/kline/{timeframe}
+- 新增: 智能追价REST API /order/chase
+
+### N6: 项目整合目标架构
+```
+vnpy/
+├── vnpy_webtrader/          # 改造后的Web后端
+│   ├── engine_direct.py     # [新增] 直连MainEngine
+│   ├── web.py               # [修改] 新增API端点
+│   └── kline_aggregator.py  # [新增] K线聚合器
+│
+├── vnpy_futu/               # FUTU Gateway (不变)
+│   └── futu_gateway.py      # 智能追价 (已有)
+│
+└── vnpy_webui/              # [新增] React前端 (submodule)
+    └── frontend/            # 从multi-timeframe-webapp迁移
+        ├── src/
+        │   └── services/
+        │       ├── apiService.ts      # [新增] API对接
+        │       └── websocketService.ts # [新增] WS对接
+        └── dist/            # 构建产物
+```
+
+---
+
+## Integration Plan (整合方案)
+
+### Q11: 项目整合与Git管理
+**Question:** 如何将multi-timeframe-webapp整合进vnpy项目？
+**Status:** 🟢 RESOLVED
+**Impact:** High - 决定项目最终架构
+**Options Evaluated:**
+  - **A: Monorepo** - 合并为单一仓库
+    - 优点: 统一版本管理、原子提交
+    - 缺点: vnpy是大项目，可能影响主仓库
+  - **B: Git Submodule** - 前端作为vnpy的submodule
+    - 优点: 独立版本控制、按需更新、松耦合
+    - 缺点: 管理稍复杂
+  - **C: 独立仓库 + npm包** - 完全独立
+    - 优点: 完全独立、灵活部署
+    - 缺点: 版本同步麻烦
+**Decision:** ✅ 方案B - Git Submodule
+**Rationale:** 
+  - 前端和后端可以独立迭代
+  - 保留完整git历史
+  - 便于团队协作
+**Decided by:** User approved
+**Date:** 2025-11-26
+
+---
+
+### D9: Git管理策略
+**Decision:** 使用Git Submodule管理前端代码
+**Implementation:**
+```bash
+# 1. 在multi-timeframe-webapp创建远程仓库
+cd D:\Dev\multi-timeframe-webapp
+git remote add origin https://github.com/xxx/multi-timeframe-webapp.git
+git push -u origin main
+
+# 2. 在vnpy中添加为submodule
+cd D:\Dev\vnpy
+git submodule add https://github.com/xxx/multi-timeframe-webapp.git vnpy_webui
+git commit -m "feat: add webui submodule for multi-timeframe chart"
+
+# 3. 克隆时初始化submodule
+git clone --recursive https://github.com/xxx/vnpy.git
+# 或
+git submodule update --init --recursive
+```
+**Decided by:** User approved
+**Date:** 2025-11-26
+
+### D10: 整合实施方案
+**Decision:** 分阶段整合，复用vnpy_webtrader现有代码
+**Implementation Steps:**
+
+| 阶段 | 工作内容 | 预计时间 |
+|------|---------|---------|
+| 1 | Git策略: submodule配置 | 0.5天 |
+| 2 | 后端改造: 直连引擎 (替代RPC) | 1天 |
+| 3 | 新增K线聚合 + WebSocket端点 | 1天 |
+| 4 | 前端API对接修改 | 1天 |
+| 5 | 联调测试 | 1天 |
+| 6 | 部署配置 (静态文件服务) | 0.5天 |
+| **总计** | | **5天** |
+
+**新增文件:**
+- `vnpy_webtrader/engine_direct.py` - 直连MainEngine引擎
+- `vnpy_webtrader/kline_aggregator.py` - K线聚合器
+- `vnpy_webui/frontend/src/services/apiService.ts` - API对接
+- `vnpy_webui/frontend/src/services/websocketService.ts` - WebSocket对接
+
+**修改文件:**
+- `vnpy_webtrader/web.py` - RPC→直连, 新增/order/chase, /ws/kline/{timeframe}
+- `vnpy_webtrader/__init__.py` - 注册新模块
+
+**Decided by:** User approved
+**Date:** 2025-11-26
+
+### D11: 部署方案
+**Decision:** 前后端一体化部署
+**Development Mode:**
+```bash
+# 终端1: vnpy + FastAPI后端
+python -m vnpy_webtrader.run
+
+# 终端2: React前端 (开发模式，热更新)
+cd vnpy_webui/frontend && npm run dev
+```
+
+**Production Mode:**
+```bash
+# 构建前端
+cd vnpy_webui/frontend && npm run build
+
+# 启动 (FastAPI挂载静态文件)
+python -m vnpy_webtrader.run
+# 访问 http://localhost:8000
+```
+
+**FastAPI静态文件配置:**
+```python
+from fastapi.staticfiles import StaticFiles
+app.mount("/", StaticFiles(directory="vnpy_webui/frontend/dist", html=True))
+```
+**Decided by:** User approved
+**Date:** 2025-11-26
+
+### D12: 4小时K线时间边界划分与画线绘制方式
+**Decision:** 使用画线方式绘制4小时K线，遵循精确的时间边界划分
+**Status:** 🟢 RESOLVED
+
+#### 精确的4小时时间边界
+
+| K线序号 | 时间范围 | 时间戳 | 开盘价取值 | 收盘价取值 |
+|---------|----------|--------|------------|------------|
+| 第一根 | 17:15-21:14 | 17:15 | 17:15的1分钟开盘价 | 21:14的1分钟收盘价 |
+| 第二根 | 21:15-次日01:14 | 21:15 | 21:15的1分钟开盘价 | 01:14的1分钟收盘价 |
+| 第三根 | 01:15-03:00 + 09:15-11:29 | 01:15 | 01:15的1分钟开盘价 | 11:29的1分钟收盘价 |
+| 第四根 | 11:30-12:00 + 13:00-16:29 | 11:30 | 11:30的1分钟开盘价 | 16:29的1分钟收盘价 |
+
+#### 特殊情况处理
+
+1. **意外停盘**: 
+   - 如果在16:29前意外停盘，当日最后一根4小时K线到停盘时间截止
+   - 次日开盘09:15到11:29算作一根独立的4小时K线
+
+2. **金融假期**:
+   - 如果在夜盘收盘后遇到金融假期
+   - 完整的4小时K线开始时间是01:15，结束时间是金融假期后开盘的早11:29
+
+#### 画线绘制方式（替代传统K线API）
+
+**绘制时机**: 在每根4小时K线结束时绘制（例如21:15时绘制17:15-21:14这根K线）
+
+**绘制步骤**:
+1. **获取开盘价和收盘价**: 
+   - 开盘价 = 起始时间的1分钟K线开盘价
+   - 收盘价 = 结束时间的1分钟K线收盘价
+
+2. **绘制实体部分**:
+   - 从结束时间(21:14)向起始时间(17:15)分别画出开盘价和收盘价的水平线
+   - 在起始时间(17:15)和结束时间(21:14)分别画出竖线连接开盘价和收盘价
+   
+3. **确定K线颜色**:
+   - 收盘价 > 开盘价 → 阳线（红色/绿色取决于风格设置）
+   - 收盘价 < 开盘价 → 阴线
+
+4. **绘制影线**:
+   - 计算该时间区间内所有1分钟K线的最高价和最低价
+   - 在K线实体的中点位置绘制上下影线
+   - **阳线**: 从收盘价画到最高价，从开盘价画到最低价
+   - **阴线**: 从开盘价画到最高价，从收盘价画到最低价
+
+**示意图**:
+```
+                   最高价
+                     │
+        ┌────────────┼────────────┐  ← 收盘价（阳线）或开盘价（阴线）
+        │            │            │
+        │      上影线│            │
+        │            │            │
+        ├────────────┴────────────┤  ← 实体中点
+        │                         │
+        │      下影线             │
+        │            │            │
+        └────────────┼────────────┘  ← 开盘价（阳线）或收盘价（阴线）
+                     │
+                   最低价
+       17:15                    21:14
+```
+
+**Rationale:** 
+- 画线方式可以更灵活地控制K线的视觉展示
+- 可以与其他时间周期的K线叠加显示
+- 便于实现透明度和层叠效果
+**Decided by:** User specified
+**Date:** 2025-11-27
+
+---
+
+## Change Log
+
+| Date | Type | Description | Impact |
+|------|------|-------------|--------|
+| 2025-11-24 | Created | Initial clarifications document | N/A |
+| 2025-11-24 | Decision | Confirmed React + TypeScript + Vite + ECharts stack | High - Enables Phase 1-5 development |
+| 2025-11-24 | Decision | Frontend-only architecture for Phase 1-5 | Medium - Faster initial development |
+| 2025-11-24 | Validation | Confirmed CSV data format and file availability | High - Unblocks Phase 2 |
+| 2025-11-24 | Completed | Phase 1 Project Setup initialized | High - Foundation ready |
+| 2025-11-26 | Decision | WebSocket架构: vnpy内置FastAPI后端 (替代Spring Boot) | High - 复用现有代码，单一技术栈 |
+| 2025-11-26 | Updated | Q3/Q10/D6/D8 - 后端架构更新为vnpy FastAPI方案 | High - Phase 6 实现方案确定 |
+| 2025-11-26 | Decision | Q11/D9 - Git管理: 使用Submodule整合前端到vnpy | High - 项目架构确定 |
+| 2025-11-26 | Decision | D10 - 整合实施方案: 5天分阶段实施 | High - 工作计划确定 |
+| 2025-11-26 | Decision | D11 - 部署方案: 前后端一体化部署 | Medium - 部署方式确定 |
+| 2025-11-26 | Analysis | N5/N6 - vnpy_webtrader复用评估 (85-90%) | High - 复用策略确定 |
+| 2025-11-27 | Decision | D12 - 4小时K线时间边界划分: 精确定义4段时间边界 | High - K线聚合逻辑确定 |
+| 2025-11-27 | Decision | D12 - 4小时K线画线绘制方式: 使用画线替代传统K线API | High - 渲染实现方案确定 |
+| 2025-11-27 | Updated | N4 - 更新HKFE交易时间，添加4小时K线边界汇总表 | Medium - 参考信息完善 |
+
+---
+
+## Status Legend
+- 🔴 OPEN - Requires immediate decision
+- 🟡 NEEDS CLARIFICATION - Needs input from stakeholders
+- 🟢 RESOLVED - Decision made and documented
+- ⏳ PENDING - Waiting for information
+- ✅ DECIDED - Finalized decision

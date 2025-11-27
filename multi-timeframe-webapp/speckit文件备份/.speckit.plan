@@ -1,0 +1,323 @@
+# Implementation Plan - Multi-Timeframe Web Application
+
+## Project: Multi-Timeframe K-Line Chart Visualization
+
+### Executive Summary
+Build a web application for quantitative trading research that displays multiple timeframe candlestick charts simultaneously (4H, 1H, 5M, 1M) with interactive features and real-time data capability.
+
+---
+
+## Phase 1: Project Setup and Foundation
+
+### 1.1 Project Initialization
+- [ ] Choose framework (React/Vue)
+- [ ] Initialize project with build tools (Vite/Webpack)
+- [ ] Set up TypeScript configuration
+- [ ] Configure linting and formatting (ESLint, Prettier)
+- [ ] Set up testing framework (Jest/Vitest)
+- [ ] Create project directory structure
+
+### 1.2 Backend Setup (if using Spring Boot)
+- [ ] Initialize Spring Boot project
+- [ ] Configure Spring Cloud dependencies
+- [ ] Set up project structure (controllers, services, models)
+- [ ] Configure CORS for frontend integration
+- [ ] Set up logging and error handling
+
+### 1.3 Development Environment
+- [ ] Set up Git repository
+- [ ] Create .gitignore
+- [ ] Document setup instructions in README
+- [ ] Configure development/production environment variables
+
+**Estimated Complexity:** Low-Medium
+**Dependencies:** None
+
+---
+
+## Phase 2: Data Layer Implementation
+
+### 2.1 CSV Data Processing
+- [ ] Create data directory structure
+- [ ] Define CSV data format/schema for MHImain contract
+- [ ] Implement CSV parser/reader
+- [ ] Validate CSV data structure (timestamp, OHLCV)
+- [ ] Write unit tests for CSV parser
+
+### 2.2 Data Models
+- [ ] Define K-line data model (timestamp, open, high, low, close, volume)
+- [ ] Define timeframe enum (1M, 5M, 1H, 4H)
+- [ ] Create data transformation utilities
+- [ ] Implement data aggregation logic (1M → 5M → 1H → 4H)
+
+### 2.3 Data Service Layer
+- [ ] Create service to read CSV data
+- [ ] Implement data caching mechanism
+- [ ] Create API endpoint to fetch K-line data by timeframe
+- [ ] Implement data range filtering (date/time range)
+- [ ] Write integration tests for data service
+
+**Estimated Complexity:** Medium
+**Dependencies:** Phase 1
+
+---
+
+## Phase 3: Chart Visualization Core
+
+### 3.1 Chart Library Selection and Setup
+- [ ] Evaluate charting libraries (ECharts, TradingView Lightweight Charts, D3.js)
+- [ ] Install and configure chosen library
+- [ ] Create basic chart component wrapper
+- [ ] Set up chart container with responsive sizing
+
+### 3.2 Single Timeframe K-Line Rendering
+- [ ] Implement candlestick series rendering
+- [ ] Configure OHLC data binding
+- [ ] Style bullish candles (green/red)
+- [ ] Style bearish candles (with transparency)
+- [ ] Add volume bars (optional)
+- [ ] Write unit tests for chart component
+
+### 3.3 Multi-Timeframe Overlay
+- [ ] Implement multiple candlestick series on single chart
+- [ ] Configure line thickness hierarchy (4H > 1H > 5M > 1M)
+- [ ] Implement transparency for bearish candles
+- [ ] Ensure proper z-index layering (largest timeframe behind)
+- [ ] Optimize rendering performance
+- [ ] Test visual appearance and readability
+
+**Estimated Complexity:** High
+**Dependencies:** Phase 2
+
+---
+
+## Phase 4: Interactive Features
+
+### 4.1 Zoom and Pan
+- [ ] Implement mouse wheel zoom
+- [ ] Implement pinch-to-zoom (touch devices)
+- [ ] Implement click-and-drag panning
+- [ ] Set zoom limits (min/max)
+- [ ] Implement zoom reset functionality
+- [ ] Test zoom/pan performance with large datasets
+
+### 4.2 Time Axis and Grid
+- [ ] Configure time axis formatting
+- [ ] Implement dynamic time label density
+- [ ] Add price axis on right side
+- [ ] Configure grid lines
+- [ ] Implement crosshair cursor
+
+### 4.3 Drawing Tools
+- [ ] Implement line drawing tool
+- [ ] Implement horizontal/vertical line tools
+- [ ] Implement trendline tool
+- [ ] Add drawing tool selector UI
+- [ ] Implement drawing persistence (save/load)
+- [ ] Add delete/edit drawing functionality
+- [ ] Write tests for drawing tools
+
+### 4.4 Drawing-to-Order Interface (Placeholder)
+- [ ] Design order interface API structure
+- [ ] Create placeholder function for order submission
+- [ ] Implement drawing-to-order trigger points
+- [ ] Document interface for future integration
+
+**Estimated Complexity:** High
+**Dependencies:** Phase 3
+
+---
+
+## Phase 5: Frontend UI/UX
+
+### 5.1 Main Layout
+- [ ] Create application shell/layout
+- [ ] Design header with contract info (MHImain, HKFE)
+- [ ] Create chart container area
+- [ ] Add timeframe selector/toggle
+- [ ] Implement responsive design
+
+### 5.2 Control Panel
+- [ ] Add zoom controls (buttons)
+- [ ] Add drawing tool buttons
+- [ ] Add timeframe visibility toggles
+- [ ] Add chart settings panel
+- [ ] Implement keyboard shortcuts
+
+### 5.3 Styling and Theming
+- [ ] Define color scheme (dark/light theme)
+- [ ] Style candlesticks (bullish/bearish colors)
+- [ ] Style UI controls and buttons
+- [ ] Ensure accessibility standards
+- [ ] Test on multiple screen sizes
+
+**Estimated Complexity:** Medium
+**Dependencies:** Phase 3, 4
+
+---
+
+## Phase 6: WebSocket Integration (Preparation)
+
+### 6.1 WebSocket Infrastructure
+- [ ] Design WebSocket API specification
+- [ ] Define message format for tick data
+- [ ] Implement WebSocket server endpoint (backend)
+- [ ] Implement WebSocket client (frontend)
+- [ ] Add connection status indicator
+
+### 6.2 Real-Time Data Handling
+- [ ] Implement tick data receiver
+- [ ] Create tick-to-K-line aggregation logic
+- [ ] Implement real-time chart update mechanism
+- [ ] Handle reconnection logic
+- [ ] Implement data buffering for network interruptions
+
+### 6.3 vnpy Integration Interface
+- [ ] Document vnpy data format requirements
+- [ ] Create adapter for vnpy tick data
+- [ ] Implement data validation
+- [ ] Create mock data generator for testing
+- [ ] Write integration tests
+
+**Estimated Complexity:** Medium-High
+**Dependencies:** Phase 2, 3
+**Note:** Can be implemented in parallel with Phase 5
+
+---
+
+## Phase 7: Testing and Quality Assurance
+
+### 7.1 Unit Testing
+- [ ] Write unit tests for data models
+- [ ] Write unit tests for data transformations
+- [ ] Write unit tests for chart components
+- [ ] Achieve 80%+ code coverage
+
+### 7.2 Integration Testing
+- [ ] Test CSV data loading end-to-end
+- [ ] Test chart rendering with real data
+- [ ] Test interactive features (zoom, pan, draw)
+- [ ] Test WebSocket connection and data flow
+
+### 7.3 Performance Testing
+- [ ] Test with large datasets (1+ years of 1M data)
+- [ ] Measure rendering performance (FPS)
+- [ ] Test memory usage
+- [ ] Optimize bottlenecks
+
+### 7.4 User Acceptance Testing
+- [ ] Test drawing tools usability
+- [ ] Test chart readability with multiple timeframes
+- [ ] Verify transparency effectiveness
+- [ ] Gather feedback from quantitative researchers
+
+**Estimated Complexity:** Medium
+**Dependencies:** All previous phases
+
+---
+
+## Phase 8: Deployment and Documentation
+
+### 8.1 Build and Deployment
+- [ ] Configure production build
+- [ ] Optimize bundle size
+- [ ] Set up CI/CD pipeline
+- [ ] Configure deployment environment
+- [ ] Deploy to staging/production
+
+### 8.2 Documentation
+- [ ] Write user guide
+- [ ] Document API endpoints
+- [ ] Document WebSocket protocol
+- [ ] Create developer documentation
+- [ ] Document drawing-to-order interface
+
+### 8.3 Monitoring and Maintenance
+- [ ] Set up error logging
+- [ ] Configure performance monitoring
+- [ ] Create maintenance checklist
+- [ ] Document troubleshooting procedures
+
+**Estimated Complexity:** Low-Medium
+**Dependencies:** Phase 7
+
+---
+
+## Technical Stack Summary
+
+### Frontend
+- Framework: React or Vue (to be decided)
+- Language: TypeScript
+- Charting: ECharts / TradingView Lightweight Charts / D3.js (to be evaluated)
+- State Management: Context API / Vuex / Pinia
+- Build Tool: Vite
+- Testing: Vitest + Testing Library
+
+### Backend
+- Framework: Spring Boot + Spring Cloud
+- Language: Java
+- WebSocket: Spring WebSocket
+- Data: CSV files → SQLite (future)
+
+### Data
+- Source: CSV files in /data directory
+- Contract: MHImain (小恒指期货主连)
+- Exchange: HKFE
+- Format: timestamp, symbol, timeframe, open, high, low, close, volume
+
+---
+
+## Risk Assessment
+
+### Technical Risks
+- **Chart Performance**: Rendering 4 timeframes simultaneously may impact performance
+  - *Mitigation*: Use canvas-based charting library, implement data windowing
+
+- **Data Synchronization**: Aligning multiple timeframes precisely
+  - *Mitigation*: Implement robust timestamp alignment logic, thorough testing
+
+- **WebSocket Reliability**: Real-time data connection stability
+  - *Mitigation*: Implement reconnection logic, data buffering
+
+### Timeline Risks
+- **Chart Library Learning Curve**: May take longer than expected
+  - *Mitigation*: Allocate buffer time, start with simpler library if needed
+
+---
+
+## Success Criteria
+
+- [ ] Successfully displays 4 timeframes (4H, 1H, 5M, 1M) on single chart
+- [ ] Line thickness decreases appropriately for smaller timeframes
+- [ ] Bearish candles have transparency showing underlying timeframes
+- [ ] Zoom and pan work smoothly with large datasets
+- [ ] Drawing tools are functional and intuitive
+- [ ] CSV data loads correctly for MHImain contract
+- [ ] WebSocket interface is ready for vnpy integration
+- [ ] Drawing-to-order interface is documented and stubbed
+- [ ] Application passes all tests (unit, integration, performance)
+- [ ] User can effectively analyze multi-timeframe patterns
+
+---
+
+## Next Steps
+
+1. **Immediate**: Choose frontend framework (React vs Vue)
+2. **Immediate**: Evaluate and select charting library
+3. **Week 1**: Complete Phase 1 (Project Setup)
+4. **Week 1-2**: Complete Phase 2 (Data Layer)
+5. **Week 2-4**: Complete Phase 3 (Chart Core)
+6. **Week 4-6**: Complete Phase 4 & 5 (Interactive Features & UI)
+7. **Week 6-7**: Complete Phase 6 (WebSocket Prep)
+8. **Week 7-8**: Complete Phase 7 & 8 (Testing & Deployment)
+
+---
+
+## Notes
+
+- Start with React + ECharts as recommended stack (proven for financial charts)
+- Focus on getting single timeframe working perfectly before multi-timeframe overlay
+- Test transparency and visual hierarchy early and often
+- Keep WebSocket interface simple and well-documented for vnpy integration
+- Use TDD approach as specified in constitution
+- Prioritize performance - financial data visualization requires smooth interaction

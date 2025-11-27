@@ -1,0 +1,77 @@
+# Multi-Timeframe Web Application - Cursor Rules
+
+## 项目简介
+多周期K线图可视化Web应用，用于量化交易研究，显示4H、1H、5M、1M多个时间周期的K线图。
+
+## 技术栈
+- React 18 + TypeScript + Vite
+- TradingView Lightweight Charts
+- Vitest (TDD)
+- 数据: CSV文件 (MHImain, HKFE)
+
+## Speckit 集成
+
+本项目使用 Speckit 进行规范驱动开发。核心文件：
+- `.speckit.constitution` - 项目宪法
+- `.speckit.clarify` - 澄清和决策
+- `.speckit.plan` - 实施计划
+- `.speckit.specify` - 功能规格
+
+### Speckit 命令 (在终端执行)
+```bash
+specify-cn constitution  # 项目规范
+specify-cn clarify       # 澄清问题
+specify-cn plan          # 查看计划
+specify-cn specify       # 功能规格
+specify-cn implement     # 执行实现
+```
+
+## 开发规范
+
+### 代码风格
+- 遵循现有代码模式
+- TypeScript 严格模式
+- 组件文件: PascalCase
+- Hook文件: camelCase (use前缀)
+- 测试文件: *.test.ts
+
+### 目录结构
+```
+frontend/src/
+├── components/    # React组件
+├── hooks/         # 自定义Hooks
+├── services/      # 服务层
+├── utils/         # 工具函数
+├── types/         # TypeScript类型
+└── tests/         # 测试文件
+```
+
+### TDD流程
+1. 先写测试 (`frontend/src/tests/`)
+2. 运行测试确认失败
+3. 实现功能
+4. 运行测试确认通过
+5. 重构优化
+
+## AI助手指南
+
+### DO
+- 修改前先阅读相关代码
+- 遵循已有模式和约定
+- 需求不明确时请求澄清
+- 修改后运行测试验证
+
+### DON'T
+- 不添加请求之外的功能
+- 不重构非任务相关代码
+- 不创建不必要的抽象
+- 不过度工程化
+
+## 常用命令
+```bash
+cd frontend
+npm run dev      # 启动开发服务器
+npm run test     # 运行测试
+npm run build    # 构建生产版本
+```
+

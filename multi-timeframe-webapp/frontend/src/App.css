@@ -1,0 +1,130 @@
+.app {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-header {
+  background-color: #2d2d2d;
+  padding: 1rem 2rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #404040;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.app-header h1 {
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.contract-info {
+  display: flex;
+  gap: 1rem;
+  font-size: 1.1rem;
+}
+
+.symbol {
+  color: #4caf50;
+  font-weight: 700;
+}
+
+.exchange {
+  color: #9e9e9e;
+}
+
+.app-main {
+  flex: 1;
+  overflow: hidden;
+  padding: 0.5rem;
+}
+
+.chart-container {
+  width: 100%;
+  height: 100%;
+  background-color: #1e1e1e;
+  border-radius: 8px;
+  border: 1px solid #404040;
+}
+
+.chart-engine-selector {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.chart-engine-selector label {
+  color: #ffffff;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.chart-engine-selector select {
+  background-color: #404040;
+  color: #ffffff;
+  border: 1px solid #606060;
+  border-radius: 4px;
+  padding: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.chart-engine-selector select:hover {
+  border-color: #4caf50;
+}
+
+.chart-engine-selector select:focus {
+  outline: none;
+  border-color: #4caf50;
+  box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.2);
+}
+
+.tradingview-chart {
+  width: 100%;
+  height: 100%;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.data-limit-selector {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.data-limit-selector label {
+  color: #ffffff;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.data-limit-selector select {
+  background-color: #404040;
+  color: #ffffff;
+  border: 1px solid #606060;
+  border-radius: 4px;
+  padding: 0.5rem;
+  font-size: 0.9rem;
+  min-width: 120px;
+}
+
+.data-limit-selector select:hover {
+  border-color: #2196f3;
+}
+
+.data-limit-selector select:focus {
+  outline: none;
+  border-color: #2196f3;
+  box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.2);
+}

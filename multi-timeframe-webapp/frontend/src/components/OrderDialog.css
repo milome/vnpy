@@ -1,0 +1,426 @@
+/* 下单确认弹窗样式 */
+
+.order-dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(2px);
+}
+
+.order-dialog {
+  background-color: #1e1e1e;
+  border: 1px solid #404040;
+  border-radius: 12px;
+  width: 380px;
+  max-width: 90vw;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  animation: dialog-appear 0.2s ease-out;
+}
+
+@keyframes dialog-appear {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.order-dialog-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid #404040;
+  flex-shrink: 0; /* 不收缩 */
+}
+
+.order-dialog-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.order-dialog-header .close-button {
+  background: none;
+  border: none;
+  color: #888;
+  font-size: 1.5rem;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  transition: color 0.2s;
+}
+
+.order-dialog-header .close-button:hover {
+  color: #fff;
+}
+
+.order-dialog-body {
+  padding: 20px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0; /* 允许flex子元素收缩 */
+}
+
+/* 自定义滚动条 */
+.order-dialog-body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.order-dialog-body::-webkit-scrollbar-track {
+  background: #2a2a2a;
+  border-radius: 3px;
+}
+
+.order-dialog-body::-webkit-scrollbar-thumb {
+  background: #555;
+  border-radius: 3px;
+}
+
+.order-dialog-body::-webkit-scrollbar-thumb:hover {
+  background: #666;
+}
+
+/* 价格显示 */
+.order-price-display {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px;
+  background-color: #2a2a2a;
+  border-radius: 8px;
+  margin-bottom: 20px;
+}
+
+.order-price-display .label {
+  color: #888;
+  font-size: 0.9rem;
+}
+
+.order-price-display .price {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #ffffff;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+/* 表单组 */
+.form-group {
+  margin-bottom: 16px;
+}
+
+.form-group > label {
+  display: block;
+  color: #aaa;
+  font-size: 0.85rem;
+  margin-bottom: 8px;
+}
+
+/* 买卖方向按钮 */
+.side-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.side-button {
+  flex: 1;
+  padding: 12px;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.side-button.buy {
+  background-color: rgba(255, 71, 87, 0.15);
+  color: #ff4757;
+  border-color: rgba(255, 71, 87, 0.3);
+}
+
+.side-button.buy:hover {
+  background-color: rgba(255, 71, 87, 0.25);
+}
+
+.side-button.buy.active {
+  background-color: #ff4757;
+  color: #fff;
+  border-color: #ff4757;
+}
+
+.side-button.sell {
+  background-color: rgba(0, 217, 255, 0.15);
+  color: #00d9ff;
+  border-color: rgba(0, 217, 255, 0.3);
+}
+
+.side-button.sell:hover {
+  background-color: rgba(0, 217, 255, 0.25);
+}
+
+.side-button.sell.active {
+  background-color: #00d9ff;
+  color: #fff;
+  border-color: #00d9ff;
+}
+
+/* 数量输入 */
+.quantity-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.quantity-input input {
+  flex: 1;
+  padding: 10px;
+  border: 1px solid #404040;
+  border-radius: 6px;
+  background-color: #2a2a2a;
+  color: #fff;
+  font-size: 1rem;
+  text-align: center;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+.quantity-input input:focus {
+  outline: none;
+  border-color: #666;
+}
+
+.quantity-button {
+  width: 40px;
+  height: 40px;
+  border: 1px solid #404040;
+  border-radius: 6px;
+  background-color: #2a2a2a;
+  color: #fff;
+  font-size: 1.2rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.quantity-button:hover {
+  background-color: #3a3a3a;
+  border-color: #666;
+}
+
+/* 复选框行 */
+.checkbox-row {
+  margin-bottom: 8px;
+}
+
+.checkbox-row label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #ccc;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.checkbox-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: #1e90ff;
+  cursor: pointer;
+}
+
+/* 点数偏移输入 */
+.offset-input {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  background-color: #2a2a2a;
+  border-radius: 6px;
+}
+
+.offset-label {
+  color: #888;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.offset-input input {
+  width: 80px;
+  padding: 8px;
+  border: 1px solid #404040;
+  border-radius: 4px;
+  background-color: #1e1e1e;
+  color: #fff;
+  font-size: 0.9rem;
+  text-align: center;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+.offset-input input:focus {
+  outline: none;
+  border-color: #666;
+}
+
+.calculated-price {
+  color: #888;
+  font-size: 0.85rem;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+/* 订单摘要 */
+.order-summary {
+  background-color: #2a2a2a;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-top: 20px;
+}
+
+.summary-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
+  font-size: 0.9rem;
+}
+
+.summary-row:not(:last-child) {
+  border-bottom: 1px solid #404040;
+}
+
+.summary-row span:first-child {
+  color: #888;
+}
+
+.summary-row span:last-child {
+  color: #fff;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+.summary-row .buy {
+  color: #ff4757;
+  font-weight: 600;
+}
+
+.summary-row .sell {
+  color: #00d9ff;
+  font-weight: 600;
+}
+
+.summary-row .stop-loss {
+  color: #ffa502;
+}
+
+.summary-row .take-profit {
+  color: #1e90ff;
+}
+
+/* 底部按钮 */
+.order-dialog-footer {
+  display: flex;
+  gap: 12px;
+  padding: 16px 20px;
+  border-top: 1px solid #404040;
+  flex-shrink: 0; /* 不收缩 */
+  background-color: #1e1e1e; /* 确保背景色 */
+}
+
+.order-dialog-footer button {
+  flex: 1;
+  padding: 14px;
+  border: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.order-dialog-footer .cancel-button {
+  background-color: #2a2a2a;
+  color: #ccc;
+  border: 1px solid #404040;
+}
+
+.order-dialog-footer .cancel-button:hover {
+  background-color: #3a3a3a;
+}
+
+.order-dialog-footer .confirm-button {
+  color: #fff;
+}
+
+.order-dialog-footer .confirm-button.buy {
+  background-color: #ff4757;
+}
+
+.order-dialog-footer .confirm-button.buy:hover {
+  background-color: #ff5f6d;
+}
+
+.order-dialog-footer .confirm-button.sell {
+  background-color: #00d9ff;
+}
+
+.order-dialog-footer .confirm-button.sell:hover {
+  background-color: #3ce082;
+}
+
+/* 响应式 - 小屏幕适配 */
+@media (max-height: 700px) {
+  .order-dialog {
+    max-height: 95vh;
+  }
+  
+  .order-dialog-body {
+    padding: 12px 16px;
+  }
+  
+  .order-price-display {
+    padding: 12px;
+    margin-bottom: 12px;
+  }
+  
+  .form-group {
+    margin-bottom: 10px;
+  }
+  
+  .order-summary {
+    margin-top: 12px;
+    padding: 10px 12px;
+  }
+  
+  .summary-row {
+    padding: 4px 0;
+    font-size: 0.85rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .order-dialog {
+    width: 100%;
+    max-width: 100%;
+    max-height: 85vh;
+    border-radius: 12px 12px 0 0;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+  }
+  
+  .order-dialog-overlay {
+    align-items: flex-end;
+  }
+}
+

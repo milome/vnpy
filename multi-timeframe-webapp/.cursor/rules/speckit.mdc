@@ -1,0 +1,81 @@
+# Speckit Project Rules for Cursor
+
+## 项目概述
+这是一个多周期K线图可视化Web应用，用于量化交易研究。
+
+## 技术栈
+- **Frontend**: React 18 + TypeScript + Vite
+- **Charting**: TradingView Lightweight Charts
+- **Testing**: Vitest (TDD approach)
+- **Data Source**: CSV files (MHImain contract, HKFE exchange)
+
+## Speckit 工作流命令
+
+在Cursor中执行speckit命令时，请在终端中使用以下命令：
+
+```bash
+# 查看/更新项目规范
+specify-cn constitution
+
+# 澄清问题和决策
+specify-cn clarify
+
+# 查看/更新实施计划
+specify-cn plan
+
+# 功能规格说明
+specify-cn specify
+
+# 执行实现
+specify-cn implement
+```
+
+## 核心文件引用
+
+执行任何开发任务前，请参考以下speckit文件：
+- `.speckit.constitution` - 项目宪法，编码规范和标准
+- `.speckit.clarify` - 澄清和决策记录
+- `.speckit.plan` - 实施计划和阶段
+- `.speckit.specify` - 功能规格说明
+
+## 开发原则
+
+### 通用原则
+- 遵循代码库中已有的代码模式和约定
+- 编写清晰、自文档化的代码
+- 避免过度工程，保持解决方案简单聚焦
+- 只在当前任务直接需要时才增加复杂度
+
+### TDD方法
+- 使用测试驱动开发贯穿整个项目
+- 测试文件位置: `frontend/src/tests/`
+- 先写测试，再实现功能
+
+### AI助手指南
+
+**应该做的事:**
+- 在提出修改前先阅读现有代码
+- 遵循代码库中已有的模式
+- 当需求不明确时请求澄清
+- 修改后运行测试
+
+**不应该做的事:**
+- 不要添加请求之外的功能
+- 不要重构不属于当前任务的代码
+- 不要给未修改的代码添加注释或文档
+- 不要创建不必要的抽象
+
+## 项目阶段状态
+
+- ✅ Phase 1: 项目设置和基础架构
+- ✅ Phase 2: 数据层实现
+- ✅ Phase 3: 图表可视化核心
+- 🔄 Phase 4: 交互功能（进行中）
+- ⏳ Phase 5: 前端UI/UX
+- ⏳ Phase 6: WebSocket集成准备
+
+## 数据格式
+
+CSV格式: `symbol,exchange,datetime,open,high,low,close,volume,turnover,open_interest`
+
+支持的时间周期: 1M, 5M, 1H, 4H, 1D
