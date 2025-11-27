@@ -1,0 +1,18 @@
+[project]
+name = "mflang"
+version = "0.1.0"
+description = "麦语言函数库和策略生成器"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=2.2.3",
+    "pandas>=2.2.3",
+]
+
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["mflang"]
+

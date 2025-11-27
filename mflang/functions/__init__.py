@@ -21,6 +21,9 @@ BARSLAST = _functions_module.BARSLAST
 SUMBARS = _functions_module.SUMBARS
 BARPOS = _functions_module.BARPOS
 HHV = _functions_module.HHV
+BP = _functions_module.BP
+BPK = _functions_module.BPK
+SPK = _functions_module.SPK
 
 __all__ = [
     "REF",
@@ -28,4 +31,7 @@ __all__ = [
     "SUMBARS",
     "BARPOS",
     "HHV",
+    "BP",
+    "BPK",
+    "SPK",
 ]

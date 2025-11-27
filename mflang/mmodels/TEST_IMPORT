@@ -1,4 +1,21 @@
 #IMPORT[MIN,5,MIN5_OPEN] AS MIN5
+@
+# T_COMMAND 设置手数为 1
+T_COMMAND(1);
 
+# 定义变量
 CC:C;//定义收盘价
 ISBUYTREND: C > MIN5.PREV_OPEN;//判断是否多头趋势
+
+# 交易指令
+# BP指令：当多头趋势时，买入平仓
+//BP_SIGNAL:ISBUYTREND>0 AND C<MIN5.PREV_OPEN,BP;
+
+# SP指令：当非多头趋势时，卖出平仓
+//SP_SIGNAL:ISBUYTREND<=0 AND C>MIN5.PREV_OPEN,SP;
+
+# BPK指令：当多头趋势时，买平后买开
+BPK_SIGNAL:ISBUYTREND>0,BPK;
+
+# SPK指令：当非多头趋势时，卖平后卖开
+SPK_SIGNAL:ISBUYTREND<=0,SPK;

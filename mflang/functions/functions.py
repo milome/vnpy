@@ -460,3 +460,181 @@ def HHV(X: Union[np.ndarray, list], N: Union[int, float, np.ndarray]) -> np.ndar
     
     return result
 
+
+def BP(group: Optional[str] = None) -> Union[np.ndarray, float]:
+    """
+    BP指令：买入平仓，平掉空头持仓
+    
+    该指令用于T+0策略，即当天可以买卖。
+    满足条件时，买入平仓，平掉空头持仓。
+    
+    参数:
+        group: 可选的分组参数，可以是 'A' 到 'I' 的任意字符，用于指定组别
+               如果为 None，则平掉模型内所有持仓
+    
+    返回值:
+        返回一个特殊的交易信号值，用于标记需要执行买入平仓操作
+        - 返回 1.0 表示需要执行 BP 操作
+        - 返回 0.0 表示不需要执行 BP 操作
+    
+    规则:
+        1. BP指令默认平掉模型内所有持仓，不支持指定手数
+        2. 指令支持分组，可指定组别('A'--'I')
+        3. BP指令不支持和T+1策略指令一起使用
+        4. 在模型文件中，BP指令通常与条件一起使用，如：
+           - CLOSE>MA(CLOSE,5),BP;  // 收盘价大于5周期均线，买平仓
+           - CROSSUP(C,MA(C,5)),BP('A');  // A组平空仓指令
+    
+    注意:
+        - BP指令是一个交易指令，不是计算函数
+        - 在策略生成时，BP指令会被转换为实际的交易代码
+        - 当条件满足时，会执行买入平仓操作，平掉所有空头持仓（或指定组的空头持仓）
+    
+    示例:
+        >>> # 在模型文件中使用：
+        >>> # CLOSE>MA(CLOSE,5),BP;  // 当收盘价大于5周期均线时，买入平仓
+        >>> # CROSSUP(C,MA(C,5)),BP('A');  // A组平空仓指令
+        
+        >>> # 在Python代码中使用（通常由策略生成器自动生成）：
+        >>> condition = np.array([False, False, True, True, False])
+        >>> if condition[-1]:  # 当前条件满足
+        >>>     bp_signal = BP()  # 生成BP信号
+        >>>     # 在策略逻辑中处理BP信号，执行买入平仓操作
+    """
+    # BP指令返回一个标记值，表示需要执行买入平仓操作
+    # 在实际使用中，这个值会被策略生成器转换为实际的交易代码
+    
+    # 验证分组参数
+    if group is not None:
+        if not isinstance(group, str) or len(group) != 1:
+            raise ValueError(f"分组参数必须是单个字符，范围 'A' 到 'I'，当前值: {group}")
+        if group < 'A' or group > 'I':
+            raise ValueError(f"分组参数必须在 'A' 到 'I' 之间，当前值: {group}")
+    
+    # 返回BP信号值（1.0表示需要执行BP操作）
+    # 注意：在实际使用中，BP指令通常与条件一起使用
+    # 例如：condition,BP() 表示当condition为True时执行BP操作
+    return 1.0
+
+
+def BPK(group: Optional[str] = None) -> Union[np.ndarray, float]:
+    """
+    BPK指令：买平后买开，空单转多单
+    
+    该指令用于T+0策略，即当天可以买卖。
+    满足条件时，先买入平仓（平掉空头持仓），然后买入开仓（建立多头持仓）。
+    
+    参数:
+        group: 可选的分组参数，可以是 'A' 到 'I' 的任意字符，用于指定组别
+               如果为 None，则对模型内所有持仓进行操作
+    
+    返回值:
+        返回一个特殊的交易信号值，用于标记需要执行买平后买开操作
+        - 返回 1.0 表示需要执行 BPK 操作
+        - 返回 0.0 表示不需要执行 BPK 操作
+    
+    规则:
+        1. BPK指令不指定交易手数，不支持 BPK(3) 这种写法
+        2. 交易手数为设置的固定手数或使用T_COMMAND函数设置的手数
+        3. 指令支持分组，可指定组别('A'--'I')
+        4. T_COMMAND函数设置的手数优先于设置的固定手数
+        5. BPK指令不支持和T+1策略指令一起使用
+        6. 在模型文件中，BPK指令通常与条件一起使用，如：
+           - CLOSE>MA(CLOSE,5),BPK;  // 收盘价大于5周期均线，平掉空仓，再买开仓
+           - CROSSUP(C,MA(C,5)),BPK('A');  // A组买平开指令
+    
+    注意:
+        - BPK指令是一个交易指令，不是计算函数
+        - 在策略生成时，BPK指令会被转换为实际的交易代码
+        - 当条件满足时，会先执行买入平仓操作（如果有空头持仓），然后执行买入开仓操作
+        - 交易手数由T_COMMAND函数或固定手数设置决定
+    
+    示例:
+        >>> # 在模型文件中使用：
+        >>> # T_COMMAND(3);  // 设置交易手数为3
+        >>> # CLOSE>MA(CLOSE,5),BPK;  // 当收盘价大于5周期均线时，买平后买开
+        >>> # CROSSUP(C,MA(C,5)),BPK('A');  // A组买平开指令
+        
+        >>> # 在Python代码中使用（通常由策略生成器自动生成）：
+        >>> condition = np.array([False, False, True, True, False])
+        >>> if condition[-1]:  # 当前条件满足
+        >>>     bpk_signal = BPK()  # 生成BPK信号
+        >>>     # 在策略逻辑中处理BPK信号，执行买平后买开操作
+    """
+    # BPK指令返回一个标记值，表示需要执行买平后买开操作
+    # 在实际使用中，这个值会被策略生成器转换为实际的交易代码
+    
+    # 验证分组参数
+    if group is not None:
+        if not isinstance(group, str) or len(group) != 1:
+            raise ValueError(f"分组参数必须是单个字符，范围 'A' 到 'I'，当前值: {group}")
+        if group < 'A' or group > 'I':
+            raise ValueError(f"分组参数必须在 'A' 到 'I' 之间，当前值: {group}")
+    
+    # 返回BPK信号值（1.0表示需要执行BPK操作）
+    # 注意：在实际使用中，BPK指令通常与条件一起使用
+    # 例如：condition,BPK() 表示当condition为True时执行BPK操作
+    # BPK操作包括：1. 如果有空头持仓，先买入平仓；2. 然后买入开仓
+    return 1.0
+
+
+def SPK(group: Optional[str] = None) -> Union[np.ndarray, float]:
+    """
+    SPK指令：卖平后卖开，多单转空单
+    
+    该指令用于T+0策略，即当天可以买卖。
+    满足条件时，先卖出平仓（平掉多头持仓），然后卖出开仓（建立空头持仓）。
+    
+    参数:
+        group: 可选的分组参数，可以是 'A' 到 'I' 的任意字符，用于指定组别
+               如果为 None，则对模型内所有持仓进行操作
+    
+    返回值:
+        返回一个特殊的交易信号值，用于标记需要执行卖平后卖开操作
+        - 返回 1.0 表示需要执行 SPK 操作
+        - 返回 0.0 表示不需要执行 SPK 操作
+    
+    规则:
+        1. SPK指令不指定交易手数，不支持 SPK(3) 这种写法
+        2. 交易手数为设置的固定手数或使用T_COMMAND函数设置的手数
+        3. 指令支持分组，可指定组别('A'--'I')
+        4. T_COMMAND函数设置的手数优先于设置的固定手数
+        5. SPK指令不支持和T+1策略指令一起使用
+        6. 在模型文件中，SPK指令通常与条件一起使用，如：
+           - CLOSE<MA(CLOSE,5),SPK;  // 收盘价小于5周期均线，平掉多仓，再卖开仓
+           - CROSSDOWN(C,MA(C,5)),SPK('A');  // A组卖平开指令
+    
+    注意:
+        - SPK指令是一个交易指令，不是计算函数
+        - 在策略生成时，SPK指令会被转换为实际的交易代码
+        - 当条件满足时，会先执行卖出平仓操作（如果有多头持仓），然后执行卖出开仓操作
+        - 交易手数由T_COMMAND函数或固定手数设置决定
+    
+    示例:
+        >>> # 在模型文件中使用：
+        >>> # T_COMMAND(3);  // 设置交易手数为3
+        >>> # CLOSE<MA(CLOSE,5),SPK;  // 当收盘价小于5周期均线时，卖平后卖开
+        >>> # CROSSDOWN(C,MA(C,5)),SPK('A');  // A组卖平开指令
+        
+        >>> # 在Python代码中使用（通常由策略生成器自动生成）：
+        >>> condition = np.array([False, False, True, True, False])
+        >>> if condition[-1]:  # 当前条件满足
+        >>>     spk_signal = SPK()  # 生成SPK信号
+        >>>     # 在策略逻辑中处理SPK信号，执行卖平后卖开操作
+    """
+    # SPK指令返回一个标记值，表示需要执行卖平后卖开操作
+    # 在实际使用中，这个值会被策略生成器转换为实际的交易代码
+    
+    # 验证分组参数
+    if group is not None:
+        if not isinstance(group, str) or len(group) != 1:
+            raise ValueError(f"分组参数必须是单个字符，范围 'A' 到 'I'，当前值: {group}")
+        if group < 'A' or group > 'I':
+            raise ValueError(f"分组参数必须在 'A' 到 'I' 之间，当前值: {group}")
+    
+    # 返回SPK信号值（1.0表示需要执行SPK操作）
+    # 注意：在实际使用中，SPK指令通常与条件一起使用
+    # 例如：condition,SPK() 表示当condition为True时执行SPK操作
+    # SPK操作包括：1. 如果有多头持仓，先卖出平仓；2. 然后卖出开仓
+    return 1.0
+

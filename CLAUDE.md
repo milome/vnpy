@@ -3684,3 +3684,112 @@ main_contracts = [
 3. 行情显示会自动更新合约名称
 
 如果是提前切换（当前月份早于新合约月份），状态栏会持续显示警告信息。
+
+---
+
+## K线图表功能
+
+### 功能概述
+
+在主窗口工具栏添加了独立的K线图表窗口，替代原来的"社区论坛"按钮。
+
+**主要功能**：
+- 默认显示 `MHImain.HKFE` 合约的最近7天1分钟K线数据
+- 根据实时 tick 数据自动更新K线
+- 支持切换不同合约
+- 底部时间滚动条可快速浏览不同时间段
+- 右侧缩放滚动条可调整显示的K线数量
+- 支持扩展到未来2小时的空白空间
+
+### 文件修改清单
+
+**新增/修改的文件**：
+
+1. **`vnpy/trader/ui/widget.py`**
+   - 新增 `ChartWindow` 类：独立K线图表窗口
+   - 功能：合约切换、历史数据加载、实时更新、时间/缩放滚动条
+
+2. **`vnpy/trader/ui/mainwindow.py`**
+   - 移除"社区论坛"菜单项和工具栏按钮
+   - 新增"K线图表"菜单项和工具栏按钮
+   - 新增 `open_chart_window()` 方法
+
+3. **`vnpy/trader/ui/ico/chart.ico`**
+   - 新增K线蜡烛样式图标（128x128）
+
+4. **`vnpy/chart/widget.py`**
+   - 新增 `_future_bars` 属性：支持右侧未来空间
+   - 新增 `set_future_bars()` 方法
+   - 修改 `_update_plot_limits()`：支持扩展x轴限制
+   - 修改 `update_bar()`：优化自动跟随逻辑，不打断用户查看未来空间
+
+5. **`vnpy/chart/manager.py`**
+   - 修改 `get_price_range()`：增加边界检查和空列表处理
+   - 修改 `get_volume_range()`：增加边界检查和空列表处理
+
+### ChartWindow 类
+
+**文件**: `vnpy/trader/ui/widget.py`
+
+```python
+class ChartWindow(QtWidgets.QWidget):
+    DEFAULT_SYMBOL: str = "MHImain.HKFE"  # 默认合约
+    
+    signal_tick: QtCore.Signal  # tick数据信号
+    signal_history: QtCore.Signal  # 历史数据信号
+```
+
+**主要方法**：
+- `switch_chart()`: 切换到新合约
+- `refresh_chart()`: 刷新当前图表
+- `goto_latest()`: 跳转到最新K线（包含未来空间）
+- `load_history_data()`: 后台线程加载历史数据
+- `subscribe_tick()`: 订阅实时行情
+- `process_tick_event()`: 处理tick事件，更新K线
+- `on_time_slider_changed()`: 时间滚动条控制
+- `on_price_slider_changed()`: 缩放滚动条控制
+- `extend_chart_x_limit()`: 扩展图表右侧空间
+- `set_symbol()`: 外部设置合约代码
+
+### ChartWidget 扩展
+
+**文件**: `vnpy/chart/widget.py`
+
+新增属性：
+```python
+self._future_bars: int = 0  # 右侧预留的未来空间K线数
+```
+
+新增方法：
+```python
+def set_future_bars(self, bars: int) -> None:
+    """设置未来空间的K线数量"""
+    self._future_bars = bars
+    self._update_plot_limits()
+```
+
+修改的自动跟随逻辑：
+```python
+# 只有当视图在数据范围内且接近末尾时才自动跟随
+data_count = self._manager.get_count()
+if self._right_ix <= data_count and self._right_ix >= (data_count - self._bar_count / 2):
+    self.move_to_right()
+```
+
+### 使用说明
+
+1. 启动 vnpy trader 后，左侧工具栏显示K线图表图标
+2. 点击图标（或菜单 帮助 → K线图表）打开窗口
+3. 默认显示 MHImain.HKFE 的K线数据
+4. 可在输入框中输入其他合约代码并点击"切换"
+5. 使用底部滚动条浏览不同时间段
+6. 使用右侧滚动条调整显示的K线数量（缩放）
+7. 点击"最新"按钮跳转到最新数据（包含未来空间）
+8. 拖拽到右侧可查看未来2小时的空白空间
+
+### 滚动条功能
+
+| 滚动条 | 位置 | 功能 |
+|--------|------|------|
+| 时间滚动条 | 底部 | 左右拖动浏览不同时间段，可扩展到未来2小时 |
+| 缩放滚动条 | 右侧 | 上下拖动调整显示K线数量（50-500根） |

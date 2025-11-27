@@ -1,0 +1,90 @@
+{
+  "Optimized_Conservative": {
+    "fast_window": 8,
+    "slow_window": 15,
+    "atr_window": 20,
+    "atr_multiplier": 2.0,
+    "fixed_size": 1,
+    "trend_filter_window": 20,
+    "min_trend_strength": 0.2,
+    "max_daily_trades": 8,
+    "max_consecutive_losses": 3
+  },
+  "Optimized_Balanced": {
+    "fast_window": 8,
+    "slow_window": 15,
+    "atr_window": 20,
+    "atr_multiplier": 3.0,
+    "fixed_size": 1,
+    "trend_filter_window": 20,
+    "min_trend_strength": 0.1,
+    "max_daily_trades": 10,
+    "max_consecutive_losses": 3
+  },
+  "Optimized_Aggressive": {
+    "fast_window": 5,
+    "slow_window": 15,
+    "atr_window": 20,
+    "atr_multiplier": 2.5,
+    "fixed_size": 1,
+    "trend_filter_window": 20,
+    "min_trend_strength": 0.1,
+    "max_daily_trades": 15,
+    "max_consecutive_losses": 5
+  },
+  "Best_Performance": {
+    "fast_window": 8,
+    "slow_window": 15,
+    "atr_window": 20,
+    "atr_multiplier": 3.0,
+    "fixed_size": 1,
+    "trend_filter_window": 20,
+    "min_trend_strength": 0.1,
+    "max_daily_trades": 10,
+    "max_consecutive_losses": 3
+  },
+  "Conservative": {
+    "fast_window": 12,
+    "slow_window": 26,
+    "atr_window": 20,
+    "atr_multiplier": 3.0,
+    "fixed_size": 1,
+    "trend_filter_window": 50,
+    "min_trend_strength": 0.5,
+    "max_daily_trades": 5,
+    "max_consecutive_losses": 2
+  },
+  "Balanced": {
+    "fast_window": 12,
+    "slow_window": 26,
+    "atr_window": 20,
+    "atr_multiplier": 2.5,
+    "fixed_size": 1,
+    "trend_filter_window": 50,
+    "min_trend_strength": 0.5,
+    "max_daily_trades": 10,
+    "max_consecutive_losses": 3
+  },
+  "Aggressive": {
+    "fast_window": 8,
+    "slow_window": 20,
+    "atr_window": 20,
+    "atr_multiplier": 2.0,
+    "fixed_size": 1,
+    "trend_filter_window": 30,
+    "min_trend_strength": 0.3,
+    "max_daily_trades": 20,
+    "max_consecutive_losses": 5
+  },
+  "Scalping": {
+    "fast_window": 5,
+    "slow_window": 12,
+    "atr_window": 10,
+    "atr_multiplier": 1.5,
+    "fixed_size": 1,
+    "trend_filter_window": 20,
+    "min_trend_strength": 0.2,
+    "max_daily_trades": 50,
+    "max_consecutive_losses": 10
+  }
+}

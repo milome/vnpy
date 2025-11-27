@@ -73,6 +73,11 @@ class ModelLoader:
         lines = content.split('\n')
         cleaned_lines = []
         for line in lines:
+            # 先去除行首尾空白
+            line_stripped = line.strip()
+            # 如果整行以 // 开头，跳过这一行（整行注释）
+            if line_stripped.startswith('//'):
+                continue
             # 移除行内注释
             if '//' in line:
                 line = line[:line.index('//')]

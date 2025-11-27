@@ -36,6 +36,7 @@ class ChartWidget(pg.PlotWidget):
 
         self._right_ix: int = 0                     # Index of most right data
         self._bar_count: int = self.MIN_BAR_COUNT   # Total bar visible in chart
+        self._future_bars: int = 0                  # Extra space for future bars
 
         self._init_ui()
 
@@ -176,7 +177,10 @@ class ChartWidget(pg.PlotWidget):
 
         self._update_plot_limits()
 
-        if self._right_ix >= (self._manager.get_count() - self._bar_count / 2):
+        # 只有当视图在数据范围内且接近末尾时才自动跟随
+        # 如果用户已将视图移到未来空间，则不自动移动
+        data_count = self._manager.get_count()
+        if self._right_ix <= data_count and self._right_ix >= (data_count - self._bar_count / 2):
             self.move_to_right()
 
     def _update_plot_limits(self) -> None:
@@ -188,7 +192,7 @@ class ChartWidget(pg.PlotWidget):
 
             plot.setLimits(
                 xMin=-1,
-                xMax=self._manager.get_count(),
+                xMax=self._manager.get_count() + self._future_bars,
                 yMin=min_value,
                 yMax=max_value
             )
@@ -319,6 +323,13 @@ class ChartWidget(pg.PlotWidget):
 
         if self._cursor:
             self._cursor.update_info()
+    
+    def set_future_bars(self, bars: int) -> None:
+        """
+        Set the number of future bars (empty space on the right).
+        """
+        self._future_bars = bars
+        self._update_plot_limits()
 
 
 class ChartCursor(QtCore.QObject):

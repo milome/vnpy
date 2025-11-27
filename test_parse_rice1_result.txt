@@ -1,0 +1,5 @@
+Parsing: mflang\mmodels\RICE1.txt
+Exists: True
+Parsed: True
+AST type: <class 'mflang.grammar.ast_visitor.ASTNode'>
+Children count: 530

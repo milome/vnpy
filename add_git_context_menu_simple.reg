@@ -1,0 +1,57 @@
+Windows Registry Editor Version 5.00
+
+; ============================================
+; 添加 Git 命令到 Windows 右键菜单
+; ============================================
+; 注意：如果 Git 安装在其他位置，请修改下面的路径
+; 默认路径：C:\Program Files\Git\
+; 如果 Git 安装在 D 盘，请将 C: 改为 D:
+; ============================================
+
+; 添加 Git Bash Here 到文件夹右键菜单
+[HKEY_CLASSES_ROOT\Directory\shell\gitbash]
+@="Git Bash Here"
+"Icon"="C:\\Program Files\\Git\\git-bash.exe"
+
+[HKEY_CLASSES_ROOT\Directory\shell\gitbash\command]
+@="\"C:\\Program Files\\Git\\git-bash.exe\" --cd=\"%1\""
+
+; 添加 Git GUI Here 到文件夹右键菜单
+[HKEY_CLASSES_ROOT\Directory\shell\gitgui]
+@="Git GUI Here"
+"Icon"="C:\\Program Files\\Git\\cmd\\git-gui.exe"
+
+[HKEY_CLASSES_ROOT\Directory\shell\gitgui\command]
+@="\"C:\\Program Files\\Git\\cmd\\git-gui.exe\""
+
+; 添加 Git Status 到文件夹右键菜单（PowerShell）
+[HKEY_CLASSES_ROOT\Directory\shell\gitstatus]
+@="Git Status"
+"Icon"="C:\\Program Files\\Git\\cmd\\git.exe"
+
+[HKEY_CLASSES_ROOT\Directory\shell\gitstatus\command]
+@="powershell -NoExit -Command \"cd '%1'; git status\""
+
+; 添加 Git Bash Here 到文件夹空白处右键菜单
+[HKEY_CLASSES_ROOT\Directory\Background\shell\gitbash]
+@="Git Bash Here"
+"Icon"="C:\\Program Files\\Git\\git-bash.exe"
+
+[HKEY_CLASSES_ROOT\Directory\Background\shell\gitbash\command]
+@="\"C:\\Program Files\\Git\\git-bash.exe\" --cd=\"%V\""
+
+; 添加 Git GUI Here 到文件夹空白处右键菜单
+[HKEY_CLASSES_ROOT\Directory\Background\shell\gitgui]
+@="Git GUI Here"
+"Icon"="C:\\Program Files\\Git\\cmd\\git-gui.exe"
+
+[HKEY_CLASSES_ROOT\Directory\Background\shell\gitgui\command]
+@="\"C:\\Program Files\\Git\\cmd\\git-gui.exe\""
+
+; 添加 Git Status 到文件夹空白处右键菜单（PowerShell）
+[HKEY_CLASSES_ROOT\Directory\Background\shell\gitstatus]
+@="Git Status"
+"Icon"="C:\\Program Files\\Git\\cmd\\git.exe"
+
+[HKEY_CLASSES_ROOT\Directory\Background\shell\gitstatus\command]
+@="powershell -NoExit -Command \"cd '%V'; git status\""

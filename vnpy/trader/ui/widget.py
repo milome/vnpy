@@ -1688,7 +1688,9 @@ class TradingWidget(QtWidgets.QWidget):
                 try:
                     gateway.cancel_all_chase_orders()
                 except Exception as e:
-                    self.main_engine.write_log(f"清理{gateway_name}的追价订单时发生异常：{str(e)}")
+                    # 转义花括号避免loguru格式化错误
+                    error_msg = str(e).replace("{", "{{").replace("}", "}}")
+                    self.main_engine.write_log(f"清理{gateway_name}的追价订单时发生异常：{error_msg}")
 
     def update_with_cell(self, cell: BaseCell) -> None:
         """"""
@@ -1961,3 +1963,466 @@ class GlobalDialog(QtWidgets.QDialog):
 
         save_json(SETTING_FILENAME, settings)
         self.accept()
+
+
+class ChartWindow(QtWidgets.QWidget):
+    """
+    K线图表窗口，作为独立窗口显示实时K线数据。
+    
+    功能：
+    - 默认显示最近7天的1分钟K线数据
+    - 根据tickdata实时更新K线
+    - 支持切换不同合约
+    - 底部滚动条可以快速切换时间范围
+    """
+    
+    # 默认显示的合约
+    DEFAULT_SYMBOL: str = "MHImain.HKFE"
+    
+    signal_tick: QtCore.Signal = QtCore.Signal(Event)
+    signal_history: QtCore.Signal = QtCore.Signal(object)
+    
+    def __init__(self, main_engine: MainEngine, event_engine: EventEngine) -> None:
+        """构造函数"""
+        super().__init__()
+        
+        self.main_engine: MainEngine = main_engine
+        self.event_engine: EventEngine = event_engine
+        
+        # 当前显示的合约
+        self.current_vt_symbol: str = ""
+        
+        # K线生成器（用于将tick合成K线）
+        self.bg: "BarGenerator" = None
+        
+        # 图表组件
+        self.chart: "ChartWidget" = None
+        
+        # 历史数据加载状态
+        self.history_loaded: bool = False
+        
+        # 历史数据缓存（用于滚动条）
+        self.history_data: list = []
+        
+        self.init_ui()
+        self.register_event()
+        
+        # 默认加载合约数据
+        self.load_default_symbol()
+    
+    def init_ui(self) -> None:
+        """初始化界面"""
+        from vnpy.chart import ChartWidget, CandleItem, VolumeItem
+        
+        self.setWindowTitle(_("K线图表"))
+        self.setWindowFlags(
+            QtCore.Qt.WindowType.Window |
+            QtCore.Qt.WindowType.WindowCloseButtonHint |
+            QtCore.Qt.WindowType.WindowMinMaxButtonsHint
+        )
+        
+        # 合约选择区域
+        self.symbol_line: QtWidgets.QLineEdit = QtWidgets.QLineEdit()
+        self.symbol_line.setPlaceholderText(_("输入合约代码，如 MHImain.HKFE"))
+        self.symbol_line.returnPressed.connect(self.switch_chart)
+        
+        self.switch_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("切换"))
+        self.switch_button.clicked.connect(self.switch_chart)
+        
+        # 刷新按钮
+        self.refresh_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("刷新"))
+        self.refresh_button.clicked.connect(self.refresh_chart)
+        
+        # 跳转到最新按钮
+        self.latest_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("最新"))
+        self.latest_button.clicked.connect(self.goto_latest)
+        self.latest_button.setToolTip(_("跳转到最新K线"))
+        
+        # 顶部布局
+        hbox: QtWidgets.QHBoxLayout = QtWidgets.QHBoxLayout()
+        hbox.addWidget(QtWidgets.QLabel(_("合约:")))
+        hbox.addWidget(self.symbol_line, 1)
+        hbox.addWidget(self.switch_button)
+        hbox.addWidget(self.refresh_button)
+        hbox.addWidget(self.latest_button)
+        
+        # 创建K线图表
+        self.chart = ChartWidget()
+        self.chart.add_plot("candle", hide_x_axis=True)
+        self.chart.add_plot("volume", maximum_height=150)
+        self.chart.add_item(CandleItem, "candle", "candle")
+        self.chart.add_item(VolumeItem, "volume", "volume")
+        self.chart.add_cursor()
+        
+        # 时间滚动条（横向）
+        self.time_slider: QtWidgets.QSlider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.time_slider.setMinimum(0)
+        self.time_slider.setMaximum(100)
+        self.time_slider.setValue(100)  # 默认显示最新
+        self.time_slider.setToolTip(_("拖动滚动条查看不同时间段的K线"))
+        self.time_slider.valueChanged.connect(self.on_time_slider_changed)
+        
+        # 价格滚动条（竖向）- 用于缩放价格范围
+        self.price_slider: QtWidgets.QSlider = QtWidgets.QSlider(QtCore.Qt.Orientation.Vertical)
+        self.price_slider.setMinimum(10)
+        self.price_slider.setMaximum(200)
+        self.price_slider.setValue(100)  # 默认100%显示
+        self.price_slider.setToolTip(_("拖动滚动条缩放K线数量（上多下少）"))
+        self.price_slider.valueChanged.connect(self.on_price_slider_changed)
+        self.price_slider.setFixedWidth(20)
+        
+        # 时间范围标签
+        self.time_start_label: QtWidgets.QLabel = QtWidgets.QLabel("")
+        self.time_end_label: QtWidgets.QLabel = QtWidgets.QLabel("")
+        self.time_start_label.setStyleSheet("color: #666; font-size: 11px;")
+        self.time_end_label.setStyleSheet("color: #666; font-size: 11px;")
+        self.time_start_label.setFixedWidth(80)
+        self.time_end_label.setFixedWidth(80)
+        
+        # 图表和竖向滚动条的水平布局
+        chart_layout: QtWidgets.QHBoxLayout = QtWidgets.QHBoxLayout()
+        chart_layout.setSpacing(5)
+        chart_layout.addWidget(self.chart, 1)
+        chart_layout.addWidget(self.price_slider)
+        
+        # 底部时间滚动条布局（扩展更多空间）
+        slider_layout: QtWidgets.QHBoxLayout = QtWidgets.QHBoxLayout()
+        slider_layout.setContentsMargins(0, 5, 25, 0)  # 右边留出空间对齐竖向滚动条
+        slider_layout.addWidget(self.time_start_label)
+        slider_layout.addWidget(self.time_slider, 1)
+        slider_layout.addWidget(self.time_end_label)
+        
+        # 状态标签
+        self.status_label: QtWidgets.QLabel = QtWidgets.QLabel(_("请输入合约代码开始查看K线"))
+        self.status_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.status_label.setStyleSheet("color: #888; font-size: 12px;")
+        
+        # 总体布局
+        vbox: QtWidgets.QVBoxLayout = QtWidgets.QVBoxLayout()
+        vbox.setContentsMargins(10, 10, 10, 10)
+        vbox.addLayout(hbox)
+        vbox.addLayout(chart_layout, 1)
+        vbox.addLayout(slider_layout)
+        vbox.addWidget(self.status_label)
+        
+        self.setLayout(vbox)
+        self.resize(1000, 700)
+    
+    def register_event(self) -> None:
+        """注册事件监听"""
+        self.signal_tick.connect(self.process_tick_event)
+        self.signal_history.connect(self.process_history_data)
+        self.event_engine.register(EVENT_TICK, self.signal_tick.emit)
+    
+    def switch_chart(self) -> None:
+        """切换到新的合约图表"""
+        vt_symbol: str = str(self.symbol_line.text()).strip()
+        if not vt_symbol:
+            self.status_label.setText(_("请输入有效的合约代码"))
+            return
+        
+        if vt_symbol == self.current_vt_symbol:
+            return
+        
+        # 保存新的合约代码
+        self.current_vt_symbol = vt_symbol
+        self.history_loaded = False
+        self.history_data = []
+        
+        # 清空图表
+        self.chart.clear_all()
+        
+        # 重置滚动条
+        self.time_slider.setValue(100)
+        self.time_start_label.setText("")
+        self.time_end_label.setText("")
+        
+        # 创建新的K线生成器
+        from vnpy.trader.utility import BarGenerator
+        self.bg = BarGenerator(self.on_bar)
+        
+        # 更新窗口标题
+        self.setWindowTitle(_("K线图表 - {}").format(vt_symbol))
+        
+        # 更新状态
+        self.status_label.setText(_("正在加载 {} 的历史数据...").format(vt_symbol))
+        
+        # 加载历史K线数据（最近7天的1分钟数据）
+        self.load_history_data(vt_symbol)
+        
+        # 订阅行情数据
+        self.subscribe_tick(vt_symbol)
+    
+    def refresh_chart(self) -> None:
+        """刷新当前图表"""
+        if self.current_vt_symbol:
+            self.history_loaded = False
+            self.history_data = []
+            self.chart.clear_all()
+            self.status_label.setText(_("正在刷新 {} 的数据...").format(self.current_vt_symbol))
+            self.load_history_data(self.current_vt_symbol)
+    
+    def goto_latest(self) -> None:
+        """跳转到最新K线（包含未来空间）"""
+        self.time_slider.setValue(100)
+        # 扩展限制并移动到扩展后的末尾
+        self.extend_chart_x_limit(move_to_end=True)
+    
+    def on_time_slider_changed(self, value: int) -> None:
+        """时间滚动条值改变时更新图表视图（横向滚动）"""
+        if not self.history_data:
+            return
+        
+        total_bars = len(self.history_data)
+        if total_bars == 0:
+            return
+        
+        # 获取当前显示的K线数量
+        visible_bars = self.chart._bar_count
+        
+        # 扩展未来2小时的空间（1分钟K线 = 120根）
+        future_bars = 120
+        
+        # 先确保图表的x轴限制已扩展
+        self.extend_chart_x_limit()
+        
+        # 根据滚动条位置计算右边界索引
+        # value=0时显示最早的数据，value=100时显示最新数据+未来空间
+        max_right_ix = total_bars + future_bars  # 扩展到未来
+        min_right_ix = visible_bars
+        
+        right_ix = int(min_right_ix + (max_right_ix - min_right_ix) * value / 100)
+        right_ix = max(visible_bars, min(max_right_ix, right_ix))
+        
+        # 更新图表视图
+        self.chart._right_ix = right_ix
+        self.chart._update_x_range()
+    
+    def on_price_slider_changed(self, value: int) -> None:
+        """价格滚动条值改变时更新图表视图（缩放K线数量）"""
+        if not self.history_data:
+            return
+        
+        total_bars = len(self.history_data)
+        if total_bars == 0:
+            return
+        
+        # value范围10-200，对应显示K线数量
+        # value=10时显示较少K线（放大），value=200时显示较多K线（缩小）
+        min_bars = 50
+        max_bars = min(500, total_bars)
+        
+        # 计算显示的K线数量
+        bar_count = int(min_bars + (max_bars - min_bars) * value / 200)
+        bar_count = max(min_bars, min(max_bars, bar_count))
+        
+        # 更新图表的K线数量
+        self.chart._bar_count = bar_count
+        self.chart._update_x_range()
+        
+        # 扩展未来2小时的空间（1分钟K线 = 120根）
+        future_bars = 120
+        max_right_ix = total_bars + future_bars
+        
+        # 同步更新时间滚动条位置
+        if hasattr(self.chart, '_right_ix'):
+            current_right = self.chart._right_ix
+            # 确保时间滚动条位置正确
+            if max_right_ix > bar_count:
+                slider_value = int((current_right - bar_count) / (max_right_ix - bar_count) * 100)
+                slider_value = max(0, min(100, slider_value))
+                self.time_slider.blockSignals(True)
+                self.time_slider.setValue(slider_value)
+                self.time_slider.blockSignals(False)
+    
+    def load_history_data(self, vt_symbol: str) -> None:
+        """加载历史K线数据"""
+        from threading import Thread
+        from datetime import datetime, timedelta
+        from tzlocal import get_localzone_name
+        
+        def _load():
+            try:
+                from vnpy.trader.utility import extract_vt_symbol, ZoneInfo
+                from vnpy.trader.constant import Interval
+                from vnpy.trader.object import HistoryRequest
+                from vnpy.trader.database import get_database
+                from vnpy.trader.datafeed import get_datafeed
+                
+                symbol, exchange = extract_vt_symbol(vt_symbol)
+                
+                # 计算时间范围（最近7天）
+                end: datetime = datetime.now(ZoneInfo(get_localzone_name()))
+                start: datetime = end - timedelta(days=7)
+                
+                req: HistoryRequest = HistoryRequest(
+                    symbol=symbol,
+                    exchange=exchange,
+                    interval=Interval.MINUTE,
+                    start=start,
+                    end=end
+                )
+                
+                # 尝试从gateway获取历史数据
+                contract = self.main_engine.get_contract(vt_symbol)
+                data = None
+                
+                if contract:
+                    if contract.history_data:
+                        data = self.main_engine.query_history(req, contract.gateway_name)
+                    else:
+                        # 从数据源获取
+                        datafeed = get_datafeed()
+                        data = datafeed.query_bar_history(req)
+                else:
+                    # 从数据库加载
+                    database = get_database()
+                    data = database.load_bar_data(
+                        symbol,
+                        exchange,
+                        Interval.MINUTE,
+                        start,
+                        end
+                    )
+                
+                # 发送历史数据更新信号
+                if data:
+                    self.signal_history.emit(data)
+                else:
+                    self.signal_history.emit([])
+                    
+            except Exception as e:
+                # 转义花括号避免loguru格式化错误
+                error_msg = str(e).replace("{", "{{").replace("}", "}}")
+                self.main_engine.write_log(f"加载K线历史数据失败: {error_msg}")
+                self.signal_history.emit([])
+        
+        # 在后台线程加载
+        thread: Thread = Thread(target=_load)
+        thread.start()
+    
+    def subscribe_tick(self, vt_symbol: str) -> None:
+        """订阅行情数据"""
+        from vnpy.trader.utility import extract_vt_symbol
+        
+        try:
+            symbol, exchange = extract_vt_symbol(vt_symbol)
+            req: SubscribeRequest = SubscribeRequest(
+                symbol=symbol,
+                exchange=exchange
+            )
+            
+            # 查找合约并订阅
+            contract = self.main_engine.get_contract(vt_symbol)
+            if contract:
+                self.main_engine.subscribe(req, contract.gateway_name)
+            else:
+                # 尝试所有gateway
+                gateway_names = self.main_engine.get_all_gateway_names()
+                for gw_name in gateway_names:
+                    self.main_engine.subscribe(req, gw_name)
+                    
+        except Exception as e:
+            # 转义花括号避免loguru格式化错误
+            error_msg = str(e).replace("{", "{{").replace("}", "}}")
+            self.main_engine.write_log(f"订阅行情失败: {error_msg}")
+    
+    def process_tick_event(self, event: Event) -> None:
+        """处理Tick事件"""
+        tick: TickData = event.data
+        
+        # 只处理当前显示合约的tick
+        if tick.vt_symbol != self.current_vt_symbol:
+            return
+        
+        # 如果历史数据还没加载完，跳过
+        if not self.history_loaded:
+            return
+        
+        # 用tick更新K线
+        if self.bg:
+            self.bg.update_tick(tick)
+            
+            # 实时更新当前K线
+            if self.bg.bar:
+                from vnpy.trader.object import BarData
+                bar: BarData = copy(self.bg.bar)
+                bar.datetime = bar.datetime.replace(second=0, microsecond=0)
+                self.chart.update_bar(bar)
+    
+    def on_bar(self, bar: "BarData") -> None:
+        """K线合成回调"""
+        self.chart.update_bar(bar)
+        # 更新历史数据缓存
+        self.history_data.append(bar)
+    
+    def process_history_data(self, history: list) -> None:
+        """处理历史数据"""
+        if not history:
+            self.status_label.setText(_("未找到历史数据，等待实时行情..."))
+            self.history_loaded = True
+            return
+        
+        # 确保是当前合约的数据
+        first_bar = history[0]
+        if first_bar.vt_symbol != self.current_vt_symbol:
+            return
+        
+        # 缓存历史数据
+        self.history_data = list(history)
+        
+        # 先设置未来空间，再更新历史数据
+        self.chart.set_future_bars(120)  # 2小时 = 120分钟
+        
+        # 更新图表
+        self.chart.update_history(history)
+        self.history_loaded = True
+        
+        # 更新时间范围标签
+        if history:
+            start_time = history[0].datetime.strftime("%m-%d %H:%M")
+            end_time = history[-1].datetime.strftime("%m-%d %H:%M")
+            self.time_start_label.setText(start_time)
+            self.time_end_label.setText(end_time)
+        
+        # 更新状态
+        self.status_label.setText(
+            _("{} | {} 根K线 | 实时更新中").format(
+                self.current_vt_symbol,
+                len(history)
+            )
+        )
+        
+        # 确保滚动条在最右边
+        self.time_slider.setValue(100)
+    
+    def extend_chart_x_limit(self, move_to_end: bool = False) -> None:
+        """扩展图表的x轴限制，允许显示未来空间"""
+        # 扩展未来2小时的空间（1分钟K线 = 120根）
+        future_bars = 120
+        
+        # 使用ChartWidget的新方法设置未来空间
+        self.chart.set_future_bars(future_bars)
+        
+        # 如果需要移动到扩展后的末尾
+        if move_to_end and self.history_data:
+            total_bars = len(self.history_data)
+            max_x = total_bars + future_bars
+            self.chart._right_ix = max_x
+            self.chart._update_x_range()
+    
+    def load_default_symbol(self) -> None:
+        """加载默认合约数据"""
+        self.symbol_line.setText(self.DEFAULT_SYMBOL)
+        self.switch_chart()
+    
+    def set_symbol(self, vt_symbol: str) -> None:
+        """外部设置合约代码"""
+        self.symbol_line.setText(vt_symbol)
+        self.switch_chart()
+    
+    def show(self) -> None:
+        """显示窗口"""
+        super().show()
+        self.activateWindow()
+        self.raise_()

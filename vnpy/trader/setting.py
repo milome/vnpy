@@ -41,7 +41,7 @@ SETTINGS: dict = {
     "position.view.debug": False,
 }
 
-
 # Load global setting from json file.
 SETTING_FILENAME: str = "vt_setting.json"
 SETTINGS.update(load_json(SETTING_FILENAME))
+

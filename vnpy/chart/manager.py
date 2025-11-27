@@ -103,13 +103,20 @@ class BarManager:
         else:
             min_ix = to_int(min_ix)
             max_ix = to_int(max_ix)
-            max_ix = min(max_ix, self.get_count())
+            # 确保索引在有效范围内
+            min_ix = max(0, min(min_ix, self.get_count() - 1))
+            max_ix = max(0, min(max_ix, self.get_count() - 1))
 
         buf: tuple[float, float] | None = self._price_ranges.get((min_ix, max_ix), None)
         if buf:
             return buf
 
         bar_list: list[BarData] = list(self._bars.values())[min_ix:max_ix + 1]
+        
+        # 处理空列表情况
+        if not bar_list:
+            return 0, 1
+        
         first_bar: BarData = bar_list[0]
         max_price: float = first_bar.high_price
         min_price: float = first_bar.low_price
@@ -134,13 +141,19 @@ class BarManager:
         else:
             min_ix = to_int(min_ix)
             max_ix = to_int(max_ix)
-            max_ix = min(max_ix, self.get_count())
+            # 确保索引在有效范围内
+            min_ix = max(0, min(min_ix, self.get_count() - 1))
+            max_ix = max(0, min(max_ix, self.get_count() - 1))
 
         buf: tuple[float, float] | None = self._volume_ranges.get((min_ix, max_ix), None)
         if buf:
             return buf
 
         bar_list: list[BarData] = list(self._bars.values())[min_ix:max_ix + 1]
+
+        # 处理空列表情况
+        if not bar_list:
+            return 0, 1
 
         first_bar: BarData = bar_list[0]
         max_volume = first_bar.volume
