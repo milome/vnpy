@@ -20,10 +20,10 @@ from vnpy_ctastrategy import (
     BarData,
     TradeData,
     OrderData,
-    BarGenerator,
     ArrayManager,
 )
-from vnpy.trader.constant import Direction, Offset
+from vnpy.trader.constant import Direction, Offset, Interval, Exchange
+from vnpy.trader.utility import create_bar_generator
 import talib
 import numpy as np
 
@@ -103,8 +103,19 @@ class MHITrendStrategy(CtaTemplate):
         """构造函数"""
         super().__init__(cta_engine, strategy_name, vt_symbol, setting)
 
-        # 初始化K线生成器：1分钟K线 -> 5分钟K线
-        self.bg = BarGenerator(self.on_bar, 5, self.on_5min_bar)
+        # 从vt_symbol中提取交易所和合约代码
+        symbol, exchange_str = vt_symbol.split(".")
+        exchange = Exchange(exchange_str)
+        
+        # 初始化K线生成器：1分钟K线 -> 5分钟K线（使用HKFE精确时间边界）
+        self.bg = create_bar_generator(
+            on_bar=self.on_bar,
+            window=5,
+            on_window_bar=self.on_5min_bar,
+            interval=Interval.MINUTE_5,
+            exchange=exchange,
+            symbol=symbol
+        )
 
         # 初始化数组管理器
         self.am = ArrayManager()

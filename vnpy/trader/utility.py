@@ -1114,3 +1114,12 @@ def virtual(func: Callable) -> Callable:
     that can be (re)implemented by subclasses.
     """
     return func
+
+
+# 导出HKFEBarGenerator和工厂函数
+try:
+    from .hkfe_bar_generator import HKFEBarGenerator, create_bar_generator
+    __all__ = ["BarGenerator", "HKFEBarGenerator", "create_bar_generator"]
+except ImportError:
+    # 如果导入失败，只导出BarGenerator
+    __all__ = ["BarGenerator"]

@@ -2091,15 +2091,19 @@ class FutuGateway(BaseGateway):
         bars: List[BarData] = []
 
         # 映射VNPy周期到富途API周期
+        # 注意：1小时数据禁止直接从富途API下载，必须从1分钟数据合成
         interval_mapping = {
             Interval.MINUTE: KLType.K_1M,
-            Interval.HOUR: KLType.K_60M,
+            # Interval.HOUR: KLType.K_60M,  # 禁止：1小时数据必须从1分钟数据合成
             Interval.DAILY: KLType.K_DAY,
             Interval.WEEKLY: KLType.K_WEEK,
         }
 
         if req.interval not in interval_mapping:
-            self.write_log(f"获取K线数据失败，FUTU接口暂不提供{req.interval.value}级别历史数据")
+            if req.interval == Interval.HOUR:
+                self.write_log(f"获取K线数据失败，FUTU接口不支持直接下载{req.interval.value}级别历史数据，请从1分钟数据合成")
+            else:
+                self.write_log(f"获取K线数据失败，FUTU接口暂不提供{req.interval.value}级别历史数据")
             return bars
 
         futu_ktype = interval_mapping[req.interval]
@@ -2169,7 +2173,7 @@ class FutuGateway(BaseGateway):
                 symbol=req.symbol,
                 exchange=req.exchange,
                 datetime=generate_datetime(row["time_key"]),
-                interval=Interval.MINUTE,
+                interval=req.interval,  # 使用请求中指定的周期，而不是硬编码为 MINUTE
                 volume=row["volume"],
                 turnover=row["turnover"],
                 open_interest=0,

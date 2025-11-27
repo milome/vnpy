@@ -20,10 +20,10 @@ from vnpy_ctastrategy import (
     BarData,
     TradeData,
     OrderData,
-    BarGenerator,
     ArrayManager,
 )
-from vnpy.trader.constant import Direction, Offset
+from vnpy.trader.constant import Direction, Offset, Interval, Exchange
+from vnpy.trader.utility import create_bar_generator
 import talib
 import numpy as np
 
@@ -105,17 +105,35 @@ class MHITrendStrategySafe(CtaTemplate):
         """构造函数"""
         super().__init__(cta_engine, strategy_name, vt_symbol, setting)
 
-        # 初始化K线生成器
+        # 从vt_symbol中提取交易所和合约代码
+        symbol, exchange_str = vt_symbol.split(".")
+        exchange = Exchange(exchange_str)
+        
+        # 初始化K线生成器（使用HKFE精确时间边界）
         # 1分钟BarGenerator：从tick聚合到1分钟K线
         # 当1分钟K线生成后，会先调用on_bar（传入1分钟K线），然后调用on_1min_bar
         # 注意：如果回测选择tick周期，on_tick会调用bg_1min.update_tick()
         #      如果回测选择1分钟周期，回测引擎直接调用on_bar（传入1分钟K线）
-        self.bg_1min = BarGenerator(self.on_bar, 1, self.on_1min_bar)
+        self.bg_1min = create_bar_generator(
+            on_bar=self.on_bar,
+            window=1,
+            on_window_bar=self.on_1min_bar,
+            interval=Interval.MINUTE,
+            exchange=exchange,
+            symbol=symbol
+        )
         
         # 5分钟BarGenerator：从1分钟K线聚合到5分钟K线
         # 当5分钟K线生成后，会调用on_5min_bar
         # 注意：on_bar中收到1分钟K线后，会更新这个聚合器
-        self.bg_5min = BarGenerator(self.on_bar, 5, self.on_5min_bar)
+        self.bg_5min = create_bar_generator(
+            on_bar=self.on_bar,
+            window=5,
+            on_window_bar=self.on_5min_bar,
+            interval=Interval.MINUTE_5,
+            exchange=exchange,
+            symbol=symbol
+        )
 
         # 初始化数组管理器（分别用于1分钟和5分钟）
         self.am_1min = ArrayManager()  # 1分钟周期数组管理器

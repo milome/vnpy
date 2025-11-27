@@ -4662,3 +4662,435 @@ self._gap_info: str = ""                    # 缺口时间范围描述
 | `multi-timeframe-webapp/scripts/aggregate_4hour.py` | 4小时合成脚本 |
 | `multi-timeframe-webapp/scripts/regenerate_4hour.py` | 4小时重新生成脚本 |
 | `multi-timeframe-webapp/frontend/src/utils/timeframeAggregator.ts` | 前端4小时合成 |
+
+---
+
+## 富途网关历史数据 interval 硬编码 Bug 修复 (2025-11-28)
+
+### 问题描述
+
+在 DataManager 中下载 1 小时或其他非分钟级别的历史数据后，刷新数据列表时发现"小时线"节点下没有数据显示。
+
+### 根本原因
+
+`vnpy_futu/vnpy_futu/futu_gateway.py` 中的 `query_history` 方法在创建 `BarData` 对象时，**将 interval 硬编码为 `Interval.MINUTE`**，而不是使用请求中指定的周期：
+
+```python
+# ❌ 错误代码（修复前）
+bar: BarData = BarData(
+    ...
+    interval=Interval.MINUTE,  # 硬编码为 MINUTE！
+    ...
+)
+```
+
+这导致无论用户请求下载什么周期的数据（1小时、日线等），数据都被保存为 1 分钟数据，覆盖原有的 1 分钟数据。
+
+### 修复方案
+
+将 `interval=Interval.MINUTE` 改为 `interval=req.interval`：
+
+```python
+# ✅ 正确代码（修复后）
+bar: BarData = BarData(
+    ...
+    interval=req.interval,  # 使用请求中指定的周期
+    ...
+)
+```
+
+### 修复文件
+
+| 文件 | 修改内容 |
+|------|---------|
+| `vnpy_futu/vnpy_futu/futu_gateway.py` | 第2172行：`interval=Interval.MINUTE` → `interval=req.interval` |
+
+### 影响范围
+
+此 bug 影响通过富途网关（而非 datafeed）下载非分钟级别历史数据的场景：
+- 1小时数据下载
+- 日线数据下载
+- 周线数据下载
+
+通过 datafeed (`vnpy_futu/vnpy_futu/datafeed.py`) 下载的数据不受此 bug 影响，因为 datafeed 正确使用了 `interval=req.interval`。
+
+### 验证方法
+
+修复后重新下载 1 小时数据：
+1. 在 DataManager 中选择周期 HOUR，点击下载
+2. 下载完成后点击刷新
+3. 应该能看到"小时线"节点下有数据显示
+
+---
+
+## HKFEBarGenerator 多态实现 (2025-11-28)
+
+### 概述
+
+实现了针对港期（HKFE）交易所的专用 `BarGenerator` 多态实现，使用 DataManager 的精确时间边界合成逻辑，替代标准的 BarGenerator 时间整除规则。保持与 `BarGenerator` 完全兼容的接口，可以无缝替换。
+
+### 问题背景
+
+**标准 BarGenerator 的问题**：
+- 使用简单的时间整除规则（整点、整5分钟等）
+- 不遵循港期交易时段边界（09:15-12:00, 13:00-16:30, 17:15-03:00）
+- 1小时K线使用整点时间（17:00, 18:00），而不是港期的精确边界（17:15, 18:15）
+- 4小时K线使用简单的4小时累积，不遵循港期的4个精确时段
+
+**影响**：
+- MHImain 合约的策略使用标准 BarGenerator，合成的K线时间边界不正确
+- 无法正确反映港期交易时段
+- 与 DataManager 的精确合成逻辑不一致
+
+### 解决方案
+
+#### 1. HKFEBarGenerator 类
+
+**文件**: `vnpy/trader/hkfe_bar_generator.py`
+
+**核心特性**：
+- 继承自 `BarGenerator`，保持完全相同的接口
+- 使用与 DataManager 相同的精确时间边界逻辑
+- 支持 5分钟、1小时、4小时 K 线合成
+- 对于非 HKFE 交易所或非支持的周期，自动降级到标准 BarGenerator 逻辑
+
+**时间边界规则**：
+- **5分钟K线**: 遵循港期交易时段边界（09:15-12:00, 13:00-16:30, 17:15-03:00）
+- **1小时K线**: 使用16个精确时间边界（17:15-18:14, 18:15-19:14, ...）
+- **4小时K线**: 使用4个精确时间边界（17:15-21:14, 21:15-01:14, ...）
+
+#### 2. 工厂函数
+
+**文件**: `vnpy/trader/utility.py`
+
+```python
+def create_bar_generator(
+    on_bar: Callable,
+    window: int = 0,
+    on_window_bar: Callable | None = None,
+    interval: Interval = Interval.MINUTE,
+    daily_end: Optional[datetime.time] = None,
+    exchange: Exchange | None = None,
+    symbol: str | None = None
+) -> BarGenerator:
+    """
+    工厂函数：根据交易所自动创建合适的BarGenerator
+    
+    对于HKFE交易所和支持的周期（5分钟、1小时、4小时），返回HKFEBarGenerator
+    否则返回标准BarGenerator
+    """
+```
+
+**自动选择逻辑**：
+- 如果 `exchange == Exchange.HKFE` 且 `interval` 在支持列表中，返回 `HKFEBarGenerator`
+- 否则返回标准 `BarGenerator`
+
+#### 3. 策略文件修改
+
+**修改的文件**：
+- `vnpy_ctastrategy/vnpy_ctastrategy/strategies/mhi_trend_strategy.py`
+- `vnpy_ctastrategy/vnpy_ctastrategy/strategies/mhi_trend_strategy_safe.py`
+
+**修改内容**：
+```python
+# 修改前
+from vnpy_ctastrategy import BarGenerator
+self.bg = BarGenerator(self.on_bar, 5, self.on_5min_bar)
+
+# 修改后
+from vnpy.trader.constant import Interval, Exchange
+from vnpy.trader.utility import create_bar_generator
+
+symbol, exchange_str = vt_symbol.split(".")
+exchange = Exchange(exchange_str)
+
+self.bg = create_bar_generator(
+    on_bar=self.on_bar,
+    window=5,
+    on_window_bar=self.on_5min_bar,
+    interval=Interval.MINUTE_5,
+    exchange=exchange,
+    symbol=symbol
+)
+```
+
+### 实现细节
+
+#### 时间边界计算方法
+
+**5分钟K线**：
+```python
+def _get_hkfe_5minute_period(self, bar_dt: datetime) -> Optional[datetime]:
+    """获取5分钟周期起始时间"""
+    # 检查是否在交易时段
+    # 港期交易时段：09:15-12:00, 13:00-16:30, 17:15-03:00
+    # 计算5分钟K线的起始时间（在交易时段内）
+    period_start_minute = (minute // 5) * 5
+    return bar_dt.replace(minute=period_start_minute, second=0, microsecond=0)
+```
+
+**1小时K线**：
+```python
+def _get_hkfe_hour_period(self, bar_dt: datetime) -> Optional[datetime]:
+    """获取1小时周期起始时间（16个精确边界）"""
+    # 夜盘时段：17:15-18:14, 18:15-19:14, ...
+    # 日盘时段：09:30-10:29, 10:30-11:29, ...
+    # 特殊处理：02:15-09:29（跨休市），11:30-13:29（跨午休）
+```
+
+**4小时K线**：
+```python
+def _get_hkfe_4hour_period(self, bar_dt: datetime) -> Optional[datetime]:
+    """获取4小时周期起始时间（4个精确边界）"""
+    # 时段1: 17:15-21:14
+    # 时段2: 21:15-01:14
+    # 时段3: 01:15-03:00 + 09:15-11:29（跨休市）
+    # 时段4: 11:30-12:00 + 13:00-16:29（跨午休）
+```
+
+#### 周期判断逻辑
+
+```python
+def update_bar(self, bar: BarData) -> None:
+    """重写update_bar方法，使用HKFE精确逻辑"""
+    if not self.use_hkfe_logic:
+        # 非HKFE或非支持周期，使用标准逻辑
+        super().update_bar(bar)
+        return
+    
+    # 对于HKFE，使用精确时间边界逻辑
+    if self.interval == Interval.MINUTE_5:
+        self._update_bar_hkfe_5minute(bar)
+    elif self.interval == Interval.HOUR:
+        self._update_bar_hkfe_hour(bar)
+    elif self.interval == Interval.HOUR_4:
+        self._update_bar_hkfe_4hour(bar)
+```
+
+### 使用方式
+
+#### 方法1: 使用工厂函数（推荐）
+
+```python
+from vnpy.trader.constant import Exchange
+from vnpy.trader.utility import create_bar_generator
+
+bg = create_bar_generator(
+    on_bar=self.on_bar,
+    window=5,
+    on_window_bar=self.on_5min_bar,
+    exchange=Exchange.HKFE,
+    symbol="MHImain"
+)
+```
+
+#### 方法2: 直接使用HKFEBarGenerator
+
+```python
+from vnpy.trader.hkfe_bar_generator import HKFEBarGenerator
+
+bg = HKFEBarGenerator(
+    on_bar=self.on_bar,
+    window=5,
+    on_window_bar=self.on_5min_bar,
+    exchange=Exchange.HKFE,
+    symbol="MHImain"
+)
+```
+
+### 优势
+
+1. **完全兼容**: 继承自 `BarGenerator`，保持完全相同的接口
+2. **自动选择**: 通过工厂函数自动根据交易所选择合适的实现
+3. **精确边界**: 使用港期精确时间边界（17:15-18:14, 18:15-19:14, ...）
+4. **无缝替换**: 现有代码只需修改导入和创建代码，无需修改业务逻辑
+5. **降级处理**: 对于非HKFE交易所或非支持的周期，自动使用标准逻辑
+
+### 文件清单
+
+**新增文件**:
+- `vnpy/trader/hkfe_bar_generator.py`: HKFEBarGenerator 实现
+- `HKFEBarGenerator使用说明.md`: 使用说明文档
+- `BarGenerator时间边界分析.md`: 时间边界分析文档
+
+**修改文件**:
+- `vnpy/trader/utility.py`: 添加导出和工厂函数
+- `vnpy_ctastrategy/vnpy_ctastrategy/strategies/mhi_trend_strategy.py`: 使用HKFEBarGenerator
+- `vnpy_ctastrategy/vnpy_ctastrategy/strategies/mhi_trend_strategy_safe.py`: 使用HKFEBarGenerator
+
+### 验证
+
+- ✅ 代码语法检查通过
+- ✅ 导入语句正确
+- ✅ 逻辑保持兼容
+- ✅ MHImain 合约策略已更新使用 HKFEBarGenerator
+
+### 相关文档
+
+- **使用说明**: `HKFEBarGenerator使用说明.md`
+- **时间边界分析**: `BarGenerator时间边界分析.md`
+- **DataManager 1小时合成**: 见 "1小时K线精确时间边界合成" 章节
+
+现在 MHImain 合约的策略已使用 HKFEBarGenerator，5分钟和1小时K线合成遵循港期精确时间边界，确保与 DataManager 的数据一致性。
+
+---
+
+## 1小时K线完整实现总结 (2025-11-28)
+
+### 概述
+
+本次更新实现了完整的1小时K线精确时间边界合成体系，包括数据管理、图表显示、策略使用等多个层面的支持，确保港期1小时K线数据在整个系统中的一致性和准确性。
+
+### 核心改动
+
+#### 1. DataManager 1小时数据合成
+
+**文件**: `vnpy_datamanager/vnpy_datamanager/engine.py`
+
+**功能**:
+- 实现了 `aggregate_hour_bars()` 方法，从1分钟数据合成1小时K线
+- 使用16个精确时间边界（17:15-18:14, 18:15-19:14, ...）
+- 支持周末和金融假期的特殊处理
+- 在"更新数据"功能中自动合成1小时数据
+
+**文件**: `vnpy_datamanager/vnpy_datamanager/ui/widget.py`
+
+**功能**:
+- 下载对话框添加1小时选项，标注"需从1分钟数据合成"
+- 下载时显示确认对话框
+- "更新数据"时自动为有1分钟数据的合约合成1小时数据
+- 显示合成进度和结果
+
+#### 2. FUTU API 禁止直接下载
+
+**文件**: `vnpy_futu/vnpy_futu/datafeed.py`
+
+**改动**:
+- 移除 `Interval.HOUR: KLType.K_60M` 映射
+- 在 `query_bar_history()` 中添加检查，禁止直接下载1小时数据
+- 返回错误提示："富途数据服务不支持直接下载1h级别历史数据，请从1分钟数据合成"
+
+**文件**: `vnpy_futu/vnpy_futu/futu_gateway.py`
+
+**改动**:
+- 移除 `Interval.HOUR: KLType.K_60M` 映射
+- 在 `query_history()` 中添加检查，禁止直接下载1小时数据
+- 修复了 `interval=Interval.MINUTE` 硬编码bug（改为 `interval=req.interval`）
+
+#### 3. ChartWindow 自动补齐功能
+
+**文件**: `vnpy/trader/ui/widget.py`
+
+**功能**:
+- **从数据库加载**: 如果数据库没有1小时数据，自动调用DataManager合成
+- **从CSV加载**: 如果CSV数据与最新时间有gap，自动检测并补齐
+- **精确合成**: 使用DataManager的精确1小时时间边界逻辑
+- **降级处理**: 如果DataManager不可用，降级到通用合成方法
+
+**关键方法**:
+- `load_history_data()`: 检测1小时数据，自动触发合成
+- `_detect_and_fill_gap()`: 检测CSV数据gap，使用精确合成逻辑补齐
+
+#### 4. HKFEBarGenerator 实时合成
+
+**文件**: `vnpy/trader/hkfe_bar_generator.py`
+
+**功能**:
+- 继承自 `BarGenerator`，保持完全兼容的接口
+- 使用与DataManager相同的精确时间边界逻辑
+- 支持5分钟、1小时、4小时K线的实时合成
+- 自动降级到标准BarGenerator（非HKFE或非支持周期）
+
+**文件**: `vnpy/trader/utility.py`
+
+**功能**:
+- 添加 `create_bar_generator()` 工厂函数
+- 自动根据交易所选择合适的BarGenerator实现
+- 导出 `HKFEBarGenerator` 和 `create_bar_generator`
+
+#### 5. 策略文件更新
+
+**文件**: 
+- `vnpy_ctastrategy/vnpy_ctastrategy/strategies/mhi_trend_strategy.py`
+- `vnpy_ctastrategy/vnpy_ctastrategy/strategies/mhi_trend_strategy_safe.py`
+
+**改动**:
+- 将 `BarGenerator` 改为使用 `create_bar_generator()` 工厂函数
+- 从 `vt_symbol` 中提取交易所和合约代码
+- 5分钟和1小时K线合成使用HKFE精确时间边界
+
+### 完整数据流程
+
+```
+1分钟K线数据（数据库/实时）
+    ↓
+[DataManager] aggregate_hour_bars() - 批量合成
+    ↓
+1小时K线数据（数据库）
+    ↓
+[ChartWindow] load_history_data() - 加载显示
+    ↓
+[策略] HKFEBarGenerator - 实时合成
+    ↓
+1小时K线（策略使用）
+```
+
+### 时间边界一致性
+
+所有模块使用相同的精确时间边界规则：
+
+| 模块 | 方法/类 | 时间边界来源 |
+|------|--------|-------------|
+| DataManager | `_get_hkfe_hour_period()` | 16个精确边界 |
+| HKFEBarGenerator | `_get_hkfe_hour_period()` | 复制自DataManager |
+| ChartWindow | `_detect_and_fill_gap()` | 调用DataManager方法 |
+
+### 文件修改清单
+
+**新增文件**:
+- `vnpy/trader/hkfe_bar_generator.py`: HKFEBarGenerator实现
+- `HKFEBarGenerator使用说明.md`: 使用说明文档
+- `BarGenerator时间边界分析.md`: 时间边界分析文档
+
+**修改文件**:
+- `vnpy/trader/ui/widget.py`: ChartWindow 1小时数据自动补齐
+- `vnpy/trader/utility.py`: 添加HKFEBarGenerator导出和工厂函数
+- `vnpy_datamanager/vnpy_datamanager/engine.py`: 1小时数据合成功能
+- `vnpy_datamanager/vnpy_datamanager/ui/widget.py`: UI集成和进度显示
+- `vnpy_futu/vnpy_futu/datafeed.py`: 禁止直接下载1小时数据
+- `vnpy_futu/vnpy_futu/futu_gateway.py`: 禁止直接下载1小时数据，修复interval硬编码bug
+- `vnpy_ctastrategy/vnpy_ctastrategy/strategies/mhi_trend_strategy.py`: 使用HKFEBarGenerator
+- `vnpy_ctastrategy/vnpy_ctastrategy/strategies/mhi_trend_strategy_safe.py`: 使用HKFEBarGenerator
+- `CLAUDE.md`: 更新文档
+
+### 关键特性
+
+1. **禁止直接下载**: 所有直接调用FUTU API下载1小时数据的路径都被禁止
+2. **自动合成**: DataManager、ChartWindow、策略都支持自动合成1小时数据
+3. **精确边界**: 所有合成逻辑使用相同的16个精确时间边界
+4. **无缝集成**: HKFEBarGenerator保持完全兼容的接口，现有代码无需大改
+5. **降级处理**: 如果精确合成失败，自动降级到通用方法
+
+### 验证结果
+
+- ✅ DataManager可以合成1小时数据
+- ✅ ChartWindow可以自动补齐1小时数据（数据库和CSV）
+- ✅ 策略使用HKFEBarGenerator合成1小时K线
+- ✅ FUTU API禁止直接下载1小时数据
+- ✅ 所有模块使用相同的精确时间边界
+- ✅ 代码语法检查通过
+
+### 使用场景
+
+1. **数据管理**: 在DataManager中下载或更新数据时，自动合成1小时数据
+2. **图表显示**: 在ChartWindow中加载1小时数据时，自动补齐缺失部分
+3. **策略交易**: 策略中使用HKFEBarGenerator实时合成1小时K线
+4. **数据一致性**: 所有场景下的1小时K线都使用相同的精确时间边界
+
+### 相关文档
+
+- **HKFEBarGenerator使用说明**: `HKFEBarGenerator使用说明.md`
+- **时间边界分析**: `BarGenerator时间边界分析.md`
+- **1小时精确边界规则**: 见 "1小时K线精确时间边界合成" 章节
+
+本次更新实现了完整的1小时K线精确时间边界合成体系，确保在整个系统中（数据管理、图表显示、策略交易）都使用一致的精确时间边界规则。

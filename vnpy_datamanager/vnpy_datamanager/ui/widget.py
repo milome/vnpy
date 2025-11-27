@@ -495,6 +495,33 @@ class ManagerWidget(QtWidgets.QWidget):
                 total_bars += aggregate_5m_count
                 print(f"[UI调试] 5分钟数据合成完成，共 {aggregate_5m_count} 条")
 
+        # 自动合成1小时数据（从1分钟数据）
+        if symbols_5m:  # 使用相同的合约集合（有1分钟数据的合约）
+            dialog.setLabelText("正在合成1小时数据...")
+            QtWidgets.QApplication.processEvents()
+            print(f"[UI调试] 开始为 {len(symbols_5m)} 个合约合成1小时数据")
+            
+            aggregate_1h_count = 0
+            for symbol, exchange in symbols_5m:
+                if dialog.wasCanceled():
+                    break
+                dialog.setLabelText(f"正在合成1小时数据: {symbol}.{exchange.value}")
+                QtWidgets.QApplication.processEvents()
+                
+                try:
+                    count_1h = self.engine.aggregate_hour_bars(symbol, exchange)
+                    if count_1h > 0:
+                        aggregate_1h_count += count_1h
+                        print(f"[UI调试] {symbol}.{exchange.value} 合成1小时数据: {count_1h} 条")
+                except Exception as e:
+                    print(f"[UI调试] 合成1小时数据失败: {symbol}.{exchange.value}, 错误: {e}")
+                    import traceback
+                    traceback.print_exc()
+            
+            if aggregate_1h_count > 0:
+                total_bars += aggregate_1h_count
+                print(f"[UI调试] 1小时数据合成完成，共 {aggregate_1h_count} 条")
+
         # 自动合成4小时数据
         if symbols_to_aggregate:
             dialog.setLabelText("正在合成4小时数据...")
@@ -752,6 +779,8 @@ class DownloadWorker(QtCore.QThread):
                 )
                 if self.interval == Interval.MINUTE_5:
                     self.download_finished.emit(count, "5min")
+                elif self.interval == Interval.HOUR:
+                    self.download_finished.emit(count, "hour")
                 elif self.interval == Interval.HOUR_4:
                     self.download_finished.emit(count, "4hour")
                 else:
@@ -933,8 +962,10 @@ class DownloadDialog(QtWidgets.QDialog):
         self.interval_combo: QtWidgets.QComboBox = QtWidgets.QComboBox()
         for i in Interval:
             item_text = str(i.name)
-            # 如果是5分钟或4小时，添加提示说明需要从已有数据合成
+            # 如果是5分钟、1小时或4小时，添加提示说明需要从已有数据合成
             if i == Interval.MINUTE_5:
+                item_text += " (需从1分钟数据合成)"
+            elif i == Interval.HOUR:
                 item_text += " (需从1分钟数据合成)"
             elif i == Interval.HOUR_4:
                 item_text += " (需从已有数据合成)"
@@ -977,12 +1008,22 @@ class DownloadDialog(QtWidgets.QDialog):
         start: datetime = datetime(start_date.year(), start_date.month(), start_date.day())
         start = start.replace(tzinfo=DB_TZ)
 
-        # 如果是5分钟或4小时数据，提示用户这是从已有数据合成
+        # 如果是5分钟、1小时或4小时数据，提示用户这是从已有数据合成
         if interval == Interval.MINUTE_5:
             reply = QtWidgets.QMessageBox.question(
                 self,
                 "5分钟数据合成",
                 "5分钟数据将从已有的1分钟数据合成，而不是从数据源下载。\n\n是否继续？",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.Yes
+            )
+            if reply != QtWidgets.QMessageBox.Yes:
+                return
+        elif interval == Interval.HOUR:
+            reply = QtWidgets.QMessageBox.question(
+                self,
+                "1小时数据合成",
+                "1小时数据将从已有的1分钟数据合成，而不是从数据源下载。\n\n是否继续？",
                 QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
                 QtWidgets.QMessageBox.Yes
             )
@@ -1025,6 +1066,8 @@ class DownloadDialog(QtWidgets.QDialog):
             # 更新进度对话框为完成状态
             if result_type == "5min":
                 self.progress_dialog.stage_label.setText(f"合成完成！共 {count:,} 条5分钟K线")
+            elif result_type == "hour":
+                self.progress_dialog.stage_label.setText(f"合成完成！共 {count:,} 条1小时K线")
             elif result_type == "4hour":
                 self.progress_dialog.stage_label.setText(f"合成完成！共 {count:,} 条4小时K线")
             elif result_type == "tick":

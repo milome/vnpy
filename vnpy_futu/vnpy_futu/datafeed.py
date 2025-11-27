@@ -31,9 +31,10 @@ EXCHANGE_VT2FUTU = {
 }
 
 # K线周期映射
+# 注意：1小时数据禁止直接从富途API下载，必须从1分钟数据合成
 INTERVAL_VT2FUTU = {
     Interval.MINUTE: KLType.K_1M,
-    Interval.HOUR: KLType.K_60M,
+    # Interval.HOUR: KLType.K_60M,  # 禁止：1小时数据必须从1分钟数据合成
     Interval.DAILY: KLType.K_DAY,
     Interval.WEEKLY: KLType.K_WEEK
 }
@@ -133,7 +134,10 @@ class Datafeed(BaseDatafeed):
         # 检查是否支持该周期
         if req.interval not in INTERVAL_VT2FUTU:
             interval_value = str(req.interval.value)
-            msg = f"富途数据服务不支持 {interval_value} 级别的K线数据"
+            if req.interval == Interval.HOUR:
+                msg = f"富途数据服务不支持直接下载 {interval_value} 级别的K线数据，请从1分钟数据合成"
+            else:
+                msg = f"富途数据服务不支持 {interval_value} 级别的K线数据"
             safe_output(output, msg)
             return bars
 

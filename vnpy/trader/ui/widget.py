@@ -2651,18 +2651,8 @@ class ChartWindow(QtWidgets.QWidget):
                         end=end
                     )
                     
-                    # 尝试从gateway获取历史数据
-                    contract = self.main_engine.get_contract(vt_symbol)
-                    
-                    if contract:
-                        if contract.history_data:
-                            data = self.main_engine.query_history(req, contract.gateway_name)
-                        else:
-                            # 从数据源获取
-                            datafeed = get_datafeed()
-                            data = datafeed.query_bar_history(req)
-                    else:
-                        # 从数据库加载
+                    # 对于1小时数据，必须从数据库加载（禁止从gateway/datafeed直接下载）
+                    if interval_enum == Interval.HOUR:
                         database = get_database()
                         data = database.load_bar_data(
                             symbol,
@@ -2671,6 +2661,75 @@ class ChartWindow(QtWidgets.QWidget):
                             start,
                             end
                         )
+                        # 如果数据库中没有1小时数据，尝试从1分钟数据自动合成
+                        if not data:
+                            self.write_log(f"数据库中没有1小时数据，尝试从1分钟数据自动合成...")
+                            try:
+                                # 尝试获取DataManager引擎来合成1小时数据
+                                from vnpy_datamanager import APP_NAME
+                                from vnpy.trader.database import DB_TZ
+                                
+                                manager_engine = self.main_engine.get_engine(APP_NAME)
+                                if manager_engine:
+                                    # 转换时区到数据库时区（aggregate_hour_bars需要DB_TZ）
+                                    if start.tzinfo:
+                                        start_db = start.astimezone(DB_TZ)
+                                    else:
+                                        start_db = start.replace(tzinfo=DB_TZ)
+                                    
+                                    if end.tzinfo:
+                                        end_db = end.astimezone(DB_TZ)
+                                    else:
+                                        end_db = end.replace(tzinfo=DB_TZ)
+                                    
+                                    # 合成1小时数据（会保存到数据库）
+                                    count = manager_engine.aggregate_hour_bars(symbol, exchange, start_db, end_db)
+                                    if count > 0:
+                                        self.write_log(f"自动合成了 {count} 根1小时K线，正在加载...")
+                                        # 从数据库重新加载合成后的数据
+                                        data = database.load_bar_data(
+                                            symbol,
+                                            exchange,
+                                            interval_enum,
+                                            start,
+                                            end
+                                        )
+                                    else:
+                                        self.write_log(f"无法合成1小时数据：可能缺少1分钟基础数据，请先在DataManager中下载1分钟数据")
+                                else:
+                                    self.write_log(f"无法获取DataManager引擎，请确保DataManager模块已加载")
+                            except ImportError:
+                                self.write_log(f"无法导入DataManager模块，请确保DataManager已安装")
+                            except Exception as e:
+                                self.write_log(f"自动合成1小时数据失败: {e}")
+                                import traceback
+                                traceback.print_exc()
+                    else:
+                        # 尝试从gateway获取历史数据
+                        contract = self.main_engine.get_contract(vt_symbol)
+                        
+                        if contract:
+                            if contract.history_data:
+                                data = self.main_engine.query_history(req, contract.gateway_name)
+                            else:
+                                # 从数据源获取
+                                datafeed = get_datafeed()
+                                data = datafeed.query_bar_history(req)
+                        else:
+                            # 从数据库加载
+                            database = get_database()
+                            data = database.load_bar_data(
+                                symbol,
+                                exchange,
+                                interval_enum,
+                                start,
+                                end
+                            )
+                
+                # 对于1小时数据，如果从CSV加载，需要检测并补齐gap
+                if data and interval_enum == Interval.HOUR and data_source == self.DATA_SOURCE_CSV:
+                    # 检测并补齐gap
+                    data = self._detect_and_fill_gap(data, vt_symbol, interval_enum)
                 
                 # 发送历史数据更新信号
                 if data:
@@ -2896,10 +2955,64 @@ class ChartWindow(QtWidgets.QWidget):
                 result.sort(key=lambda x: x.datetime)
                 return result
             else:
-                # 大周期：从1分钟数据合成（使用统一的合成方法）
-                synthesized_bars = self._synthesize_bars_from_minute(
-                    minute_bars, interval, symbol, exchange
-                )
+                # 大周期：从1分钟数据合成
+                synthesized_bars = []
+                
+                # 对于1小时数据，使用DataManager的精确合成逻辑
+                if interval == Interval.HOUR:
+                    try:
+                        from vnpy_datamanager import APP_NAME
+                        from vnpy.trader.database import DB_TZ
+                        
+                        manager_engine = self.main_engine.get_engine(APP_NAME)
+                        if manager_engine:
+                            # 转换时区到数据库时区
+                            if gap_start.tzinfo:
+                                gap_start_db = gap_start.astimezone(DB_TZ)
+                            else:
+                                gap_start_db = gap_start.replace(tzinfo=DB_TZ)
+                            
+                            if gap_end.tzinfo:
+                                gap_end_db = gap_end.astimezone(DB_TZ)
+                            else:
+                                gap_end_db = gap_end.replace(tzinfo=DB_TZ)
+                            
+                            # 先保存1分钟数据到数据库（临时），然后合成1小时数据
+                            database = get_database()
+                            if minute_bars:
+                                # 临时保存1分钟数据用于合成
+                                database.save_bar_data(minute_bars)
+                                self.main_engine.write_log(f"[数据补齐] 临时保存了 {len(minute_bars)} 根1分钟K线用于合成1小时数据")
+                            
+                            # 使用DataManager的精确1小时合成逻辑
+                            count = manager_engine.aggregate_hour_bars(symbol, exchange, gap_start_db, gap_end_db)
+                            if count > 0:
+                                # 从数据库加载合成后的1小时数据
+                                synthesized_bars = database.load_bar_data(
+                                    symbol,
+                                    exchange,
+                                    Interval.HOUR,
+                                    gap_start,
+                                    gap_end
+                                )
+                                self.main_engine.write_log(f"[数据补齐] 使用DataManager精确合成逻辑，合成了 {len(synthesized_bars)} 根1小时K线")
+                        else:
+                            self.main_engine.write_log("[数据补齐] 无法获取DataManager引擎，使用通用合成方法")
+                            # 降级到通用合成方法
+                            synthesized_bars = self._synthesize_bars_from_minute(
+                                minute_bars, interval, symbol, exchange
+                            )
+                    except Exception as e:
+                        self.main_engine.write_log(f"[数据补齐] 使用DataManager合成1小时数据失败: {e}，降级到通用合成方法")
+                        # 降级到通用合成方法
+                        synthesized_bars = self._synthesize_bars_from_minute(
+                            minute_bars, interval, symbol, exchange
+                        )
+                else:
+                    # 其他大周期：使用统一的合成方法
+                    synthesized_bars = self._synthesize_bars_from_minute(
+                        minute_bars, interval, symbol, exchange
+                    )
                 
                 if synthesized_bars:
                     self.main_engine.write_log(f"[数据补齐] 从1分钟数据合成了 {len(synthesized_bars)} 根{interval_name}K线")
