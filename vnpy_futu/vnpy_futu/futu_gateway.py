@@ -2106,15 +2106,18 @@ class FutuGateway(BaseGateway):
 
         symbol: str = convert_symbol_vt2futu(req.symbol, req.exchange)
 
-        # 处理主力合约：MHImain需要转换为实际月份合约
+        # 处理主力合约历史数据查询
+        # 说明：查询历史数据时，直接使用主连代码（如HK.MHImain），不转换为当前实际合约
+        # 这样返回的是主连历史数据，自动包含各时段的主力合约数据，避免以下问题：
+        # - 当提前切换主力合约后（如当前是11月但主力已切换到12月合约MHI2512）
+        # - 如果转换为当前主力合约查询历史数据，会查到MHI2512在11月的数据
+        # - 但MHI2512在11月时还不活跃，成交量很少，不能真实反映当时的成交情况
+        # - 直接使用主连代码查询，富途会返回各时段真正的主力合约数据
         if req.symbol.endswith("main") and req.exchange == Exchange.HKFE:
-            actual_symbol = self._resolve_main_contract(req.symbol, symbol)
-            if actual_symbol:
-                self.write_log(f"查询历史数据：主力合约 {req.symbol} 转换为实际合约 {actual_symbol}")
-                symbol = actual_symbol
-            else:
-                self.write_log(f"警告：无法解析主力合约 {req.symbol}，历史数据查询可能失败")
-                return bars
+            # 尝试使用HK.MHImain格式（富途API对主连合约可能使用此格式）
+            main_symbol_hk = f"HK.{req.symbol}"
+            self.write_log(f"查询历史数据：使用主连代码 {main_symbol_hk}（包含各时段主力合约数据）")
+            symbol = main_symbol_hk
 
         start_date: str = req.start.replace(tzinfo=None).strftime("%Y-%m-%d")
         end_date: str = req.end.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")

@@ -3925,3 +3925,60 @@ def _notify_chase_timeout_failure(self, chase_order: ChaseOrder, elapsed_seconds
   - `_get_tick_for_chase()` 方法：修复 `HK_FUTURE.` vs `HK.` 格式问题
   - `_handle_main_contract_switch()` 方法：修复 tick 数据复制的格式问题
   - `_notify_chase_timeout_failure()` 方法：新增超时失败通知
+
+---
+
+## 主力合约历史数据查询优化 (2025-11)
+
+### 问题背景
+
+当提前切换主力合约后（如当前是11月但主力已切换到12月合约MHI2512），查询历史数据时存在以下问题：
+
+- 原实现会将 MHImain 转换为**当前**的实际主力合约（如 MHI2512）
+- 查询11月的历史数据时，会查到 MHI2512 在11月的数据
+- 但 MHI2512 在11月时还不是主力，成交量很少，不能真实反映当时的成交情况
+
+### 解决方案
+
+**优先使用主连代码直接查询历史数据**：
+
+- 查询历史数据时，不再将 MHImain 转换为当前实际合约
+- 直接使用主连代码 `HK.MHImain` 查询
+- 富途 API 会返回各时段真正的主力合约拼接数据
+
+### 代码修改
+
+**文件**: `vnpy_futu/vnpy_futu/futu_gateway.py` - `query_bar_history()` 方法
+
+**修改前**:
+```python
+# 处理主力合约：MHImain需要转换为实际月份合约
+if req.symbol.endswith("main") and req.exchange == Exchange.HKFE:
+    actual_symbol = self._resolve_main_contract(req.symbol, symbol)
+    if actual_symbol:
+        symbol = actual_symbol  # 转换为当前主力合约（如MHI2512）
+```
+
+**修改后**:
+```python
+# 处理主力合约历史数据查询
+# 直接使用主连代码，不转换为当前实际合约
+if req.symbol.endswith("main") and req.exchange == Exchange.HKFE:
+    main_symbol_hk = f"HK.{req.symbol}"  # HK.MHImain
+    symbol = main_symbol_hk  # 使用主连代码查询
+```
+
+### 效果对比
+
+| 场景 | 修改前 | 修改后 |
+|------|--------|--------|
+| 查询历史数据 | 转换为当前主力（MHI2512） | 使用主连代码（HK.MHImain） |
+| 返回数据 | 只有当前主力合约的数据 | 各时段真正主力合约的拼接数据 |
+| 提前切换后查询 | 新主力不活跃，数据不准 | 正确反映历史成交情况 |
+| 下单逻辑 | 不受影响（仍转换为实际合约） | 不受影响 |
+
+### 使用场景
+
+适用于以下需求：
+1. 当前日期与主力合约月份一致时：正常查询当前主力合约数据
+2. 当前日期早于主力合约月份时：查询的是历史上各时段真正主力合约的数据
