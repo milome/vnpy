@@ -709,6 +709,207 @@ class ImportDialog(QtWidgets.QDialog):
             self.file_edit.setText(filename)
 
 
+class DownloadWorker(QtCore.QThread):
+    """下载数据的工作线程"""
+    
+    # 信号定义
+    progress_updated = QtCore.Signal(str, int, int)  # 阶段描述, 当前值, 最大值
+    download_finished = QtCore.Signal(int, str)  # 下载数量, 结果消息
+    error_occurred = QtCore.Signal(str)  # 错误消息
+    
+    def __init__(
+        self,
+        engine,
+        symbol: str,
+        exchange: Exchange,
+        interval: Interval,
+        start_dt: datetime,
+        parent=None
+    ):
+        super().__init__(parent)
+        self.engine = engine
+        self.symbol = symbol
+        self.exchange = exchange
+        self.interval = interval
+        self.start_dt = start_dt  # 避免与 QThread.start() 方法冲突
+        self._is_cancelled = False
+    
+    def cancel(self):
+        """取消下载"""
+        self._is_cancelled = True
+    
+    def run(self):
+        """执行下载任务"""
+        try:
+            if self.interval == Interval.TICK:
+                count = self.engine.download_tick_data(
+                    self.symbol, self.exchange, self.start_dt, self.output_callback
+                )
+                self.download_finished.emit(count, "tick")
+            else:
+                count = self.engine.download_bar_data(
+                    self.symbol, self.exchange, self.interval, self.start_dt, self.output_callback
+                )
+                if self.interval == Interval.MINUTE_5:
+                    self.download_finished.emit(count, "5min")
+                elif self.interval == Interval.HOUR_4:
+                    self.download_finished.emit(count, "4hour")
+                else:
+                    self.download_finished.emit(count, "bar")
+        except Exception as e:
+            self.error_occurred.emit(str(e))
+    
+    def output_callback(self, msg: str):
+        """处理下载过程中的输出消息"""
+        import re
+        
+        # 解析进度信息
+        if "第" in msg and "页获取成功" in msg:
+            # 解析页码和数据量（富途分页下载）
+            try:
+                match = re.search(r"累计 (\d+) 条", msg)
+                if match:
+                    current = int(match.group(1))
+                    self.progress_updated.emit(f"正在下载K线数据...", current, 0)
+            except:
+                pass
+        elif "K线数据获取完成" in msg or "数据获取完成" in msg:
+            try:
+                match = re.search(r"共 (\d+) 条", msg)
+                if match:
+                    total = int(match.group(1))
+                    self.progress_updated.emit(f"K线数据获取完成，共 {total:,} 条", total, total)
+            except:
+                self.progress_updated.emit(msg, 0, 0)
+        elif "正在转换为BarData" in msg or "正在转换" in msg:
+            self.progress_updated.emit("正在转换数据格式...", 0, 0)
+        elif "开始保存" in msg:
+            try:
+                match = re.search(r"保存 (\d+) 条", msg)
+                if match:
+                    total = int(match.group(1))
+                    self.progress_updated.emit(f"正在保存 {total:,} 条数据到数据库...", 0, 0)
+            except:
+                self.progress_updated.emit("正在保存数据到数据库...", 0, 0)
+        elif "数据保存完成" in msg:
+            try:
+                match = re.search(r"共 (\d+) 条", msg)
+                if match:
+                    total = int(match.group(1))
+                    self.progress_updated.emit(f"数据保存完成！共 {total:,} 条", total, total)
+                else:
+                    self.progress_updated.emit("数据保存完成！", 100, 100)
+            except:
+                self.progress_updated.emit("数据保存完成！", 100, 100)
+        elif "正在从网关" in msg or "正在从数据源" in msg:
+            self.progress_updated.emit(msg, 0, 0)
+        elif "开始合成" in msg:
+            self.progress_updated.emit(msg, 0, 0)
+        elif "合成完成" in msg:
+            try:
+                match = re.search(r"共 (\d+) 条", msg)
+                if match:
+                    total = int(match.group(1))
+                    self.progress_updated.emit(f"合成完成，共 {total:,} 条K线", total, total)
+                else:
+                    self.progress_updated.emit(msg, 100, 100)
+            except:
+                self.progress_updated.emit(msg, 100, 100)
+        elif "没有查询到数据" in msg:
+            self.progress_updated.emit("没有查询到数据", 0, 0)
+        else:
+            # 其他消息直接显示
+            self.progress_updated.emit(msg, 0, 0)
+
+
+class DownloadProgressDialog(QtWidgets.QDialog):
+    """下载进度对话框"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("下载进度")
+        self.setFixedSize(450, 180)
+        self.setWindowModality(QtCore.Qt.WindowModal)
+        
+        # 禁用关闭按钮（下载完成前不允许关闭）
+        self.setWindowFlags(
+            self.windowFlags() & ~QtCore.Qt.WindowCloseButtonHint
+        )
+        
+        # 阶段标签
+        self.stage_label = QtWidgets.QLabel("准备下载...")
+        self.stage_label.setStyleSheet("font-size: 12px; font-weight: bold;")
+        
+        # 进度条
+        self.progress_bar = QtWidgets.QProgressBar()
+        self.progress_bar.setRange(0, 0)  # 初始为不确定模式
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFormat("%v 条")
+        
+        # 详情标签
+        self.detail_label = QtWidgets.QLabel("")
+        self.detail_label.setStyleSheet("color: gray; font-size: 11px;")
+        
+        # 返回按钮（初始禁用）
+        self.return_button = QtWidgets.QPushButton("返回")
+        self.return_button.setFixedWidth(80)
+        self.return_button.setEnabled(False)  # 初始禁用
+        self.return_button.clicked.connect(self.accept)
+        
+        # 布局
+        layout = QtWidgets.QVBoxLayout()
+        layout.addWidget(self.stage_label)
+        layout.addWidget(self.progress_bar)
+        layout.addWidget(self.detail_label)
+        layout.addStretch()
+        
+        button_layout = QtWidgets.QHBoxLayout()
+        button_layout.addStretch()
+        button_layout.addWidget(self.return_button)
+        layout.addLayout(button_layout)
+        
+        self.setLayout(layout)
+    
+    def enable_return(self):
+        """启用返回按钮（下载完成后调用）"""
+        self.return_button.setEnabled(True)
+        self.return_button.setFocus()
+    
+    def update_progress(self, stage: str, current: int, maximum: int):
+        """更新进度"""
+        self.stage_label.setText(stage)
+        
+        if maximum > 0:
+            self.progress_bar.setRange(0, maximum)
+            self.progress_bar.setValue(current)
+            self.progress_bar.setFormat(f"%v / {maximum:,} 条")
+        else:
+            if current > 0:
+                self.progress_bar.setRange(0, 0)  # 不确定模式
+                self.detail_label.setText(f"已获取 {current:,} 条数据")
+            else:
+                self.progress_bar.setRange(0, 0)
+                self.detail_label.setText("")
+    
+    def set_completed(self, total: int):
+        """设置为完成状态"""
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(100)
+        self.progress_bar.setFormat("完成")
+        self.stage_label.setText(f"下载完成！共 {total:,} 条数据")
+        self.detail_label.setText("")
+        self.enable_return()
+    
+    def set_error(self, error_msg: str):
+        """设置为错误状态"""
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.stage_label.setText("下载失败")
+        self.detail_label.setText(error_msg)
+        self.detail_label.setStyleSheet("color: red; font-size: 11px;")
+        self.enable_return()
+
+
 class DownloadDialog(QtWidgets.QDialog):
     """"""
 
@@ -717,6 +918,8 @@ class DownloadDialog(QtWidgets.QDialog):
         super().__init__()
 
         self.engine: ManagerEngine = engine
+        self.worker: DownloadWorker | None = None
+        self.progress_dialog: DownloadProgressDialog | None = None
 
         self.setWindowTitle("下载历史数据")
         self.setFixedWidth(300)
@@ -763,6 +966,10 @@ class DownloadDialog(QtWidgets.QDialog):
     def download(self) -> None:
         """"""
         symbol: str = self.symbol_edit.text()
+        if not symbol:
+            QtWidgets.QMessageBox.warning(self, "提示", "请输入合约代码")
+            return
+            
         exchange: Exchange = Exchange(self.exchange_combo.currentData())
         interval: Interval = Interval(self.interval_combo.currentData())
 
@@ -785,31 +992,53 @@ class DownloadDialog(QtWidgets.QDialog):
             reply = QtWidgets.QMessageBox.question(
                 self,
                 "4小时数据合成",
-                "4小时数据将从已有的1分钟或1小时数据合成，而不是从数据源下载。\n\n是否继续？",
+                "4小时数据将从已有的1分钟数据合成，而不是从数据源下载。\n\n是否继续？",
                 QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
                 QtWidgets.QMessageBox.Yes
             )
             if reply != QtWidgets.QMessageBox.Yes:
                 return
 
-        if interval == Interval.TICK:
-            count: int = self.engine.download_tick_data(symbol, exchange, start, self.output)
-        else:
-            count = self.engine.download_bar_data(symbol, exchange, interval, start, self.output)
-
-        if interval == Interval.MINUTE_5:
-            QtWidgets.QMessageBox.information(self, "合成结束", f"从已有数据合成5分钟K线，总数据量：{count}条")
-        elif interval == Interval.HOUR_4:
-            QtWidgets.QMessageBox.information(self, "合成结束", f"从已有数据合成4小时K线，总数据量：{count}条")
-        else:
-            QtWidgets.QMessageBox.information(self, "下载结束", f"下载总数据量：{count}条")
+        # 创建进度对话框
+        self.progress_dialog = DownloadProgressDialog(self)
+        
+        # 创建工作线程
+        self.worker = DownloadWorker(
+            self.engine, symbol, exchange, interval, start, self
+        )
+        self.worker.progress_updated.connect(self.on_progress_updated)
+        self.worker.download_finished.connect(self.on_download_finished)
+        self.worker.error_occurred.connect(self.on_error_occurred)
+        
+        # 启动下载
+        self.worker.start()
+        self.progress_dialog.exec_()
+    
+    def on_progress_updated(self, stage: str, current: int, maximum: int):
+        """进度更新回调"""
+        if self.progress_dialog:
+            self.progress_dialog.update_progress(stage, current, maximum)
+    
+    def on_download_finished(self, count: int, result_type: str):
+        """下载完成回调"""
+        if self.progress_dialog:
+            # 更新进度对话框为完成状态
+            if result_type == "5min":
+                self.progress_dialog.stage_label.setText(f"合成完成！共 {count:,} 条5分钟K线")
+            elif result_type == "4hour":
+                self.progress_dialog.stage_label.setText(f"合成完成！共 {count:,} 条4小时K线")
+            elif result_type == "tick":
+                self.progress_dialog.stage_label.setText(f"下载完成！共 {count:,} 条Tick数据")
+            else:
+                self.progress_dialog.stage_label.setText(f"下载完成！共 {count:,} 条K线数据")
+            
+            self.progress_dialog.set_completed(count)
+    
+    def on_error_occurred(self, error_msg: str):
+        """错误处理回调"""
+        if self.progress_dialog:
+            self.progress_dialog.set_error(error_msg)
 
     def output(self, msg: str) -> None:
-        """输出下载过程中的日志"""
-        QtWidgets.QMessageBox.warning(
-            self,
-            "数据下载",
-            msg,
-            QtWidgets.QMessageBox.Ok,
-            QtWidgets.QMessageBox.Ok,
-        )
+        """输出下载过程中的日志（保留兼容性）"""
+        print(f"[下载日志] {msg}")

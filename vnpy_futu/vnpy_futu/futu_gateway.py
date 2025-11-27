@@ -2129,10 +2129,12 @@ class FutuGateway(BaseGateway):
             ktype=futu_ktype
         )
         if ret != RET_OK:
-            self.write_log(f"获取K线数据失败，原因：{history_df}")
+            # 转义花括号避免loguru格式化错误
+            error_msg = str(history_df).replace("{", "{{").replace("}", "}}")
+            self.write_log(f"获取K线数据失败，原因：{error_msg}")
             return bars
 
-        self.write_log(f"首次查询成功，获取 {len(history_df)} 条数据，page_req_key={page_req_key}")
+        self.write_log(f"首次查询成功，获取 {len(history_df)} 条数据，还有更多页待获取")
 
         page_count = 1
         while page_req_key != None:  # 请求后面的所有结果
@@ -2146,10 +2148,13 @@ class FutuGateway(BaseGateway):
             )   # 请求翻页后的数据
             if ret == RET_OK:
                 history_df = pd.concat([history_df, data], ignore_index=True)
-                self.write_log(f"第 {page_count + 1} 页获取成功，新增 {len(data)} 条，累计 {len(history_df)} 条，page_req_key={page_req_key}")
+                has_more = "是" if page_req_key else "否"
+                self.write_log(f"第 {page_count + 1} 页获取成功，新增 {len(data)} 条，累计 {len(history_df)} 条，还有更多: {has_more}")
                 page_count += 1
             else:
-                self.write_log(f"第 {page_count + 1} 页获取失败：{data}")
+                # 转义花括号避免loguru格式化错误
+                error_msg = str(data).replace("{", "{{").replace("}", "}}")
+                self.write_log(f"第 {page_count + 1} 页获取失败：{error_msg}")
                 break
 
         self.write_log(f"K线数据获取完成，共 {len(history_df)} 条，正在转换为BarData...")
