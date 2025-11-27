@@ -5094,3 +5094,106 @@ bg = HKFEBarGenerator(
 - **1小时精确边界规则**: 见 "1小时K线精确时间边界合成" 章节
 
 本次更新实现了完整的1小时K线精确时间边界合成体系，确保在整个系统中（数据管理、图表显示、策略交易）都使用一致的精确时间边界规则。
+
+---
+
+## Git历史大文件清理 (2025-11-28)
+
+### 问题
+
+推送代码到GitHub时遇到错误，以下文件超过GitHub的100MB限制：
+- `generated_rice1_strategy.py` (151.88 MB)
+- `multi-timeframe-webapp/data/1min_MHImain_HKFE.csv` (149.51 MB)
+- `test_full_rice1_result.txt` (151.82 MB)
+
+### 解决方案
+
+#### 1. 从当前提交中移除
+
+已完成：
+```bash
+git rm --cached generated_rice1_strategy.py
+git rm --cached test_full_rice1_result.txt
+git rm --cached "multi-timeframe-webapp/data/1min_MHImain_HKFE.csv"
+git rm --cached "multi-timeframe-webapp/frontend/public/data/1min_MHImain_HKFE.csv"
+git add .gitignore
+git commit -m "chore: 移除超过GitHub限制的大文件"
+```
+
+#### 2. 清理Git历史（必需）
+
+⚠️ **重要**: 仅从当前提交删除还不够，这些文件仍在Git历史中，需要清理历史记录。
+
+**方法1: 使用 git filter-repo（推荐，更快）**
+
+```bash
+# 安装git filter-repo
+pip install git-filter-repo
+
+# 删除历史中的大文件
+git filter-repo --path generated_rice1_strategy.py --invert-paths
+git filter-repo --path test_full_rice1_result.txt --invert-paths
+git filter-repo --path "multi-timeframe-webapp/data/1min_MHImain_HKFE.csv" --invert-paths
+git filter-repo --path "multi-timeframe-webapp/frontend/public/data/1min_MHImain_HKFE.csv" --invert-paths
+
+# 清理和压缩
+git reflog expire --expire=now --all
+git gc --prune=now --aggressive
+
+# 强制推送
+git push origin --force --all
+git push origin --force --tags
+```
+
+**方法2: 使用 git filter-branch（无需额外安装）**
+
+```bash
+# 从所有提交中移除大文件
+git filter-branch --force --index-filter ^
+  "git rm --cached --ignore-unmatch generated_rice1_strategy.py test_full_rice1_result.txt 'multi-timeframe-webapp/data/1min_MHImain_HKFE.csv' 'multi-timeframe-webapp/frontend/public/data/1min_MHImain_HKFE.csv'" ^
+  --prune-empty --tag-name-filter cat -- --all
+
+# 清理引用
+git for-each-ref --format="%(refname)" refs/original/ | xargs -n 1 git update-ref -d
+
+# 清理reflog
+git reflog expire --expire=now --all
+
+# 垃圾回收
+git gc --prune=now --aggressive
+
+# 强制推送
+git push origin --force --all
+git push origin --force --tags
+```
+
+#### 3. 更新.gitignore
+
+已添加以下规则防止将来再次提交：
+```
+generated_rice1_strategy.py
+test_full_rice1_result.txt
+multi-timeframe-webapp/data/*.csv
+multi-timeframe-webapp/frontend/public/data/*.csv
+```
+
+### 注意事项
+
+⚠️ **重要警告**:
+1. **重写历史**: 这些操作会重写Git历史，所有提交的SHA都会改变
+2. **团队协调**: 所有团队成员需要重新克隆仓库，不能使用 `git pull`
+3. **备份**: 建议先备份仓库或创建新分支
+4. **强制推送**: 清理后必须使用 `--force` 推送
+
+### 验证
+
+清理后检查仓库大小：
+```bash
+git count-objects -vH
+```
+
+### 相关文件
+
+- `clean_git_history.bat`: 使用git filter-branch的批处理脚本
+- `clean_git_history_simple.bat`: 使用git filter-repo的批处理脚本
+- `remove_large_files.md`: 详细的清理说明文档

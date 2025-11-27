@@ -1,16 +1,18 @@
 @echo off
 chcp 65001 >nul
-REM 清理Git历史中的大文件
-REM 使用git filter-branch（Git自带，无需额外安装）
+REM Clean large files from Git history
+REM Warning: This will rewrite Git history, team coordination required
+
+set FILTER_BRANCH_SQUELCH_WARNING=1
 
 echo ========================================
-echo 清理Git历史中的大文件
+echo Clean Large Files from Git History
 echo ========================================
 echo.
-echo 警告：此操作会重写Git历史！
-echo 所有团队成员需要重新克隆仓库。
+echo WARNING: This will rewrite Git history!
+echo All team members need to re-clone the repository.
 echo.
-echo 将删除以下文件的历史记录：
+echo Files to be removed from history:
 echo   - generated_rice1_strategy.py
 echo   - test_full_rice1_result.txt
 echo   - multi-timeframe-webapp/data/1min_MHImain_HKFE.csv
