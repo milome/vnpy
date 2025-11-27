@@ -40,3 +40,9 @@ _templates
 
 # Alpha
 lab/
+
+# Large files (exceed GitHub 100MB limit)
+generated_rice1_strategy.py
+test_full_rice1_result.txt
+multi-timeframe-webapp/data/*.csv
+multi-timeframe-webapp/frontend/public/data/*.csv
