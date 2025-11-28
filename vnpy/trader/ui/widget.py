@@ -2027,6 +2027,9 @@ class ChartWindow(QtWidgets.QWidget):
         # 历史数据缓存（用于滚动条）
         self.history_data: list = []
         
+        # 1分钟K线缓存（用于快速查找开盘价）
+        self._minute_bars_cache: dict = {}  # key: datetime, value: BarData
+        
         # 当前未完成的K线（用于大周期实时更新）
         self._current_bar: "BarData" = None
         self._current_bar_period: "datetime" = None
@@ -2401,8 +2404,31 @@ class ChartWindow(QtWidgets.QWidget):
         self.time_end_label.setText("")
         
         # 创建新的K线生成器
-        from vnpy.trader.utility import BarGenerator
-        self.bg = BarGenerator(self.on_bar)
+        # 对于HKFE交易所，使用HKFEBarGenerator以确保时间边界正确
+        from vnpy.trader.utility import BarGenerator, extract_vt_symbol
+        from vnpy.trader.constant import Exchange, Interval
+        from vnpy.trader.hkfe_bar_generator import create_bar_generator
+        
+        # 检查是否为HKFE交易所
+        try:
+            symbol, exchange = extract_vt_symbol(vt_symbol)
+            if exchange == Exchange.HKFE:
+                # 使用HKFEBarGenerator（仅用于1分钟K线合成）
+                self.bg = create_bar_generator(
+                    self.on_bar,
+                    window=0,
+                    on_window_bar=None,
+                    interval=Interval.MINUTE,
+                    daily_end=None,
+                    exchange=exchange,
+                    symbol=symbol
+                )
+            else:
+                # 其他交易所使用标准BarGenerator
+                self.bg = BarGenerator(self.on_bar)
+        except:
+            # 如果提取失败，使用标准BarGenerator
+            self.bg = BarGenerator(self.on_bar)
         
         # 更新窗口标题（显示合约和周期）
         interval_name = self.interval_combo.currentText()
@@ -2642,36 +2668,29 @@ class ChartWindow(QtWidgets.QWidget):
                     # 从CSV文件加载
                     data = self._load_from_csv(csv_path, symbol, exchange, interval_enum, start, end)
                 else:
-                    # 从数据库或网关加载
-                    req: HistoryRequest = HistoryRequest(
-                        symbol=symbol,
-                        exchange=exchange,
-                        interval=interval_enum,
-                        start=start,
-                        end=end
+                    # 从数据库加载（用户选择了"从数据库加载"）
+                    database = get_database()
+                    data = database.load_bar_data(
+                        symbol,
+                        exchange,
+                        interval_enum,
+                        start,
+                        end
                     )
                     
-                    # 对于1小时数据，必须从数据库加载（禁止从gateway/datafeed直接下载）
-                    if interval_enum == Interval.HOUR:
-                        database = get_database()
-                        data = database.load_bar_data(
-                            symbol,
-                            exchange,
-                            interval_enum,
-                            start,
-                            end
-                        )
-                        # 如果数据库中没有1小时数据，尝试从1分钟数据自动合成
-                        if not data:
-                            self.write_log(f"数据库中没有1小时数据，尝试从1分钟数据自动合成...")
+                    # 如果数据库中没有数据，根据周期类型进行处理
+                    if not data:
+                        # 对于1小时和4小时数据，尝试从1分钟数据自动合成
+                        if interval_enum in [Interval.HOUR, Interval.HOUR_4]:
+                            self.write_log(f"数据库中没有{interval_enum.value}数据，尝试从1分钟数据自动合成...")
                             try:
-                                # 尝试获取DataManager引擎来合成1小时数据
+                                # 尝试获取DataManager引擎来合成数据
                                 from vnpy_datamanager import APP_NAME
                                 from vnpy.trader.database import DB_TZ
                                 
                                 manager_engine = self.main_engine.get_engine(APP_NAME)
                                 if manager_engine:
-                                    # 转换时区到数据库时区（aggregate_hour_bars需要DB_TZ）
+                                    # 转换时区到数据库时区
                                     if start.tzinfo:
                                         start_db = start.astimezone(DB_TZ)
                                     else:
@@ -2682,10 +2701,16 @@ class ChartWindow(QtWidgets.QWidget):
                                     else:
                                         end_db = end.replace(tzinfo=DB_TZ)
                                     
-                                    # 合成1小时数据（会保存到数据库）
-                                    count = manager_engine.aggregate_hour_bars(symbol, exchange, start_db, end_db)
+                                    # 合成数据（会保存到数据库）
+                                    if interval_enum == Interval.HOUR:
+                                        count = manager_engine.aggregate_hour_bars(symbol, exchange, start_db, end_db)
+                                    elif interval_enum == Interval.HOUR_4:
+                                        count = manager_engine.aggregate_4hour_bars(symbol, exchange, start_db, end_db)
+                                    else:
+                                        count = 0
+                                    
                                     if count > 0:
-                                        self.write_log(f"自动合成了 {count} 根1小时K线，正在加载...")
+                                        self.write_log(f"自动合成了 {count} 根{interval_enum.value}K线，正在加载...")
                                         # 从数据库重新加载合成后的数据
                                         data = database.load_bar_data(
                                             symbol,
@@ -2695,36 +2720,18 @@ class ChartWindow(QtWidgets.QWidget):
                                             end
                                         )
                                     else:
-                                        self.write_log(f"无法合成1小时数据：可能缺少1分钟基础数据，请先在DataManager中下载1分钟数据")
+                                        self.write_log(f"无法合成{interval_enum.value}数据：可能缺少1分钟基础数据，请先在DataManager中下载1分钟数据")
                                 else:
                                     self.write_log(f"无法获取DataManager引擎，请确保DataManager模块已加载")
                             except ImportError:
                                 self.write_log(f"无法导入DataManager模块，请确保DataManager已安装")
                             except Exception as e:
-                                self.write_log(f"自动合成1小时数据失败: {e}")
+                                self.write_log(f"自动合成{interval_enum.value}数据失败: {e}")
                                 import traceback
                                 traceback.print_exc()
-                    else:
-                        # 尝试从gateway获取历史数据
-                        contract = self.main_engine.get_contract(vt_symbol)
-                        
-                        if contract:
-                            if contract.history_data:
-                                data = self.main_engine.query_history(req, contract.gateway_name)
-                            else:
-                                # 从数据源获取
-                                datafeed = get_datafeed()
-                                data = datafeed.query_bar_history(req)
                         else:
-                            # 从数据库加载
-                            database = get_database()
-                            data = database.load_bar_data(
-                                symbol,
-                                exchange,
-                                interval_enum,
-                                start,
-                                end
-                            )
+                            # 对于其他周期，如果数据库中没有数据，提示用户
+                            self.write_log(f"数据库中没有{interval_enum.value}数据，请先在DataManager中下载数据")
                 
                 # 对于1小时数据，如果从CSV加载，需要检测并补齐gap
                 if data and interval_enum == Interval.HOUR and data_source == self.DATA_SOURCE_CSV:
@@ -3327,18 +3334,30 @@ class ChartWindow(QtWidgets.QWidget):
         """
         根据周期获取K线的起始时间
         
-        4小时K线按照HKFE交易时段边界：
-        1. 17:15-21:14：第一根4小时K线（时间戳：17:15）
-        2. 21:15-01:14：第二根4小时K线（时间戳：21:15）
-        3. 01:15-03:00 + 09:15-11:29：第三根4小时K线（时间戳：01:15）
-        4. 11:30-12:00 + 13:00-16:29：第四根4小时K线（时间戳：11:30）
+        对于HKFE交易所：
+        - 1小时K线按照港期交易时段边界（17:15-18:14, 18:15-19:14, ...）
+        - 4小时K线按照HKFE交易时段边界：
+          1. 17:15-21:14：第一根4小时K线（时间戳：17:15）
+          2. 21:15-01:14：第二根4小时K线（时间戳：21:15）
+          3. 01:15-03:00 + 09:15-11:29：第三根4小时K线（时间戳：01:15）
+          4. 11:30-12:00 + 13:00-16:29：第四根4小时K线（时间戳：11:30）
         
         特殊情况：
         - 周末：周五夜盘01:15开始的周期，延续到周一11:29结束
         - 金融假期：假期前01:15开始的周期，延续到假期后第一个交易日11:29结束
         """
         from datetime import timedelta
-        from vnpy.trader.constant import Interval
+        from vnpy.trader.constant import Interval, Exchange
+        from vnpy.trader.utility import extract_vt_symbol
+        
+        # 获取当前合约的交易所信息
+        is_hkfe = False
+        if self.current_vt_symbol:
+            try:
+                _, exchange = extract_vt_symbol(self.current_vt_symbol)
+                is_hkfe = (exchange == Exchange.HKFE)
+            except:
+                pass
         
         hour = dt.hour
         minute = dt.minute
@@ -3350,46 +3369,57 @@ class ChartWindow(QtWidgets.QWidget):
             return dt.replace(minute=aligned_minute, second=0, microsecond=0)
         
         elif interval == Interval.HOUR:
-            # 1小时周期：按小时对齐
-            return dt.replace(minute=0, second=0, microsecond=0)
+            # 1小时周期
+            if is_hkfe:
+                # HKFE交易所：使用精确时间边界
+                return self._get_hkfe_hour_period_start(dt)
+            else:
+                # 其他交易所：按小时对齐
+                return dt.replace(minute=0, second=0, microsecond=0)
         
         elif interval == Interval.HOUR_4:
-            # 4小时周期：按HKFE交易时段边界
-            if 1715 <= time_value <= 2114:
-                # 时段1: 17:15-21:14
-                return dt.replace(hour=17, minute=15, second=0, microsecond=0)
-            
-            elif 2115 <= time_value <= 2359:
-                # 时段2前半: 21:15-23:59
-                return dt.replace(hour=21, minute=15, second=0, microsecond=0)
-            
-            elif 0 <= time_value <= 114:
-                # 时段2后半: 00:00-01:14（属于前一天21:15开始的周期）
-                return (dt - timedelta(days=1)).replace(hour=21, minute=15, second=0, microsecond=0)
-            
-            elif 115 <= time_value <= 300:
-                # 时段3前半: 01:15-03:00
-                return dt.replace(hour=1, minute=15, second=0, microsecond=0)
-            
-            elif 915 <= time_value <= 1129:
-                # 时段3后半: 09:15-11:29
-                # 需要判断是否跨越周末或金融假期
-                # 如果是周一（weekday=0），回溯到上周六的01:15
-                weekday = dt.weekday()
-                if weekday == 0:  # 周一
-                    # 回溯到上周六（2天前）的01:15
-                    return (dt - timedelta(days=2)).replace(hour=1, minute=15, second=0, microsecond=0)
-                else:
-                    # 非周一，使用当天的01:15
+            # 4小时周期
+            if is_hkfe:
+                # HKFE交易所：使用精确时间边界
+                if 1715 <= time_value <= 2114:
+                    # 时段1: 17:15-21:14
+                    return dt.replace(hour=17, minute=15, second=0, microsecond=0)
+                
+                elif 2115 <= time_value <= 2359:
+                    # 时段2前半: 21:15-23:59
+                    return dt.replace(hour=21, minute=15, second=0, microsecond=0)
+                
+                elif 0 <= time_value <= 114:
+                    # 时段2后半: 00:00-01:14（属于前一天21:15开始的周期）
+                    return (dt - timedelta(days=1)).replace(hour=21, minute=15, second=0, microsecond=0)
+                
+                elif 115 <= time_value <= 300:
+                    # 时段3前半: 01:15-03:00
                     return dt.replace(hour=1, minute=15, second=0, microsecond=0)
-            
-            elif (1130 <= time_value <= 1200) or (1300 <= time_value <= 1629):
-                # 时段4: 11:30-12:00 + 13:00-16:29
-                return dt.replace(hour=11, minute=30, second=0, microsecond=0)
-            
+                
+                elif 915 <= time_value <= 1129:
+                    # 时段3后半: 09:15-11:29
+                    # 需要判断是否跨越周末或金融假期
+                    # 如果是周一（weekday=0），回溯到上周六的01:15
+                    weekday = dt.weekday()
+                    if weekday == 0:  # 周一
+                        # 回溯到上周六（2天前）的01:15
+                        return (dt - timedelta(days=2)).replace(hour=1, minute=15, second=0, microsecond=0)
+                    else:
+                        # 非周一，使用当天的01:15
+                        return dt.replace(hour=1, minute=15, second=0, microsecond=0)
+                
+                elif (1130 <= time_value <= 1200) or (1300 <= time_value <= 1629):
+                    # 时段4: 11:30-12:00 + 13:00-16:29
+                    return dt.replace(hour=11, minute=30, second=0, microsecond=0)
+                
+                else:
+                    # 非交易时段
+                    return None
             else:
-                # 非交易时段
-                return None
+                # 其他交易所：按4小时对齐（每4小时一根）
+                aligned_hour = (hour // 4) * 4
+                return dt.replace(hour=aligned_hour, minute=0, second=0, microsecond=0)
         
         elif interval == Interval.DAILY:
             # 日线：按日期对齐
@@ -3398,6 +3428,85 @@ class ChartWindow(QtWidgets.QWidget):
         else:
             # 默认按分钟对齐
             return dt.replace(second=0, microsecond=0)
+    
+    def _get_hkfe_hour_period_start(self, dt: "datetime") -> "datetime":
+        """
+        获取HKFE交易所1小时K线的周期起始时间
+        
+        按照港期交易时段边界划分：
+        - 夜盘：17:15-18:14, 18:15-19:14, 19:15-20:14, 20:15-21:14, 
+                21:15-22:14, 22:15-23:14, 23:15-00:14, 00:15-01:14, 01:15-02:14
+        - 跨休市：02:15-09:29（跨休市时段，需要特殊处理周末）
+        - 日盘：09:30-10:29, 10:30-11:29, 11:30-12:00+13:00-13:29,
+                13:30-14:29, 14:30-15:29, 15:30-16:29
+        
+        参考：hkfe_bar_generator.py 中的 _get_hkfe_hour_period 方法
+        """
+        from datetime import timedelta
+        
+        hour = dt.hour
+        minute = dt.minute
+        time_value = hour * 100 + minute
+        
+        # 夜盘时段
+        if 1715 <= time_value <= 1814:
+            return dt.replace(hour=17, minute=15, second=0, microsecond=0)
+        elif 1815 <= time_value <= 1914:
+            return dt.replace(hour=18, minute=15, second=0, microsecond=0)
+        elif 1915 <= time_value <= 2014:
+            return dt.replace(hour=19, minute=15, second=0, microsecond=0)
+        elif 2015 <= time_value <= 2114:
+            return dt.replace(hour=20, minute=15, second=0, microsecond=0)
+        elif 2115 <= time_value <= 2214:
+            return dt.replace(hour=21, minute=15, second=0, microsecond=0)
+        elif 2215 <= time_value <= 2314:
+            return dt.replace(hour=22, minute=15, second=0, microsecond=0)
+        elif 2315 <= time_value <= 2359:
+            return dt.replace(hour=23, minute=15, second=0, microsecond=0)
+        elif 0 <= time_value <= 14:
+            # 00:00-00:14 属于前一天23:15开始的周期
+            return (dt - timedelta(days=1)).replace(hour=23, minute=15, second=0, microsecond=0)
+        elif 15 <= time_value <= 114:
+            return dt.replace(hour=0, minute=15, second=0, microsecond=0)
+        elif 115 <= time_value <= 214:
+            return dt.replace(hour=1, minute=15, second=0, microsecond=0)
+        elif 215 <= time_value <= 929:
+            # 02:15-09:29 跨休市时段，需要特殊处理周末
+            weekday = dt.weekday()
+            if weekday == 0:  # 周一
+                # 回溯到上周六（2天前）的02:15
+                return (dt - timedelta(days=2)).replace(hour=2, minute=15, second=0, microsecond=0)
+            elif weekday == 6:  # 周日
+                # 回溯到前一天（周六）的02:15
+                return (dt - timedelta(days=1)).replace(hour=2, minute=15, second=0, microsecond=0)
+            else:
+                return dt.replace(hour=2, minute=15, second=0, microsecond=0)
+        # 日盘时段
+        elif 930 <= time_value <= 1029:
+            return dt.replace(hour=9, minute=30, second=0, microsecond=0)
+        elif 1030 <= time_value <= 1129:
+            return dt.replace(hour=10, minute=30, second=0, microsecond=0)
+        elif (1130 <= time_value <= 1200) or (1300 <= time_value <= 1329):
+            # 11:30-12:00 + 13:00-13:29 跨午休
+            return dt.replace(hour=11, minute=30, second=0, microsecond=0)
+        elif 1330 <= time_value <= 1429:
+            return dt.replace(hour=13, minute=30, second=0, microsecond=0)
+        elif 1430 <= time_value <= 1529:
+            return dt.replace(hour=14, minute=30, second=0, microsecond=0)
+        elif 1530 <= time_value <= 1629:
+            return dt.replace(hour=15, minute=30, second=0, microsecond=0)
+        else:
+            # 09:15-09:29 特殊处理（属于跨休市时段）
+            if 915 <= time_value <= 929:
+                weekday = dt.weekday()
+                if weekday == 0:  # 周一
+                    return (dt - timedelta(days=2)).replace(hour=2, minute=15, second=0, microsecond=0)
+                elif weekday == 6:  # 周日
+                    return (dt - timedelta(days=1)).replace(hour=2, minute=15, second=0, microsecond=0)
+                else:
+                    return dt.replace(hour=2, minute=15, second=0, microsecond=0)
+            # 非交易时段
+            return None
     
     def _is_same_period(self, bar1: "BarData", bar2: "BarData", interval: "Interval") -> bool:
         """判断两根K线是否属于同一周期"""
@@ -3479,7 +3588,7 @@ class ChartWindow(QtWidgets.QWidget):
             self.main_engine.write_log(f"订阅行情失败: {error_msg}")
     
     def process_tick_event(self, event: Event) -> None:
-        """处理Tick事件"""
+        """处理Tick事件 - 支持所有周期的实时更新"""
         tick: TickData = event.data
         
         # 只处理当前显示合约的tick
@@ -3495,7 +3604,7 @@ class ChartWindow(QtWidgets.QWidget):
         from vnpy.trader.constant import Interval
         
         if interval_enum == Interval.MINUTE:
-            # 1分钟周期：使用原有的BarGenerator
+            # 1分钟周期：使用BarGenerator从tick合成K线
             if self.bg:
                 self.bg.update_tick(tick)
                 
@@ -3506,7 +3615,8 @@ class ChartWindow(QtWidgets.QWidget):
                     bar.datetime = bar.datetime.replace(second=0, microsecond=0)
                     self.chart.update_bar(bar)
         else:
-            # 大周期：直接更新当前未完成的K线
+            # 5分钟、1小时、4小时周期：使用tick数据直接更新当前未完成的K线
+            # 这样可以实现所有周期的实时更新
             self._update_current_bar_with_tick(tick, interval_enum)
     
     def _update_current_bar_with_tick(self, tick: "TickData", interval: "Interval") -> None:
@@ -3535,6 +3645,9 @@ class ChartWindow(QtWidgets.QWidget):
         current_volume = tick.volume if tick.volume else 0
         current_turnover = tick.turnover if tick.turnover else 0
         
+        # 获取该周期第一根分钟K线的开盘价（用于1小时、4小时等大周期）
+        open_price = self._get_period_open_price(tick_period, interval, tick)
+        
         # 检查是否有当前K线
         if not hasattr(self, '_current_bar') or self._current_bar is None:
             # 记录周期开始时的基准成交量
@@ -3544,13 +3657,13 @@ class ChartWindow(QtWidgets.QWidget):
             self._bar_historical_turnover = 0
             self._need_init_baseline = False
             
-            # 创建新的当前K线（初始成交量为0，因为这是周期的第一个tick）
+            # 创建新的当前K线（使用该周期第一根分钟K线的开盘价）
             self._current_bar = BarData(
                 symbol=tick.symbol,
                 exchange=tick.exchange,
                 datetime=tick_period,
                 interval=interval,
-                open_price=tick.last_price,
+                open_price=open_price,
                 high_price=tick.last_price,
                 low_price=tick.last_price,
                 close_price=tick.last_price,
@@ -3583,13 +3696,13 @@ class ChartWindow(QtWidgets.QWidget):
             self._bar_historical_turnover = 0
             self._need_init_baseline = False
             
-            # 创建新的当前K线（初始成交量为0）
+            # 创建新的当前K线（使用该周期第一根分钟K线的开盘价）
             self._current_bar = BarData(
                 symbol=tick.symbol,
                 exchange=tick.exchange,
                 datetime=tick_period,
                 interval=interval,
-                open_price=tick.last_price,
+                open_price=open_price,
                 high_price=tick.last_price,
                 low_price=tick.last_price,
                 close_price=tick.last_price,
@@ -3648,11 +3761,252 @@ class ChartWindow(QtWidgets.QWidget):
         # 更新图表显示
         self.chart.update_bar(self._current_bar)
     
+    def _get_period_open_price(
+        self, 
+        period_start: "datetime", 
+        interval: "Interval", 
+        tick: "TickData"
+    ) -> float:
+        """
+        获取该周期第一根分钟K线的开盘价
+        
+        对于5分钟、1小时、4小时等大周期K线，开盘价应该是该周期第一根分钟K线的开盘价，
+        而不是第一个tick的价格。
+        
+        Args:
+            period_start: 周期开始时间
+            interval: 周期类型
+            tick: 当前tick数据（作为fallback）
+            
+        Returns:
+            开盘价
+        """
+        from vnpy.trader.constant import Interval
+        from vnpy.trader.database import get_database
+        
+        # 对于1分钟周期，直接使用tick价格
+        if interval == Interval.MINUTE:
+            return tick.last_price
+        
+        # 对于大周期，尝试从数据库查询该周期第一根分钟K线的开盘价
+        try:
+            database = get_database()
+            symbol, exchange = tick.symbol, tick.exchange
+            
+            # 计算该周期第一根分钟K线的时间
+            # 对于5分钟、1小时、4小时等周期，第一根分钟K线就是period_start
+            first_minute_time = period_start
+            
+            # 查询该分钟K线的数据
+            # 使用一个小的时间范围来查询，避免时区或时间精度问题
+            from datetime import timedelta
+            query_start = first_minute_time - timedelta(minutes=1)
+            query_end = first_minute_time + timedelta(minutes=1)
+            
+            minute_bars = database.load_bar_data(
+                symbol,
+                exchange,
+                Interval.MINUTE,
+                query_start,
+                query_end
+            )
+            
+            # 从查询结果中找到精确匹配的分钟K线
+            # 直接比较hour和minute，更可靠
+            target_hour = first_minute_time.hour
+            target_minute = first_minute_time.minute
+            
+            if minute_bars:
+                for bar in minute_bars:
+                    # 直接比较hour和minute，忽略秒和微秒
+                    bar_dt = bar.datetime.replace(tzinfo=None) if bar.datetime.tzinfo else bar.datetime
+                    if (bar_dt.hour == target_hour and 
+                        bar_dt.minute == target_minute and
+                        bar_dt.date() == first_minute_time.date()):
+                        if bar.open_price and bar.open_price > 0:
+                            # 注释掉日志，避免刷屏
+                            # self.main_engine.write_log(
+                            #     f"[开盘价] 使用数据库{first_minute_time.strftime('%Y-%m-%d %H:%M')}分钟K线开盘价: {bar.open_price} "
+                            #     f"(bar.datetime={bar_dt.strftime('%Y-%m-%d %H:%M:%S')})"
+                            # )
+                            # 更新缓存
+                            if hasattr(self, '_minute_bars_cache'):
+                                self._minute_bars_cache[first_minute_time] = bar
+                            return bar.open_price
+                
+                # 如果没有精确匹配，记录日志
+                if first_minute_time not in getattr(self, '_open_price_warnings', set()):
+                    self._open_price_warnings.add(first_minute_time)
+                    found_times = [f"{b.datetime.strftime('%H:%M:%S')}" for b in minute_bars[:3]]
+                    self.main_engine.write_log(
+                        f"[开盘价警告] 未找到精确匹配的{first_minute_time.strftime('%H:%M')}分钟K线，"
+                        f"查询到的时间: {', '.join(found_times)}"
+                    )
+                minute_bars = []
+            
+            if minute_bars and len(minute_bars) > 0:
+                # 找到第一根分钟K线，使用其开盘价
+                first_minute_bar = minute_bars[0]
+                if first_minute_bar.open_price and first_minute_bar.open_price > 0:
+                    self.main_engine.write_log(
+                        f"[开盘价] 使用{first_minute_time.strftime('%H:%M')}分钟K线开盘价: {first_minute_bar.open_price}"
+                    )
+                    return first_minute_bar.open_price
+            
+            # 如果数据库中没有该分钟K线，尝试从1分钟K线缓存中查找
+            # 检查缓存中是否有该分钟K线（可能已经生成但还没保存到数据库）
+            if hasattr(self, '_minute_bars_cache') and first_minute_time in self._minute_bars_cache:
+                cached_bar = self._minute_bars_cache[first_minute_time]
+                if cached_bar.open_price and cached_bar.open_price > 0:
+                    self.main_engine.write_log(
+                        f"[开盘价] 使用缓存中{first_minute_time.strftime('%H:%M')}分钟K线开盘价: {cached_bar.open_price}"
+                    )
+                    return cached_bar.open_price
+            
+            # 如果缓存中也没有，尝试从历史数据缓存中查找
+            # 检查历史数据中是否有该分钟K线（可能已经生成但还没保存到数据库）
+            if hasattr(self, 'history_data') and self.history_data:
+                for bar in reversed(self.history_data):  # 从后往前查找
+                    if bar.interval == Interval.MINUTE:
+                        # 直接比较hour和minute，忽略秒和微秒
+                        bar_dt = bar.datetime.replace(tzinfo=None) if bar.datetime.tzinfo else bar.datetime
+                        if (bar_dt.hour == target_hour and 
+                            bar_dt.minute == target_minute and
+                            bar_dt.date() == first_minute_time.date()):
+                            if bar.open_price and bar.open_price > 0:
+                                self.main_engine.write_log(
+                                    f"[开盘价] 使用历史数据中{first_minute_time.strftime('%Y-%m-%d %H:%M')}分钟K线开盘价: {bar.open_price} "
+                                    f"(bar.datetime={bar_dt.strftime('%Y-%m-%d %H:%M:%S')})"
+                                )
+                                # 更新缓存
+                                if hasattr(self, '_minute_bars_cache'):
+                                    self._minute_bars_cache[first_minute_time] = bar
+                                return bar.open_price
+            
+            # 如果历史数据中也没有，尝试从BarGenerator获取
+            # 如果当前有1分钟K线的BarGenerator，且该分钟K线属于该周期的第一根
+            if hasattr(self, 'bg') and self.bg and self.bg.bar:
+                bg_bar = self.bg.bar
+                bg_bar_dt = bg_bar.datetime.replace(tzinfo=None) if bg_bar.datetime.tzinfo else bg_bar.datetime
+                
+                # 直接比较hour和minute，检查BarGenerator中的分钟K线是否是该周期的第一根
+                if (bg_bar_dt.hour == target_hour and 
+                    bg_bar_dt.minute == target_minute and
+                    bg_bar_dt.date() == first_minute_time.date()):
+                    if bg_bar.open_price and bg_bar.open_price > 0:
+                        self.main_engine.write_log(
+                            f"[开盘价] 使用BarGenerator中{first_minute_time.strftime('%Y-%m-%d %H:%M')}分钟K线开盘价: {bg_bar.open_price} "
+                            f"(bg_bar.datetime={bg_bar_dt.strftime('%Y-%m-%d %H:%M:%S')})"
+                        )
+                        return bg_bar.open_price
+                else:
+                    # BarGenerator中的bar不是第一根，不记录日志（避免重复输出）
+                    # 只在第一次遇到时记录一次
+                    if not hasattr(self, '_open_price_warnings'):
+                        self._open_price_warnings = set()
+                    warning_key = f"{first_minute_time.strftime('%H:%M')}_{interval.value}"
+                    if warning_key not in self._open_price_warnings:
+                        self._open_price_warnings.add(warning_key)
+                        self.main_engine.write_log(
+                            f"[开盘价] BarGenerator中的分钟K线时间: {bg_bar_dt.strftime('%H:%M')}, "
+                            f"需要的第一根分钟K线时间: {first_minute_time.strftime('%H:%M')}, 不匹配。"
+                            f"将等待该分钟K线完成后再更新开盘价。"
+                        )
+            
+        except Exception as e:
+            # 如果查询失败，记录日志但不影响功能
+            error_msg = str(e).replace("{", "{{").replace("}", "}}")
+            if not hasattr(self, '_open_price_errors'):
+                self._open_price_errors = set()
+            error_key = f"{first_minute_time.strftime('%H:%M')}_{interval.value}_{str(e)[:50]}"
+            if error_key not in self._open_price_errors:
+                self._open_price_errors.add(error_key)
+                self.main_engine.write_log(
+                    f"[开盘价] 查询第一根分钟K线开盘价失败: {error_msg}，使用tick价格"
+                )
+        
+        # 如果无法获取第一根分钟K线的开盘价，记录警告并使用tick价格作为fallback
+        # 注意：这可能导致开盘价不准确，但可以后续通过on_bar回调更新
+        # 只记录一次警告，避免重复输出
+        if not hasattr(self, '_open_price_warnings'):
+            self._open_price_warnings = set()
+        warning_key = f"{first_minute_time.strftime('%H:%M')}_{interval.value}_final"
+        if warning_key not in self._open_price_warnings:
+            self._open_price_warnings.add(warning_key)
+            self.main_engine.write_log(
+                f"[开盘价警告] 无法获取{first_minute_time.strftime('%H:%M')}分钟K线开盘价，"
+                f"使用tick价格: {tick.last_price}。如果该分钟K线后续完成，将通过on_bar回调自动更新开盘价。"
+            )
+        return tick.last_price
+    
     def on_bar(self, bar: "BarData") -> None:
         """K线合成回调（仅用于1分钟周期）"""
         self.chart.update_bar(bar)
         # 更新历史数据缓存
         self.history_data.append(bar)
+        
+        # 缓存1分钟K线（用于快速查找开盘价）
+        if bar.interval == Interval.MINUTE:
+            bar_period = self._get_period_start(bar.datetime, Interval.MINUTE)
+            if bar_period:
+                self._minute_bars_cache[bar_period] = bar
+        
+        # 检查是否需要更新大周期K线的开盘价
+        # 如果当前有大周期K线正在生成，且该分钟K线是该周期的第一根，更新开盘价
+        self._update_period_open_price_if_needed(bar)
+    
+    def _update_period_open_price_if_needed(self, minute_bar: "BarData") -> None:
+        """
+        检查是否需要更新大周期K线的开盘价
+        
+        当第一根分钟K线完成时，如果当前有大周期K线正在生成，
+        且该分钟K线是该周期的第一根，更新大周期K线的开盘价。
+        """
+        from vnpy.trader.constant import Interval
+        
+        # 只处理1分钟K线
+        if minute_bar.interval != Interval.MINUTE:
+            return
+        
+        # 检查是否有当前大周期K线
+        if not hasattr(self, '_current_bar') or self._current_bar is None:
+            return
+        
+        # 获取当前周期类型
+        current_interval = self._current_bar.interval
+        
+        # 只处理大周期（5分钟、1小时、4小时）
+        if current_interval == Interval.MINUTE:
+            return
+        
+        # 获取该分钟K线所属的大周期
+        minute_bar_period = self._get_period_start(minute_bar.datetime, current_interval)
+        
+        # 检查该分钟K线是否属于当前大周期K线的第一根
+        if minute_bar_period == self._current_bar.datetime:
+            # 获取该分钟K线的周期起始时间（应该是该分钟K线本身的时间）
+            minute_period = self._get_period_start(minute_bar.datetime, Interval.MINUTE)
+            
+            # 检查该分钟K线是否是该大周期的第一根（分钟K线的时间应该等于大周期的开始时间）
+            if minute_period == self._current_bar.datetime:
+                # 如果当前大周期K线的开盘价不是该分钟K线的开盘价，需要更新
+                if (minute_bar.open_price and minute_bar.open_price > 0 and 
+                    self._current_bar.open_price != minute_bar.open_price):
+                    old_open_price = self._current_bar.open_price
+                    self._current_bar.open_price = minute_bar.open_price
+                    
+                    self.main_engine.write_log(
+                        f"[开盘价更新] {current_interval.value}K线({self._current_bar.datetime.strftime('%H:%M')}) "
+                        f"开盘价已更新: {old_open_price} -> {minute_bar.open_price} "
+                        f"(来自{minute_bar.datetime.strftime('%H:%M')}分钟K线)"
+                    )
+                    
+                    # 更新历史数据中的当前K线
+                    if self._current_bar_index >= 0 and self._current_bar_index < len(self.history_data):
+                        self.history_data[self._current_bar_index] = self._current_bar
+                    
+                    # 更新图表显示
+                    self.chart.update_bar(self._current_bar)
     
     def process_history_data(self, history: list) -> None:
         """处理历史数据"""
@@ -3681,15 +4035,28 @@ class ChartWindow(QtWidgets.QWidget):
         # 缓存历史数据
         self.history_data = list(history)
         
+        # 修正所有K线的开盘价（使用该周期第一根分钟K线的开盘价）
+        # 这对于从数据库加载的历史数据很重要，因为历史数据中的开盘价可能不正确
+        # 注意：修正会直接修改self.history_data中的K线对象
+        self._correct_all_bars_open_price(self.history_data, interval_enum)
+        
         # 标记最后一根K线是否为当前未完成的K线
-        self._mark_current_bar(history, interval_enum)
+        # 使用修正后的历史数据
+        self._mark_current_bar(self.history_data, interval_enum)
+        
+        # 如果标记了当前K线，需要确保开盘价正确（使用第一根分钟K线的开盘价）
+        # 这必须在更新图表之前完成
+        if hasattr(self, '_current_bar') and self._current_bar:
+            # 更新历史数据中的当前K线（如果开盘价被修正了）
+            if self._current_bar_index >= 0 and self._current_bar_index < len(self.history_data):
+                self.history_data[self._current_bar_index] = self._current_bar
         
         # 先设置未来空间，再更新历史数据
         future_bars = self._get_future_bars()
         self.chart.set_future_bars(future_bars)
         
-        # 更新图表
-        self.chart.update_history(history)
+        # 更新图表（使用修正后的历史数据）
+        self.chart.update_history(self.history_data)
         self.history_loaded = True
         
         # 更新时间范围标签
@@ -3794,9 +4161,14 @@ class ChartWindow(QtWidgets.QWidget):
                 self._bar_historical_volume = last_bar.volume if last_bar.volume else 0
                 self._bar_historical_turnover = last_bar.turnover if last_bar.turnover else 0
                 
+                # 检查并更新开盘价（使用该周期第一根分钟K线的开盘价）
+                # 因为历史数据中的开盘价可能不正确（可能是从tick价格生成的）
+                self._update_current_bar_open_price()
+                
                 self.main_engine.write_log(
                     f"[当前K线] 标记当前未完成K线: {current_period.strftime('%m-%d %H:%M')}, "
-                    f"已有成交量: {self._bar_historical_volume}"
+                    f"已有成交量: {self._bar_historical_volume}, "
+                    f"开盘价: {self._current_bar.open_price}"
                 )
             else:
                 # 需要创建一个新的当前K线
@@ -3806,6 +4178,116 @@ class ChartWindow(QtWidgets.QWidget):
         except Exception as e:
             error_msg = str(e).replace("{", "{{").replace("}", "}}")
             self.main_engine.write_log(f"[当前K线] 标记失败: {error_msg}")
+    
+    def _correct_all_bars_open_price(self, history: list, interval: "Interval") -> None:
+        """
+        修正所有K线的开盘价（使用该周期第一根分钟K线的开盘价）
+        
+        对于从数据库加载的历史数据，开盘价可能不正确（可能是从tick价格生成的），
+        需要重新从第一根分钟K线获取正确的开盘价。
+        """
+        from vnpy.trader.constant import Interval
+        
+        # 只处理大周期（5分钟、1小时、4小时）
+        if interval == Interval.MINUTE:
+            return
+        
+        try:
+            corrected_count = 0
+            for i, bar in enumerate(history):
+                # 获取该周期第一根分钟K线的开盘价
+                from vnpy.trader.object import TickData
+                temp_tick = TickData(
+                    symbol=bar.symbol,
+                    exchange=bar.exchange,
+                    datetime=bar.datetime,
+                    last_price=bar.close_price,
+                    gateway_name=bar.gateway_name
+                )
+                
+                correct_open_price = self._get_period_open_price(
+                    bar.datetime,
+                    bar.interval,
+                    temp_tick
+                )
+                
+                # 如果获取到了正确的开盘价，且与当前开盘价不同，则更新
+                if (correct_open_price and correct_open_price > 0 and 
+                    bar.open_price != correct_open_price):
+                    old_open_price = bar.open_price
+                    bar.open_price = correct_open_price
+                    self.history_data[i] = bar
+                    corrected_count += 1
+                    
+                    self.main_engine.write_log(
+                        f"[开盘价修正] {bar.interval.value}K线({bar.datetime.strftime('%H:%M')}) "
+                        f"开盘价已修正: {old_open_price} -> {correct_open_price}"
+                    )
+            
+            if corrected_count > 0:
+                self.main_engine.write_log(
+                    f"[开盘价修正] 共修正了 {corrected_count} 根K线的开盘价"
+                )
+        except Exception as e:
+            error_msg = str(e).replace("{", "{{").replace("}", "}}")
+            self.main_engine.write_log(f"[开盘价修正] 批量修正失败: {error_msg}")
+    
+    def _update_current_bar_open_price(self) -> None:
+        """
+        更新当前K线的开盘价（使用该周期第一根分钟K线的开盘价）
+        
+        当从历史数据中标记当前K线时，需要检查并更新开盘价，
+        因为历史数据中的开盘价可能不正确（可能是从tick价格生成的）。
+        """
+        if not hasattr(self, '_current_bar') or self._current_bar is None:
+            return
+        
+        from vnpy.trader.constant import Interval
+        
+        # 只处理大周期（5分钟、1小时、4小时）
+        if self._current_bar.interval == Interval.MINUTE:
+            return
+        
+        try:
+            # 获取该周期第一根分钟K线的开盘价
+            # 创建一个临时的tick对象用于查询
+            from vnpy.trader.object import TickData
+            temp_tick = TickData(
+                symbol=self._current_bar.symbol,
+                exchange=self._current_bar.exchange,
+                datetime=self._current_bar.datetime,
+                last_price=self._current_bar.close_price,
+                gateway_name=self._current_bar.gateway_name
+            )
+            
+            correct_open_price = self._get_period_open_price(
+                self._current_bar.datetime,
+                self._current_bar.interval,
+                temp_tick
+            )
+            
+            # 如果获取到了正确的开盘价，且与当前开盘价不同，则更新
+            if (correct_open_price and correct_open_price > 0 and 
+                self._current_bar.open_price != correct_open_price):
+                old_open_price = self._current_bar.open_price
+                self._current_bar.open_price = correct_open_price
+                
+                self.main_engine.write_log(
+                    f"[开盘价修正] {self._current_bar.interval.value}K线({self._current_bar.datetime.strftime('%H:%M')}) "
+                    f"开盘价已修正: {old_open_price} -> {correct_open_price} "
+                    f"(从历史数据标记时修正)"
+                )
+                
+                # 更新历史数据中的当前K线
+                if self._current_bar_index >= 0 and self._current_bar_index < len(self.history_data):
+                    self.history_data[self._current_bar_index] = self._current_bar
+                
+                # 更新图表显示
+                if hasattr(self, 'chart') and self.chart:
+                    self.chart.update_bar(self._current_bar)
+        except Exception as e:
+            error_msg = str(e).replace("{", "{{").replace("}", "}}")
+            self.main_engine.write_log(f"[开盘价修正] 更新失败: {error_msg}")
     
     def extend_chart_x_limit(self, move_to_end: bool = False) -> None:
         """扩展图表的x轴限制，允许显示未来空间"""
