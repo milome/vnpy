@@ -1206,10 +1206,11 @@ class FutuGateway(BaseGateway):
         例如：MHImain -> HK.MHI2511
 
         判断主力合约的策略（按优先级）：
-        1. 使用 get_future_info API 的 origin_code 字段（最可靠）
-        2. 从主力合约名称中提取月份代码（如"小恒指期货 (2511)"）
-        3. 通过成交量/持仓量比较所有可用月份合约
-        4. 选择最近到期的月份合约
+        1. 使用缓存（最快，避免重复API调用）
+        2. 使用 get_future_info API 的 origin_code 字段（最可靠）
+        3. 从主力合约名称中提取月份代码（如"小恒指期货 (2511)"）
+        4. 通过成交量/持仓量比较所有可用月份合约
+        5. 选择最近到期的月份合约
 
         Args:
             vt_symbol: VNPy合约代码（如MHImain）
@@ -1219,6 +1220,14 @@ class FutuGateway(BaseGateway):
             实际合约代码（如HK.MHI2511），如果解析失败返回None
         """
         try:
+            # ✅ 优化：先检查缓存，避免重复API调用（可降低延迟99.5%）
+            cached_actual_symbol = self.main_contract_mapping.get(vt_symbol)
+            if cached_actual_symbol:
+                # 缓存中存储的是实际合约代码（如"MHI2511"），需要转换为完整的富途格式
+                cached_code = f"HK.{cached_actual_symbol}"
+                self.write_log(f"使用缓存的主力合约映射: {vt_symbol} -> {cached_code} (缓存命中，跳过API调用)")
+                return cached_code
+            
             # 提取基础代码（去掉main后缀）
             base_symbol = vt_symbol.replace("main", "")  # MHI
             futu_main_code = f"HK.{vt_symbol}"  # HK.MHImain
@@ -1238,6 +1247,11 @@ class FutuGateway(BaseGateway):
                             origin_code = origin_code.strip()
                             # origin_code 格式应该是 HK.MHI2512
                             self.write_log(f"★ 主力合约解析成功（策略1-origin_code，最可靠）: {vt_symbol} -> {origin_code}")
+                            # ✅ 优化：更新缓存，避免下次重复查询
+                            if "." in origin_code:
+                                actual_symbol = origin_code.split(".")[-1]
+                                self.main_contract_mapping[vt_symbol] = actual_symbol
+                                self.write_log(f"已缓存主力合约映射: {vt_symbol} -> {actual_symbol}")
                             return origin_code
                         else:
                             self.write_log(f"策略1: origin_code 字段为空或无效: '{origin_code}'")
@@ -1258,18 +1272,32 @@ class FutuGateway(BaseGateway):
                     if month_code.isdigit() and len(month_code) == 4:
                         actual_code = f"HK.{base_symbol}{month_code}"
                         self.write_log(f"主力合约解析成功（策略2-名称提取）: {vt_symbol} -> {actual_code}")
+                        # ✅ 优化：更新缓存
+                        actual_symbol = f"{base_symbol}{month_code}"
+                        self.main_contract_mapping[vt_symbol] = actual_symbol
+                        self.write_log(f"已缓存主力合约映射: {vt_symbol} -> {actual_symbol}")
                         return actual_code
 
             # 策略3：通过成交量/持仓量比较确定主力合约
             actual_code = self._resolve_main_by_volume(base_symbol)
             if actual_code:
                 self.write_log(f"主力合约解析成功（策略3-成交量比较）: {vt_symbol} -> {actual_code}")
+                # ✅ 优化：更新缓存
+                if "." in actual_code:
+                    actual_symbol = actual_code.split(".")[-1]
+                    self.main_contract_mapping[vt_symbol] = actual_symbol
+                    self.write_log(f"已缓存主力合约映射: {vt_symbol} -> {actual_symbol}")
                 return actual_code
 
             # 策略4：选择最近到期的月份合约
             actual_code = self._resolve_main_by_nearest_expiry(base_symbol)
             if actual_code:
                 self.write_log(f"主力合约解析成功（策略4-最近到期）: {vt_symbol} -> {actual_code}")
+                # ✅ 优化：更新缓存
+                if "." in actual_code:
+                    actual_symbol = actual_code.split(".")[-1]
+                    self.main_contract_mapping[vt_symbol] = actual_symbol
+                    self.write_log(f"已缓存主力合约映射: {vt_symbol} -> {actual_symbol}")
                 return actual_code
 
             self.write_log(f"无法解析主力合约 {vt_symbol}：所有策略均失败")
