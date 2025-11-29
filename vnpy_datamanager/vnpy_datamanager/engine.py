@@ -9,6 +9,12 @@ from vnpy.trader.object import BarData, TickData, ContractData, HistoryRequest
 from vnpy.trader.database import BaseDatabase, get_database, BarOverview, DB_TZ
 from vnpy.trader.datafeed import BaseDatafeed, get_datafeed
 from vnpy.trader.utility import ZoneInfo
+from vnpy.trader.period_utils import (
+    get_period_start,
+    get_hkfe_hour_period_start,
+    get_hkfe_4hour_period,
+    is_hkfe_trading_time
+)
 
 APP_NAME = "DataManager"
 
@@ -316,64 +322,6 @@ class ManagerEngine(BaseEngine):
 
         return 0
 
-    def _is_hkfe_trading_time(self, bar_dt: datetime) -> bool:
-        """
-        判断给定时间是否在香港期货交易时段内
-        
-        香港期货交易时段：
-        - 日盘：09:15 - 12:00, 13:00 - 16:30
-        - 夜盘：17:15 - 03:00（次日凌晨）
-        
-        Args:
-            bar_dt: K线时间（带时区信息）
-        
-        Returns:
-            True 如果在交易时段内，否则 False
-        """
-        hour = bar_dt.hour
-        minute = bar_dt.minute
-        time_value = hour * 100 + minute  # 用于比较的时间值，如 09:15 = 915
-        
-        # 日盘早段：09:15 - 12:00
-        if 915 <= time_value <= 1200:
-            return True
-        
-        # 日盘午段：13:00 - 16:30
-        if 1300 <= time_value <= 1630:
-            return True
-        
-        # 夜盘：17:15 - 23:59
-        if 1715 <= time_value <= 2359:
-            return True
-        
-        # 夜盘：00:00 - 03:00（次日凌晨）
-        if 0 <= time_value <= 300:
-            return True
-        
-        return False
-
-    def _get_hkfe_5minute_period(self, bar_dt: datetime) -> Optional[datetime]:
-        """
-        计算1分钟K线所属的5分钟周期起始时间（港期专用）
-        
-        会过滤非交易时段的数据，并正确处理交易时段边界。
-        
-        Args:
-            bar_dt: K线时间（带时区信息）
-        
-        Returns:
-            5分钟周期的起始时间，如果不在交易时段则返回 None
-        """
-        # 先检查是否在交易时段
-        if not self._is_hkfe_trading_time(bar_dt):
-            return None
-        
-        # 计算5分钟K线的起始时间
-        minute = bar_dt.minute
-        period_start_minute = (minute // 5) * 5
-        period_start = bar_dt.replace(minute=period_start_minute, second=0, microsecond=0)
-        
-        return period_start
 
     def aggregate_5minute_bars(
         self,
@@ -472,7 +420,7 @@ class ManagerEngine(BaseEngine):
                 bar_dt = bar.datetime.replace(tzinfo=DB_TZ)
             
             # 获取该K线所属的5分钟周期（会过滤非交易时段）
-            period_start = self._get_hkfe_5minute_period(bar_dt)
+            period_start = get_period_start(bar_dt, Interval.MINUTE_5, exchange)
             
             if period_start is None:
                 # 非交易时段数据，跳过
@@ -495,7 +443,11 @@ class ManagerEngine(BaseEngine):
             if not bars:
                 continue
             
+            # 确保bars按时间排序，以便正确获取第一根和最后一根
+            bars.sort(key=lambda x: x.datetime)
+            
             # 计算OHLCV
+            # 使用第一根1分钟K线的开盘价（已按时间排序）
             open_price = bars[0].open_price
             close_price = bars[-1].close_price
             high_price = max(bar.high_price for bar in bars)
@@ -530,108 +482,6 @@ class ManagerEngine(BaseEngine):
         
         return 0
 
-    def _get_hkfe_hour_period(self, bar_dt: datetime) -> Optional[datetime]:
-        """
-        根据香港期货交易时段，判断1分钟K线属于哪个1小时周期
-        
-        精确的1小时时间边界（闭区间）：
-        1. 17:15-18:14：第一根1小时K线（时间戳：17:15）
-        2. 18:15-19:14：第二根1小时K线（时间戳：18:15）
-        3. 19:15-20:14：第三根1小时K线（时间戳：19:15）
-        4. 20:15-21:14：第四根1小时K线（时间戳：20:15）
-        5. 21:15-22:14：第五根1小时K线（时间戳：21:15）
-        6. 22:15-23:14：第六根1小时K线（时间戳：22:15）
-        7. 23:15-次日00:14：第七根1小时K线（时间戳：23:15）
-        8. 00:15-01:14：第八根1小时K线（时间戳：00:15）
-        9. 01:15-02:14：第九根1小时K线（时间戳：01:15）
-        10. 02:15-09:29：第十根1小时K线（时间戳：02:15，跨休市）
-        11. 09:30-10:29：第十一根1小时K线（时间戳：09:30）
-        12. 10:30-11:29：第十二根1小时K线（时间戳：10:30）
-        13. 11:30-12:00 + 13:00-13:29：第十三根1小时K线（时间戳：11:30，跨午休）
-        14. 13:30-14:29：第十四根1小时K线（时间戳：13:30）
-        15. 14:30-15:29：第十五根1小时K线（时间戳：14:30）
-        16. 15:30-16:29：第十六根1小时K线（时间戳：15:30）
-        
-        特殊情况处理：
-        1. 意外停盘：如果在16:29前意外停盘，当日最后一根1小时K线到停盘时间截止。次日开盘09:15到09:29算作一根1小时K线。
-        2. 金融假期：如果在夜盘收盘后遇到金融假期，完整的1小时K线开始时间是开盘当日的02:15，结束时间是金融假期后开盘的早09:29。
-        3. 周末：周六凌晨的02:15 - 周一09:29算一根1小时K线。
-        
-        Args:
-            bar_dt: K线时间（带时区信息）
-        
-        Returns:
-            period_start: 1小时周期的起始时间，如果不在交易时段则返回 None
-        """
-        hour = bar_dt.hour
-        minute = bar_dt.minute
-        time_value = hour * 100 + minute  # 用于比较的时间值，如 17:15 = 1715
-        
-        # 夜盘时段
-        if 1715 <= time_value <= 1814:
-            return bar_dt.replace(hour=17, minute=15, second=0, microsecond=0)
-        elif 1815 <= time_value <= 1914:
-            return bar_dt.replace(hour=18, minute=15, second=0, microsecond=0)
-        elif 1915 <= time_value <= 2014:
-            return bar_dt.replace(hour=19, minute=15, second=0, microsecond=0)
-        elif 2015 <= time_value <= 2114:
-            return bar_dt.replace(hour=20, minute=15, second=0, microsecond=0)
-        elif 2115 <= time_value <= 2214:
-            return bar_dt.replace(hour=21, minute=15, second=0, microsecond=0)
-        elif 2215 <= time_value <= 2314:
-            return bar_dt.replace(hour=22, minute=15, second=0, microsecond=0)
-        elif 2315 <= time_value <= 2359:
-            # 23:15-23:59 → 时间戳 23:15（当日）
-            return bar_dt.replace(hour=23, minute=15, second=0, microsecond=0)
-        elif 0 <= time_value <= 14:
-            # 00:00-00:14 → 时间戳 23:15（前一日）
-            return (bar_dt - timedelta(days=1)).replace(hour=23, minute=15, second=0, microsecond=0)
-        elif 15 <= time_value <= 114:
-            return bar_dt.replace(hour=0, minute=15, second=0, microsecond=0)
-        elif 115 <= time_value <= 214:
-            return bar_dt.replace(hour=1, minute=15, second=0, microsecond=0)
-        elif 215 <= time_value <= 929:
-            # 02:15-09:29 → 时间戳 02:15（当日，跨休市）
-            # 如果是周一（weekday=0）或周日（weekday=6），回溯到上周六的02:15
-            # 规则：周六凌晨的02:15 - 周一09:29算一根1小时K线
-            weekday = bar_dt.weekday()
-            if weekday == 0:  # 周一
-                # 回溯到上周六（2天前）的02:15
-                return (bar_dt - timedelta(days=2)).replace(hour=2, minute=15, second=0, microsecond=0)
-            elif weekday == 6:  # 周日
-                # 回溯到上周六（1天前）的02:15
-                return (bar_dt - timedelta(days=1)).replace(hour=2, minute=15, second=0, microsecond=0)
-            else:
-                return bar_dt.replace(hour=2, minute=15, second=0, microsecond=0)
-        # 日盘时段
-        elif 930 <= time_value <= 1029:
-            return bar_dt.replace(hour=9, minute=30, second=0, microsecond=0)
-        elif 1030 <= time_value <= 1129:
-            return bar_dt.replace(hour=10, minute=30, second=0, microsecond=0)
-        elif (1130 <= time_value <= 1200) or (1300 <= time_value <= 1329):
-            # 11:30-12:00 + 13:00-13:29 → 时间戳 11:30（跨午休）
-            return bar_dt.replace(hour=11, minute=30, second=0, microsecond=0)
-        elif 1330 <= time_value <= 1429:
-            return bar_dt.replace(hour=13, minute=30, second=0, microsecond=0)
-        elif 1430 <= time_value <= 1529:
-            return bar_dt.replace(hour=14, minute=30, second=0, microsecond=0)
-        elif 1530 <= time_value <= 1629:
-            return bar_dt.replace(hour=15, minute=30, second=0, microsecond=0)
-        else:
-            # 非交易时段（03:00-09:14, 09:15-09:29, 12:01-12:59, 16:30-17:14）
-            # 注意：09:15-09:29 属于跨休市的1小时K线（02:15-09:29），需要特殊处理
-            if 915 <= time_value <= 929:
-                # 09:15-09:29 → 时间戳 02:15（当日或前一日）
-                # 规则：周六凌晨的02:15 - 周一09:29算一根1小时K线
-                weekday = bar_dt.weekday()
-                if weekday == 0:  # 周一，回溯到上周六的02:15
-                    return (bar_dt - timedelta(days=2)).replace(hour=2, minute=15, second=0, microsecond=0)
-                elif weekday == 6:  # 周日，回溯到上周六的02:15
-                    return (bar_dt - timedelta(days=1)).replace(hour=2, minute=15, second=0, microsecond=0)
-                else:
-                    return bar_dt.replace(hour=2, minute=15, second=0, microsecond=0)
-            # 其他非交易时段返回 None
-            return None
 
     def aggregate_hour_bars(
         self,
@@ -750,7 +600,7 @@ class ManagerEngine(BaseEngine):
                 bar_dt = bar.datetime.replace(tzinfo=DB_TZ)
             
             # 获取该K线所属的1小时周期
-            period_start = self._get_hkfe_hour_period(bar_dt)
+            period_start = get_hkfe_hour_period_start(bar_dt)
             
             if period_start is None:
                 # 非交易时段数据，跳过
@@ -773,7 +623,11 @@ class ManagerEngine(BaseEngine):
             if not bars:
                 continue
             
+            # 确保bars按时间排序，以便正确获取第一根和最后一根
+            bars.sort(key=lambda x: x.datetime)
+            
             # 计算OHLCV
+            # 使用第一根1分钟K线的开盘价（已按时间排序）
             open_price = bars[0].open_price
             close_price = bars[-1].close_price
             high_price = max(bar.high_price for bar in bars)
@@ -808,74 +662,6 @@ class ManagerEngine(BaseEngine):
         
         return 0
 
-    def _get_hkfe_4hour_period(self, bar_dt: datetime) -> tuple[datetime, int]:
-        """
-        根据香港期货交易时段，判断1分钟K线属于哪个4小时周期
-        
-        精确的4小时时间边界（闭区间）：
-        1. 17:15-21:14：第一根4小时K线（时间戳：17:15，开盘价=17:15的1分钟开盘价，收盘价=21:14的1分钟收盘价）
-        2. 21:15-次日01:14：第二根4小时K线（时间戳：21:15，开盘价=21:15的1分钟开盘价，收盘价=01:14的1分钟收盘价）
-        3. 01:15-03:00 + 09:15-11:29：第三根4小时K线（时间戳：01:15，开盘价=01:15的1分钟开盘价，收盘价=11:29的1分钟收盘价）
-        4. 11:30-12:00 + 13:00-16:29：第四根4小时K线（时间戳：11:30，开盘价=11:30的1分钟开盘价，收盘价=16:29的1分钟收盘价）
-        
-        特殊情况处理：
-        1. 意外停盘：如果在16:29前意外停盘，当日最后一根4小时K线到停盘时间截止。次日开盘09:15到11:29算作一根独立的4小时K线。
-        2. 金融假期：如果在夜盘收盘后遇到金融假期，完整的4小时K线开始时间是01:15，结束时间是金融假期后开盘的早11:29。
-        
-        Args:
-            bar_dt: K线时间（带时区信息）
-        
-        Returns:
-            (period_start, period_index): 周期起始时间和周期索引(1-4)
-        """
-        hour = bar_dt.hour
-        minute = bar_dt.minute
-        time_value = hour * 100 + minute  # 用于比较的时间值，如 17:15 = 1715
-        
-        # 判断属于哪个时段（闭区间）
-        if 1715 <= time_value <= 2114:
-            # 时段1: 17:15-21:14 → 时间戳 17:15
-            period_start = bar_dt.replace(hour=17, minute=15, second=0, microsecond=0)
-            return (period_start, 1)
-        
-        elif 2115 <= time_value <= 2359:
-            # 时段2前半: 21:15-23:59 → 时间戳 21:15（当日）
-            period_start = bar_dt.replace(hour=21, minute=15, second=0, microsecond=0)
-            return (period_start, 2)
-        
-        elif 0 <= time_value <= 114:
-            # 时段2后半: 00:00-01:14 → 时间戳 21:15（前一日）
-            # 需要回溯到前一日的21:15
-            period_start = (bar_dt - timedelta(days=1)).replace(hour=21, minute=15, second=0, microsecond=0)
-            return (period_start, 2)
-        
-        elif 115 <= time_value <= 300:
-            # 时段3前半: 01:15-03:00 → 时间戳 01:15（当日）
-            period_start = bar_dt.replace(hour=1, minute=15, second=0, microsecond=0)
-            return (period_start, 3)
-        
-        elif 915 <= time_value <= 1129:
-            # 时段3后半: 09:15-11:29
-            # 需要判断是否跨越周末或金融假期
-            # 如果是周一（weekday=0），回溯到上周六的01:15
-            weekday = bar_dt.weekday()
-            if weekday == 0:  # 周一
-                # 回溯到上周六（2天前）的01:15
-                period_start = (bar_dt - timedelta(days=2)).replace(hour=1, minute=15, second=0, microsecond=0)
-            else:
-                # 非周一，使用当天的01:15
-                period_start = bar_dt.replace(hour=1, minute=15, second=0, microsecond=0)
-            return (period_start, 3)
-        
-        elif (1130 <= time_value <= 1200) or (1300 <= time_value <= 1629):
-            # 时段4: 11:30-12:00 + 13:00-16:29 → 时间戳 11:30
-            period_start = bar_dt.replace(hour=11, minute=30, second=0, microsecond=0)
-            return (period_start, 4)
-        
-        else:
-            # 非交易时段（03:01-09:14, 12:01-12:59, 16:30-17:14）
-            # 返回None表示不属于任何4小时周期
-            return (None, 0)
 
     def aggregate_4hour_bars(
         self,
@@ -981,7 +767,7 @@ class ManagerEngine(BaseEngine):
                 bar_dt = bar.datetime.replace(tzinfo=DB_TZ)
             
             # 获取该K线所属的4小时周期
-            period_start, period_index = self._get_hkfe_4hour_period(bar_dt)
+            period_start, period_index = get_hkfe_4hour_period(bar_dt)
             
             if period_start is None:
                 # 非交易时段数据，跳过
@@ -1004,7 +790,11 @@ class ManagerEngine(BaseEngine):
             if not bars:
                 continue
             
+            # 确保bars按时间排序，以便正确获取第一根和最后一根
+            bars.sort(key=lambda x: x.datetime)
+            
             # 计算OHLCV
+            # 使用第一根1分钟K线的开盘价（已按时间排序）
             open_price = bars[0].open_price
             close_price = bars[-1].close_price
             high_price = max(bar.high_price for bar in bars)
