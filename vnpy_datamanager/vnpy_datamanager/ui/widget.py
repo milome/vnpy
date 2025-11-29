@@ -28,6 +28,13 @@ class ManagerWidget(QtWidgets.QWidget):
         super().__init__()
 
         self.engine: ManagerEngine = main_engine.get_engine(APP_NAME)
+        self.event_engine: EventEngine = event_engine
+        
+        # 自动更新相关
+        self.auto_update_timer: QtCore.QTimer | None = None
+        self.auto_update_enabled: bool = False
+        self.auto_update_interval: int = 60  # 默认60分钟
+        self.is_updating: bool = False  # 标记是否正在更新，避免重复更新
 
         self.init_ui()
 
@@ -49,6 +56,55 @@ class ManagerWidget(QtWidgets.QWidget):
 
         download_button: QtWidgets.QPushButton = QtWidgets.QPushButton("下载数据")
         download_button.clicked.connect(self.download_data)
+        
+        # 自动更新相关控件
+        # 创建一个分组框来包含自动更新相关控件
+        auto_update_group = QtWidgets.QGroupBox("自动更新")
+        auto_update_group.setStyleSheet("""
+            QGroupBox {
+                font-weight: bold;
+                font-size: 11px;
+                border: 1px solid #555;
+                border-radius: 3px;
+                margin-top: 5px;
+                padding-top: 5px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }
+        """)
+        auto_update_layout = QtWidgets.QHBoxLayout()
+        auto_update_layout.setContentsMargins(10, 5, 10, 5)
+        auto_update_layout.setSpacing(10)
+        
+        self.auto_update_checkbox: QtWidgets.QCheckBox = QtWidgets.QCheckBox("启用")
+        self.auto_update_checkbox.setChecked(False)
+        self.auto_update_checkbox.setToolTip("启用后，系统将按设定间隔自动更新数据")
+        self.auto_update_checkbox.stateChanged.connect(self.on_auto_update_changed)
+        
+        self.auto_update_interval_spin: QtWidgets.QSpinBox = QtWidgets.QSpinBox()
+        self.auto_update_interval_spin.setMinimum(5)
+        self.auto_update_interval_spin.setMaximum(1440)
+        self.auto_update_interval_spin.setValue(60)
+        self.auto_update_interval_spin.setSuffix(" 分钟")
+        self.auto_update_interval_spin.setEnabled(False)
+        self.auto_update_interval_spin.setToolTip("设置自动更新的时间间隔（5-1440分钟）")
+        self.auto_update_interval_spin.valueChanged.connect(self.on_auto_update_interval_changed)
+        
+        # 下次更新时间标签
+        self.next_update_label: QtWidgets.QLabel = QtWidgets.QLabel("")
+        self.next_update_label.setStyleSheet("color: #888; font-size: 10px; padding: 2px 5px;")
+        self.next_update_label.setEnabled(False)
+        self.next_update_label.setToolTip("显示下次自动更新的时间")
+        
+        auto_update_layout.addWidget(self.auto_update_checkbox)
+        auto_update_layout.addWidget(QtWidgets.QLabel("间隔:"))
+        auto_update_layout.addWidget(self.auto_update_interval_spin)
+        auto_update_layout.addWidget(self.next_update_label)
+        auto_update_layout.addStretch()
+        auto_update_group.setLayout(auto_update_layout)
 
         hbox1: QtWidgets.QHBoxLayout = QtWidgets.QHBoxLayout()
         hbox1.addWidget(refresh_button)
@@ -56,6 +112,7 @@ class ManagerWidget(QtWidgets.QWidget):
         hbox1.addWidget(import_button)
         hbox1.addWidget(update_button)
         hbox1.addWidget(download_button)
+        hbox1.addWidget(auto_update_group)
 
         hbox2: QtWidgets.QHBoxLayout = QtWidgets.QHBoxLayout()
         hbox2.addWidget(self.tree)
@@ -394,14 +451,12 @@ class ManagerWidget(QtWidgets.QWidget):
 
     def update_data(self) -> None:
         """"""
-        print("[UI调试] update_data() 方法被调用")
+        self.engine.main_engine.write_log("[数据更新] 开始执行数据更新任务...")
 
         overviews: list[BarOverview] = self.engine.get_bar_overview()
         total: int = len(overviews)
         count: int = 0
         total_bars: int = 0  # 累计下载的K线数量
-
-        print(f"[UI调试] 找到 {total} 个合约需要更新")
 
         if total == 0:
             QtWidgets.QMessageBox.information(
@@ -411,49 +466,45 @@ class ManagerWidget(QtWidgets.QWidget):
             )
             return
 
-        dialog: QtWidgets.QProgressDialog = QtWidgets.QProgressDialog(
-            "历史数据更新中",
-            "取消",
-            0,
-            100
-        )
-        dialog.setWindowTitle("更新进度")
-        dialog.setWindowModality(QtCore.Qt.WindowModal)
-        dialog.setMinimumDuration(0)  # 立即显示对话框
-        dialog.setValue(0)
-        dialog.show()  # 强制显示
-        QtWidgets.QApplication.processEvents()  # 处理事件，确保对话框显示
+        self.engine.main_engine.write_log(f"[数据更新] 发现 {total} 个合约需要更新")
 
-        print("[UI调试] 进度对话框已创建并显示")
+        # 创建统一的进度对话框
+        dialog: UpdateProgressDialog = UpdateProgressDialog(self)
+        dialog.set_total_tasks(total)
+        dialog.show()
+        QtWidgets.QApplication.processEvents()  # 处理事件，确保对话框显示
+        
+        # 创建自定义的output回调，将消息追加到进度对话框
+        def output_callback(msg: str) -> None:
+            """将消息追加到进度对话框，而不是弹出新弹窗"""
+            dialog.append_message(msg)
+            QtWidgets.QApplication.processEvents()
 
         # 收集需要合成4小时数据的合约（有1小时或1分钟数据但没有4小时数据的）
         symbols_to_aggregate: set[tuple[str, Exchange]] = set()
         
         for overview in overviews:
-            if dialog.wasCanceled():
-                print("[UI调试] 用户取消了更新")
-                break
-
-            # 更新进度标签文本
-            dialog.setLabelText(f"正在更新: {overview.symbol}.{overview.exchange.value}")
-            QtWidgets.QApplication.processEvents()  # 处理事件，刷新进度文本
-
-            print(f"[UI调试] 正在更新: {overview.symbol}.{overview.exchange.value}")
+            # 更新进度
+            dialog.update_progress(count, total, f"{overview.symbol}.{overview.exchange.value}")
+            dialog.append_message(f"开始更新: {overview.symbol}.{overview.exchange.value} ({overview.interval.value})")
+            QtWidgets.QApplication.processEvents()
 
             bar_count = self.engine.download_bar_data(
                 overview.symbol,
                 overview.exchange,
                 overview.interval,
                 overview.end,
-                self.output
+                output_callback
             )
             total_bars += bar_count  # 累加每次下载的数据量
             count += 1
-            progress = int(round(count / total * 100, 0))
-            dialog.setValue(progress)
-            QtWidgets.QApplication.processEvents()  # 处理事件，刷新进度条
-
-            print(f"[UI调试] 已完成 {count}/{total}，本次下载 {bar_count} 条，累计 {total_bars} 条")
+            dialog.append_message(f"完成: {overview.symbol}.{overview.exchange.value}，本次下载 {bar_count} 条")
+            dialog.update_progress(count, total)
+            QtWidgets.QApplication.processEvents()
+            
+            self.engine.main_engine.write_log(
+                f"[数据更新] 合约 {count}/{total}: {overview.symbol}.{overview.exchange.value} 更新完成，下载 {bar_count} 条数据"
+            )
             
             # 如果是有1分钟数据的合约，标记为需要合成5分钟和4小时数据
             if overview.interval == Interval.MINUTE:
@@ -470,129 +521,439 @@ class ManagerWidget(QtWidgets.QWidget):
                 symbols_5m.add((overview.symbol, overview.exchange))
         
         if symbols_5m:
-            dialog.setLabelText("正在合成5分钟数据...")
+            dialog.append_message(f"开始为 {len(symbols_5m)} 个合约合成5分钟数据...")
             QtWidgets.QApplication.processEvents()
-            print(f"[UI调试] 开始为 {len(symbols_5m)} 个合约合成5分钟数据")
+            self.engine.main_engine.write_log(
+                f"[数据更新] 开始为 {len(symbols_5m)} 个合约合成5分钟K线数据..."
+            )
             
             aggregate_5m_count = 0
             for symbol, exchange in symbols_5m:
-                if dialog.wasCanceled():
-                    break
-                dialog.setLabelText(f"正在合成5分钟数据: {symbol}.{exchange.value}")
+                dialog.append_message(f"正在合成5分钟数据: {symbol}.{exchange.value}")
                 QtWidgets.QApplication.processEvents()
                 
                 try:
                     count_5m = self.engine.aggregate_5minute_bars(symbol, exchange)
                     if count_5m > 0:
                         aggregate_5m_count += count_5m
-                        print(f"[UI调试] {symbol}.{exchange.value} 合成5分钟数据: {count_5m} 条")
+                        self.engine.main_engine.write_log(
+                            f"[数据更新] {symbol}.{exchange.value} 合成5分钟K线数据: {count_5m} 条"
+                        )
                 except Exception as e:
-                    print(f"[UI调试] 合成5分钟数据失败: {symbol}.{exchange.value}, 错误: {e}")
+                    self.engine.main_engine.write_log(
+                        f"[数据更新] 合成5分钟数据失败: {symbol}.{exchange.value}, 错误: {str(e)}"
+                    )
                     import traceback
-                    traceback.print_exc()
+                    self.engine.main_engine.write_log(f"[数据更新] 错误详情:\n{traceback.format_exc()}")
             
             if aggregate_5m_count > 0:
                 total_bars += aggregate_5m_count
-                print(f"[UI调试] 5分钟数据合成完成，共 {aggregate_5m_count} 条")
+                self.engine.main_engine.write_log(
+                    f"[数据更新] 5分钟K线数据合成完成，共 {aggregate_5m_count} 条"
+                )
 
         # 自动合成1小时数据（从1分钟数据）
         if symbols_5m:  # 使用相同的合约集合（有1分钟数据的合约）
-            dialog.setLabelText("正在合成1小时数据...")
+            dialog.append_message(f"开始为 {len(symbols_5m)} 个合约合成1小时数据...")
             QtWidgets.QApplication.processEvents()
-            print(f"[UI调试] 开始为 {len(symbols_5m)} 个合约合成1小时数据")
+            self.engine.main_engine.write_log(
+                f"[数据更新] 开始为 {len(symbols_5m)} 个合约合成1小时K线数据..."
+            )
             
             aggregate_1h_count = 0
             for symbol, exchange in symbols_5m:
-                if dialog.wasCanceled():
-                    break
-                dialog.setLabelText(f"正在合成1小时数据: {symbol}.{exchange.value}")
+                dialog.append_message(f"正在合成1小时数据: {symbol}.{exchange.value}")
                 QtWidgets.QApplication.processEvents()
                 
                 try:
                     count_1h = self.engine.aggregate_hour_bars(symbol, exchange)
                     if count_1h > 0:
                         aggregate_1h_count += count_1h
-                        print(f"[UI调试] {symbol}.{exchange.value} 合成1小时数据: {count_1h} 条")
+                        self.engine.main_engine.write_log(
+                            f"[数据更新] {symbol}.{exchange.value} 合成1小时K线数据: {count_1h} 条"
+                        )
                 except Exception as e:
-                    print(f"[UI调试] 合成1小时数据失败: {symbol}.{exchange.value}, 错误: {e}")
+                    self.engine.main_engine.write_log(
+                        f"[数据更新] 合成1小时数据失败: {symbol}.{exchange.value}, 错误: {str(e)}"
+                    )
                     import traceback
-                    traceback.print_exc()
+                    self.engine.main_engine.write_log(f"[数据更新] 错误详情:\n{traceback.format_exc()}")
             
             if aggregate_1h_count > 0:
                 total_bars += aggregate_1h_count
-                print(f"[UI调试] 1小时数据合成完成，共 {aggregate_1h_count} 条")
+                self.engine.main_engine.write_log(
+                    f"[数据更新] 1小时K线数据合成完成，共 {aggregate_1h_count} 条"
+                )
 
         # 自动合成4小时数据
         if symbols_to_aggregate:
-            dialog.setLabelText("正在合成4小时数据...")
+            dialog.append_message(f"开始为 {len(symbols_to_aggregate)} 个合约合成4小时数据...")
             QtWidgets.QApplication.processEvents()
-            print(f"[UI调试] 开始为 {len(symbols_to_aggregate)} 个合约合成4小时数据")
+            self.engine.main_engine.write_log(
+                f"[数据更新] 开始为 {len(symbols_to_aggregate)} 个合约合成4小时K线数据..."
+            )
             
             aggregate_count = 0
             for symbol, exchange in symbols_to_aggregate:
-                if dialog.wasCanceled():
-                    break
-                dialog.setLabelText(f"正在合成4小时数据: {symbol}.{exchange.value}")
+                dialog.append_message(f"正在合成4小时数据: {symbol}.{exchange.value}")
                 QtWidgets.QApplication.processEvents()
                 
                 try:
                     count_4h = self.engine.aggregate_4hour_bars(symbol, exchange)
                     if count_4h > 0:
                         aggregate_count += count_4h
-                        print(f"[UI调试] {symbol}.{exchange.value} 合成4小时数据: {count_4h} 条")
+                        self.engine.main_engine.write_log(
+                            f"[数据更新] {symbol}.{exchange.value} 合成4小时K线数据: {count_4h} 条"
+                        )
                 except Exception as e:
-                    print(f"[UI调试] 合成4小时数据失败: {symbol}.{exchange.value}, 错误: {e}")
+                    self.engine.main_engine.write_log(
+                        f"[数据更新] 合成4小时数据失败: {symbol}.{exchange.value}, 错误: {str(e)}"
+                    )
                     import traceback
-                    traceback.print_exc()
+                    self.engine.main_engine.write_log(f"[数据更新] 错误详情:\n{traceback.format_exc()}")
             
             if aggregate_count > 0:
                 total_bars += aggregate_count
-                print(f"[UI调试] 4小时数据合成完成，共 {aggregate_count} 条")
+                self.engine.main_engine.write_log(
+                    f"[数据更新] 4小时K线数据合成完成，共 {aggregate_count} 条"
+                )
 
-        dialog.close()
+        # 更新对话框为完成状态
+        dialog.set_completed(total_bars, count, total)
         
-        # 确保UI更新
-        QtWidgets.QApplication.processEvents()
-
-        print(f"[UI调试] 准备显示完成弹窗，总数据量: {total_bars}")
-
-        # 显示下载结束弹窗
-        try:
-            print("[UI调试] 正在创建QMessageBox...")
-            msg_box = QtWidgets.QMessageBox(self)
-            msg_box.setWindowTitle("更新完成")
-            msg_box.setText(f"更新完成，总数据量：{total_bars}条")
-            msg_box.setIcon(QtWidgets.QMessageBox.Information)
-            msg_box.setStandardButtons(QtWidgets.QMessageBox.Ok)
-            msg_box.setWindowModality(QtCore.Qt.ApplicationModal)
-            print("[UI调试] QMessageBox已创建，准备显示...")
-            result = msg_box.exec_()
-            print(f"[UI调试] QMessageBox已显示并关闭，返回值: {result}")
-        except Exception as e:
-            print(f"[UI调试] 显示弹窗时发生异常: {type(e).__name__}: {e}")
-            import traceback
-            traceback.print_exc()
-
-        print("[UI调试] 完成弹窗流程结束")
+        # 输出完成日志
+        self.engine.main_engine.write_log(
+            f"[数据更新] 数据更新任务完成！共处理 {count}/{total} 个合约，总数据量: {total_bars:,} 条"
+        )
+        
+        # 等待用户关闭对话框
+        dialog.exec_()
 
     def download_data(self) -> None:
         """"""
-        dialog: DownloadDialog = DownloadDialog(self.engine)
+        dialog: DownloadDialog = DownloadDialog(self.engine, self)
         dialog.exec_()
 
     def show(self) -> None:
         """"""
         self.showMaximized()
+    
+    def closeEvent(self, event) -> None:
+        """窗口关闭时停止自动更新"""
+        self.stop_auto_update()
+        event.accept()
 
     def output(self, msg: str) -> None:
-        """输出下载过程中的日志"""
-        QtWidgets.QMessageBox.warning(
-            self,
-            "数据下载",
-            msg,
-            QtWidgets.QMessageBox.Ok,
-            QtWidgets.QMessageBox.Ok,
-        )
+        """输出下载过程中的日志（保留兼容性，但不再弹出弹窗）"""
+        # 不再弹出弹窗，只打印日志
+        print(f"[数据下载] {msg}")
+    
+    def on_auto_update_changed(self, state: int) -> None:
+        """自动更新复选框状态改变"""
+        self.auto_update_enabled = (state == QtCore.Qt.CheckState.Checked.value)
+        self.auto_update_interval_spin.setEnabled(self.auto_update_enabled)
+        self.next_update_label.setEnabled(self.auto_update_enabled)
+        
+        # 更新复选框文本和样式
+        if self.auto_update_enabled:
+            self.auto_update_checkbox.setText("启用 ✓")
+            self.auto_update_checkbox.setStyleSheet("QCheckBox { color: #00ff00; font-weight: bold; }")
+            self.start_auto_update()
+        else:
+            self.auto_update_checkbox.setText("启用")
+            self.auto_update_checkbox.setStyleSheet("")
+            self.stop_auto_update()
+    
+    def on_auto_update_interval_changed(self, value: int) -> None:
+        """自动更新间隔改变"""
+        old_interval = self.auto_update_interval
+        self.auto_update_interval = value
+        if self.auto_update_enabled:
+            # 重新启动定时器（静默停止，只输出重启日志）
+            if self.auto_update_timer is not None:
+                self.auto_update_timer.stop()
+            self._restart_auto_update_timer(silent=True)
+    
+    def start_auto_update(self) -> None:
+        """启动自动更新定时器"""
+        self._restart_auto_update_timer(silent=False)
+    
+    def _restart_auto_update_timer(self, silent: bool = False) -> None:
+        """重启自动更新定时器（内部方法）"""
+        if self.auto_update_timer is None:
+            self.auto_update_timer = QtCore.QTimer()
+            self.auto_update_timer.timeout.connect(self.auto_update_data)
+        
+        # 设置定时器间隔（毫秒）
+        interval_ms = self.auto_update_interval * 60 * 1000
+        self.auto_update_timer.start(interval_ms)
+        
+        # 更新下次更新时间显示
+        self.update_next_update_time()
+        
+        # 输出日志
+        if not silent:
+            self.engine.main_engine.write_log(
+                f"[自动更新] 已启动，更新间隔: {self.auto_update_interval} 分钟"
+            )
+        else:
+            self.engine.main_engine.write_log(
+                f"[自动更新] 已更新间隔设置: {self.auto_update_interval} 分钟"
+            )
+    
+    def stop_auto_update(self) -> None:
+        """停止自动更新定时器"""
+        if self.auto_update_timer is not None:
+            self.auto_update_timer.stop()
+        self.next_update_label.setText("")
+        self.engine.main_engine.write_log("[自动更新] 已停止")
+    
+    def update_next_update_time(self) -> None:
+        """更新下次更新时间显示"""
+        if self.auto_update_enabled and self.auto_update_timer is not None:
+            next_update = datetime.now() + timedelta(minutes=self.auto_update_interval)
+            next_update_str = next_update.strftime("%H:%M")
+            self.next_update_label.setText(f"下次更新: {next_update_str}")
+            self.next_update_label.setStyleSheet("color: #00aa00; font-size: 10px; padding: 2px 5px; font-weight: bold;")
+        else:
+            self.next_update_label.setText("")
+            self.next_update_label.setStyleSheet("color: #888; font-size: 10px; padding: 2px 5px;")
+    
+    def auto_update_data(self) -> None:
+        """自动更新数据（异步执行）"""
+        if self.is_updating:
+            self.engine.main_engine.write_log("[自动更新] 上次更新尚未完成，跳过本次更新")
+            return
+        
+        self.engine.main_engine.write_log("[自动更新] 开始执行自动更新任务...")
+        self.is_updating = True
+        
+        # 使用QTimer.singleShot在后台线程执行更新，避免阻塞UI
+        QtCore.QTimer.singleShot(0, self._execute_auto_update)
+    
+    def _execute_auto_update(self) -> None:
+        """执行自动更新（在后台线程中）"""
+        try:
+            # 调用更新数据方法，但不显示进度对话框（静默更新）
+            overviews: list[BarOverview] = self.engine.get_bar_overview()
+            total: int = len(overviews)
+            
+            if total == 0:
+                self.engine.main_engine.write_log("[自动更新] 未找到需要更新的合约数据")
+                return
+            
+            self.engine.main_engine.write_log(f"[自动更新] 发现 {total} 个合约需要更新，开始处理...")
+            
+            total_bars: int = 0
+            count: int = 0
+            
+            # 静默更新：不显示进度对话框，只输出日志
+            def silent_output(msg: str) -> None:
+                """静默输出，只输出到日志"""
+                # 过滤掉一些冗余信息，只保留关键信息
+                if any(keyword in msg for keyword in ["开始", "完成", "失败", "错误"]):
+                    self.engine.main_engine.write_log(f"[自动更新] {msg}")
+            
+            # 更新每个合约的数据
+            for overview in overviews:
+                self.engine.main_engine.write_log(
+                    f"[自动更新] 正在更新合约: {overview.symbol}.{overview.exchange.value} ({overview.interval.value})"
+                )
+                
+                bar_count = self.engine.download_bar_data(
+                    overview.symbol,
+                    overview.exchange,
+                    overview.interval,
+                    overview.end,
+                    silent_output
+                )
+                total_bars += bar_count
+                count += 1
+                self.engine.main_engine.write_log(
+                    f"[自动更新] 合约 {count}/{total}: {overview.symbol}.{overview.exchange.value} 更新完成，下载 {bar_count} 条数据"
+                )
+            
+            # 自动合成数据（静默执行）
+            symbols_5m: set[tuple[str, Exchange]] = set()
+            for overview in overviews:
+                if overview.interval == Interval.MINUTE:
+                    symbols_5m.add((overview.symbol, overview.exchange))
+            
+            # 合成5分钟数据
+            if symbols_5m:
+                self.engine.main_engine.write_log(
+                    f"[自动更新] 开始为 {len(symbols_5m)} 个合约合成5分钟K线数据..."
+                )
+                aggregate_5m_count = 0
+                for symbol, exchange in symbols_5m:
+                    try:
+                        count_5m = self.engine.aggregate_5minute_bars(symbol, exchange)
+                        if count_5m > 0:
+                            total_bars += count_5m
+                            aggregate_5m_count += count_5m
+                    except Exception as e:
+                        self.engine.main_engine.write_log(
+                            f"[自动更新] 合成5分钟数据失败: {symbol}.{exchange.value}, 错误: {str(e)}"
+                        )
+                if aggregate_5m_count > 0:
+                    self.engine.main_engine.write_log(
+                        f"[自动更新] 5分钟K线数据合成完成，共 {aggregate_5m_count} 条"
+                    )
+            
+            # 合成1小时数据
+            if symbols_5m:
+                self.engine.main_engine.write_log(
+                    f"[自动更新] 开始为 {len(symbols_5m)} 个合约合成1小时K线数据..."
+                )
+                aggregate_1h_count = 0
+                for symbol, exchange in symbols_5m:
+                    try:
+                        count_1h = self.engine.aggregate_hour_bars(symbol, exchange)
+                        if count_1h > 0:
+                            total_bars += count_1h
+                            aggregate_1h_count += count_1h
+                    except Exception as e:
+                        self.engine.main_engine.write_log(
+                            f"[自动更新] 合成1小时数据失败: {symbol}.{exchange.value}, 错误: {str(e)}"
+                        )
+                if aggregate_1h_count > 0:
+                    self.engine.main_engine.write_log(
+                        f"[自动更新] 1小时K线数据合成完成，共 {aggregate_1h_count} 条"
+                    )
+            
+            # 合成4小时数据
+            symbols_to_aggregate: set[tuple[str, Exchange]] = set()
+            for overview in overviews:
+                if overview.interval == Interval.MINUTE:
+                    symbols_to_aggregate.add((overview.symbol, overview.exchange))
+                if overview.interval == Interval.HOUR:
+                    symbols_to_aggregate.add((overview.symbol, overview.exchange))
+            
+            if symbols_to_aggregate:
+                self.engine.main_engine.write_log(
+                    f"[自动更新] 开始为 {len(symbols_to_aggregate)} 个合约合成4小时K线数据..."
+                )
+                aggregate_4h_count = 0
+                for symbol, exchange in symbols_to_aggregate:
+                    try:
+                        count_4h = self.engine.aggregate_4hour_bars(symbol, exchange)
+                        if count_4h > 0:
+                            total_bars += count_4h
+                            aggregate_4h_count += count_4h
+                    except Exception as e:
+                        self.engine.main_engine.write_log(
+                            f"[自动更新] 合成4小时数据失败: {symbol}.{exchange.value}, 错误: {str(e)}"
+                        )
+                if aggregate_4h_count > 0:
+                    self.engine.main_engine.write_log(
+                        f"[自动更新] 4小时K线数据合成完成，共 {aggregate_4h_count} 条"
+                    )
+            
+            # 输出完成总结
+            self.engine.main_engine.write_log(
+                f"[自动更新] 自动更新任务完成！共处理 {count}/{total} 个合约，总数据量: {total_bars:,} 条"
+            )
+            
+        except Exception as e:
+            self.engine.main_engine.write_log(
+                f"[自动更新] 更新过程中发生错误: {str(e)}"
+            )
+            import traceback
+            self.engine.main_engine.write_log(f"[自动更新] 错误详情:\n{traceback.format_exc()}")
+        finally:
+            self.is_updating = False
+            # 更新下次更新时间
+            self.update_next_update_time()
+            self.engine.main_engine.write_log(
+                f"[自动更新] 下次自动更新将在 {self.auto_update_interval} 分钟后执行"
+            )
+
+
+class UpdateProgressDialog(QtWidgets.QDialog):
+    """统一的更新进度对话框，显示所有更新信息"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("更新进度")
+        self.setFixedSize(600, 500)
+        self.setWindowModality(QtCore.Qt.WindowModal)
+        
+        # 进度条
+        self.progress_bar = QtWidgets.QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFormat("%p%")
+        
+        # 当前任务标签
+        self.current_task_label = QtWidgets.QLabel("准备更新...")
+        self.current_task_label.setStyleSheet("font-weight: bold; font-size: 12px;")
+        
+        # 消息列表（显示所有更新信息）
+        self.message_list = QtWidgets.QTextEdit()
+        self.message_list.setReadOnly(True)
+        self.message_list.setStyleSheet("font-family: 'Consolas', 'Monaco', monospace; font-size: 10px;")
+        
+        # 统计信息标签
+        self.stats_label = QtWidgets.QLabel("")
+        self.stats_label.setStyleSheet("color: #666; font-size: 11px;")
+        
+        # 关闭按钮（初始禁用）
+        self.close_button = QtWidgets.QPushButton("关闭")
+        self.close_button.setEnabled(False)
+        self.close_button.clicked.connect(self.accept)
+        
+        # 布局
+        layout = QtWidgets.QVBoxLayout()
+        layout.addWidget(self.current_task_label)
+        layout.addWidget(self.progress_bar)
+        layout.addWidget(QtWidgets.QLabel("更新信息:"))
+        layout.addWidget(self.message_list)
+        layout.addWidget(self.stats_label)
+        
+        button_layout = QtWidgets.QHBoxLayout()
+        button_layout.addStretch()
+        button_layout.addWidget(self.close_button)
+        layout.addLayout(button_layout)
+        
+        self.setLayout(layout)
+        
+        self.total_tasks = 0
+        self.completed_tasks = 0
+        self.total_bars = 0
+    
+    def set_total_tasks(self, total: int):
+        """设置总任务数"""
+        self.total_tasks = total
+        self.append_message(f"找到 {total} 个合约需要更新")
+    
+    def update_progress(self, current: int, total: int, task_name: str = ""):
+        """更新进度"""
+        self.completed_tasks = current
+        progress = int(round(current / total * 100, 0)) if total > 0 else 0
+        self.progress_bar.setValue(progress)
+        
+        if task_name:
+            self.current_task_label.setText(f"正在处理: {task_name} ({current}/{total})")
+    
+    def append_message(self, msg: str):
+        """追加消息到消息列表"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.message_list.append(f"[{timestamp}] {msg}")
+        # 自动滚动到底部
+        scrollbar = self.message_list.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+    
+    def set_completed(self, total_bars: int, completed: int, total: int):
+        """设置为完成状态"""
+        self.total_bars = total_bars
+        self.completed_tasks = completed
+        self.progress_bar.setValue(100)
+        self.current_task_label.setText("更新完成！")
+        self.stats_label.setText(f"共完成 {completed}/{total} 个合约，总数据量: {total_bars:,} 条")
+        self.append_message(f"更新完成！共处理 {completed}/{total} 个合约，总数据量: {total_bars:,} 条")
+        self.close_button.setEnabled(True)
+        self.close_button.setFocus()
 
 
 class DataCell(QtWidgets.QTableWidgetItem):
@@ -852,91 +1213,118 @@ class DownloadWorker(QtCore.QThread):
 
 
 class DownloadProgressDialog(QtWidgets.QDialog):
-    """下载进度对话框"""
+    """统一的下载进度对话框，显示所有下载信息"""
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("下载进度")
-        self.setFixedSize(450, 180)
+        self.setFixedSize(600, 500)
         self.setWindowModality(QtCore.Qt.WindowModal)
-        
-        # 禁用关闭按钮（下载完成前不允许关闭）
-        self.setWindowFlags(
-            self.windowFlags() & ~QtCore.Qt.WindowCloseButtonHint
-        )
-        
-        # 阶段标签
-        self.stage_label = QtWidgets.QLabel("准备下载...")
-        self.stage_label.setStyleSheet("font-size: 12px; font-weight: bold;")
         
         # 进度条
         self.progress_bar = QtWidgets.QProgressBar()
-        self.progress_bar.setRange(0, 0)  # 初始为不确定模式
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
         self.progress_bar.setTextVisible(True)
-        self.progress_bar.setFormat("%v 条")
+        self.progress_bar.setFormat("%p%")
         
-        # 详情标签
-        self.detail_label = QtWidgets.QLabel("")
-        self.detail_label.setStyleSheet("color: gray; font-size: 11px;")
+        # 当前任务标签
+        self.current_task_label = QtWidgets.QLabel("准备下载...")
+        self.current_task_label.setStyleSheet("font-weight: bold; font-size: 12px;")
         
-        # 返回按钮（初始禁用）
-        self.return_button = QtWidgets.QPushButton("返回")
-        self.return_button.setFixedWidth(80)
-        self.return_button.setEnabled(False)  # 初始禁用
-        self.return_button.clicked.connect(self.accept)
+        # 消息列表（显示所有下载信息）
+        self.message_list = QtWidgets.QTextEdit()
+        self.message_list.setReadOnly(True)
+        self.message_list.setStyleSheet("font-family: 'Consolas', 'Monaco', monospace; font-size: 10px;")
+        
+        # 统计信息标签
+        self.stats_label = QtWidgets.QLabel("")
+        self.stats_label.setStyleSheet("color: #666; font-size: 11px;")
+        
+        # 关闭按钮（初始禁用）
+        self.close_button = QtWidgets.QPushButton("关闭")
+        self.close_button.setEnabled(False)
+        self.close_button.clicked.connect(self.accept)
         
         # 布局
         layout = QtWidgets.QVBoxLayout()
-        layout.addWidget(self.stage_label)
+        layout.addWidget(self.current_task_label)
         layout.addWidget(self.progress_bar)
-        layout.addWidget(self.detail_label)
-        layout.addStretch()
+        layout.addWidget(QtWidgets.QLabel("下载信息:"))
+        layout.addWidget(self.message_list)
+        layout.addWidget(self.stats_label)
         
         button_layout = QtWidgets.QHBoxLayout()
         button_layout.addStretch()
-        button_layout.addWidget(self.return_button)
+        button_layout.addWidget(self.close_button)
         layout.addLayout(button_layout)
         
         self.setLayout(layout)
+        
+        self.total_data = 0
+        self.current_data = 0
     
-    def enable_return(self):
-        """启用返回按钮（下载完成后调用）"""
-        self.return_button.setEnabled(True)
-        self.return_button.setFocus()
+    def append_message(self, msg: str):
+        """追加消息到消息列表"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.message_list.append(f"[{timestamp}] {msg}")
+        # 自动滚动到底部
+        scrollbar = self.message_list.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
     
     def update_progress(self, stage: str, current: int, maximum: int):
         """更新进度"""
-        self.stage_label.setText(stage)
+        self.current_task_label.setText(stage)
         
         if maximum > 0:
             self.progress_bar.setRange(0, maximum)
             self.progress_bar.setValue(current)
             self.progress_bar.setFormat(f"%v / {maximum:,} 条")
+            progress = int(round(current / maximum * 100, 0)) if maximum > 0 else 0
+            self.stats_label.setText(f"已下载: {current:,} / {maximum:,} 条 ({progress}%)")
         else:
             if current > 0:
                 self.progress_bar.setRange(0, 0)  # 不确定模式
-                self.detail_label.setText(f"已获取 {current:,} 条数据")
+                self.progress_bar.setFormat("下载中...")
+                self.stats_label.setText(f"已获取 {current:,} 条数据")
             else:
                 self.progress_bar.setRange(0, 0)
-                self.detail_label.setText("")
+                self.progress_bar.setFormat("准备中...")
+                self.stats_label.setText("")
+        
+        # 追加消息到消息列表
+        if stage:
+            self.append_message(stage)
     
     def set_completed(self, total: int):
         """设置为完成状态"""
+        self.total_data = total
+        self.current_data = total
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(100)
         self.progress_bar.setFormat("完成")
-        self.stage_label.setText(f"下载完成！共 {total:,} 条数据")
-        self.detail_label.setText("")
-        self.enable_return()
+        self.current_task_label.setText("下载完成！")
+        self.stats_label.setText(f"共下载 {total:,} 条数据")
+        self.append_message(f"下载完成！共 {total:,} 条数据")
+        self.close_button.setEnabled(True)
+        self.close_button.setFocus()
     
     def set_error(self, error_msg: str):
         """设置为错误状态"""
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
-        self.stage_label.setText("下载失败")
-        self.detail_label.setText(error_msg)
-        self.detail_label.setStyleSheet("color: red; font-size: 11px;")
-        self.enable_return()
+        self.progress_bar.setFormat("失败")
+        self.current_task_label.setText("下载失败")
+        self.stats_label.setText("")
+        self.stats_label.setStyleSheet("color: red; font-size: 11px;")
+        self.append_message(f"下载失败: {error_msg}")
+        self.close_button.setEnabled(True)
+        self.close_button.setFocus()
+    
+    def enable_return(self):
+        """启用返回按钮（下载完成后调用，保持兼容性）"""
+        self.close_button.setEnabled(True)
+        self.close_button.setFocus()
 
 
 class DownloadDialog(QtWidgets.QDialog):
@@ -944,9 +1332,10 @@ class DownloadDialog(QtWidgets.QDialog):
 
     def __init__(self, engine: ManagerEngine, parent: QtWidgets.QWidget | None = None) -> None:
         """"""
-        super().__init__()
+        super().__init__(parent)
 
         self.engine: ManagerEngine = engine
+        self.parent_widget: QtWidgets.QWidget | None = parent  # 保存父窗口引用
         self.worker: DownloadWorker | None = None
         self.progress_dialog: DownloadProgressDialog | None = None
 
@@ -1040,8 +1429,15 @@ class DownloadDialog(QtWidgets.QDialog):
             if reply != QtWidgets.QMessageBox.Yes:
                 return
 
-        # 创建进度对话框
-        self.progress_dialog = DownloadProgressDialog(self)
+        # 保存父窗口引用（在关闭窗口前）
+        parent_widget = self.parent_widget
+        
+        # 关闭下载数据窗口
+        self.accept()
+        
+        # 创建进度对话框（使用父窗口）
+        self.progress_dialog = DownloadProgressDialog(parent_widget)
+        self.progress_dialog.append_message(f"开始下载: {symbol}.{exchange.value} ({interval.value})")
         
         # 创建工作线程
         self.worker = DownloadWorker(
@@ -1053,6 +1449,8 @@ class DownloadDialog(QtWidgets.QDialog):
         
         # 启动下载
         self.worker.start()
+        
+        # 显示进度对话框（阻塞等待）
         self.progress_dialog.exec_()
     
     def on_progress_updated(self, stage: str, current: int, maximum: int):
@@ -1063,18 +1461,19 @@ class DownloadDialog(QtWidgets.QDialog):
     def on_download_finished(self, count: int, result_type: str):
         """下载完成回调"""
         if self.progress_dialog:
-            # 更新进度对话框为完成状态
+            # 根据类型追加完成消息
             if result_type == "5min":
-                self.progress_dialog.stage_label.setText(f"合成完成！共 {count:,} 条5分钟K线")
+                self.progress_dialog.append_message(f"合成完成！共 {count:,} 条5分钟K线")
             elif result_type == "hour":
-                self.progress_dialog.stage_label.setText(f"合成完成！共 {count:,} 条1小时K线")
+                self.progress_dialog.append_message(f"合成完成！共 {count:,} 条1小时K线")
             elif result_type == "4hour":
-                self.progress_dialog.stage_label.setText(f"合成完成！共 {count:,} 条4小时K线")
+                self.progress_dialog.append_message(f"合成完成！共 {count:,} 条4小时K线")
             elif result_type == "tick":
-                self.progress_dialog.stage_label.setText(f"下载完成！共 {count:,} 条Tick数据")
+                self.progress_dialog.append_message(f"下载完成！共 {count:,} 条Tick数据")
             else:
-                self.progress_dialog.stage_label.setText(f"下载完成！共 {count:,} 条K线数据")
+                self.progress_dialog.append_message(f"下载完成！共 {count:,} 条K线数据")
             
+            # 更新进度对话框为完成状态
             self.progress_dialog.set_completed(count)
     
     def on_error_occurred(self, error_msg: str):
