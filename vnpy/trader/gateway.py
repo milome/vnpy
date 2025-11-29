@@ -159,8 +159,11 @@ class BaseGateway(ABC):
         当检测到主力合约（如MHImain）对应的实际合约发生变化时触发。
         同时推送通用事件和特定主力合约的事件。
         """
+        # 记录日志
+        self.write_log(f"[Gateway] 推送主力合约切换事件: {switch_data.main_symbol} {switch_data.old_actual_symbol} -> {switch_data.new_actual_symbol} (提前切换: {switch_data.is_early_switch})")
         self.on_event(EVENT_MAIN_CONTRACT_SWITCH, switch_data)
         self.on_event(EVENT_MAIN_CONTRACT_SWITCH + switch_data.vt_main_symbol, switch_data)
+        self.write_log(f"[Gateway] 事件已推送到事件引擎: {EVENT_MAIN_CONTRACT_SWITCH}")
 
     def write_log(self, msg: str) -> None:
         """

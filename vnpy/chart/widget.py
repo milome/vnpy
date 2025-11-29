@@ -12,6 +12,11 @@ from .base import (
 )
 from .axis import DatetimeAxis
 from .item import ChartItem
+from .price_line import PriceLineManager, PriceLineItem, PriceLineType
+from .price_line_drag import PriceLineDragHandler
+from .drawing_order import DrawingOrderController
+from .price_breakthrough import PriceBreakthroughMonitor, BreakthroughEvent
+from .price_line_storage import PriceLineStorage, PriceLineData
 
 
 pg.setConfigOptions(antialias=True)
@@ -33,6 +38,30 @@ class ChartWidget(pg.PlotWidget):
 
         self._first_plot: pg.PlotItem | None = None
         self._cursor: ChartCursor | None = None
+        
+        # Price line manager
+        self._price_line_manager: PriceLineManager = PriceLineManager()
+        
+        # Price line drag handler (will be initialized when plot is added)
+        self._price_line_drag_handler: PriceLineDragHandler | None = None
+        
+        # Drawing order controller (will be initialized when plot is added)
+        self._drawing_order_controller: DrawingOrderController | None = None
+        
+        # Price breakthrough monitor
+        self._breakthrough_monitor: PriceBreakthroughMonitor = PriceBreakthroughMonitor()
+        
+        # Price line storage
+        self._price_line_storage: PriceLineStorage = PriceLineStorage()
+        
+        # VT symbol for the chart
+        self._vt_symbol: str | None = None
+        
+        # MainEngine reference (optional, for order operations)
+        self._main_engine: object | None = None
+        
+        # Price precision (number of decimal places, 0 for integer, default 0 for MHImain)
+        self._price_precision: int = 0
 
         self._right_ix: int = 0                     # Index of most right data
         self._bar_count: int = self.MIN_BAR_COUNT   # Total bar visible in chart
@@ -111,6 +140,20 @@ class ChartWidget(pg.PlotWidget):
         # Add plot onto the layout
         self._layout.nextRow()
         self._layout.addItem(plot)
+        
+        # Initialize drag handler for first plot (main price chart)
+        if not self._price_line_drag_handler:
+            self._price_line_drag_handler = PriceLineDragHandler(plot)
+        
+        # Initialize drawing order controller for first plot
+        if not self._drawing_order_controller and self._first_plot:
+            self._drawing_order_controller = DrawingOrderController(
+                widget=self,
+                price_line_manager=self._price_line_manager,
+                drag_handler=self._price_line_drag_handler,
+                main_engine=self._main_engine,
+                vt_symbol=self._vt_symbol
+            )
 
     def add_item(
         self,
@@ -141,6 +184,205 @@ class ChartWidget(pg.PlotWidget):
         """
         return list(self._plots.values())
 
+    def get_price_line_manager(self) -> PriceLineManager:
+        """
+        Get price line manager instance.
+        """
+        return self._price_line_manager
+
+    def add_price_line(
+        self,
+        price: float,
+        line_type: str,
+        direction: str = "long",
+        plot_name: str | None = None,
+        movable: bool = False,
+        line_id: str | None = None
+    ) -> str:
+        """
+        Add a price line to the chart.
+
+        Args:
+            price: Price value for the line
+            line_type: Type of price line ("entry", "pending", "stop_loss", "take_profit", "preview")
+            direction: Trading direction ("long" or "short")
+            plot_name: Name of the plot to add the line to. If None, use first plot.
+            movable: Whether the line can be dragged
+            line_id: Optional custom line ID
+
+        Returns:
+            Line ID string
+        """
+        from .price_line import PriceLineType
+
+        # Convert string to enum
+        type_map = {
+            "entry": PriceLineType.ENTRY,
+            "pending": PriceLineType.PENDING,
+            "stop_loss": PriceLineType.STOP_LOSS,
+            "take_profit": PriceLineType.TAKE_PROFIT,
+            "preview": PriceLineType.PREVIEW
+        }
+        price_line_type = type_map.get(line_type.lower(), PriceLineType.PREVIEW)
+
+        # Get target plot
+        if plot_name is None:
+            plot = self._first_plot
+        else:
+            plot = self._plots.get(plot_name)
+
+        if plot is None:
+            raise ValueError(f"Plot '{plot_name}' not found")
+
+        # Create price line
+        line_id = self._price_line_manager.create_line(
+            price=price,
+            line_type=price_line_type,
+            direction=direction,
+            movable=movable,
+            line_id=line_id
+        )
+
+        # Add to plot
+        line = self._price_line_manager.get_line(line_id)
+        if line:
+            plot.addItem(line)
+
+        return line_id
+
+    def remove_price_line(self, line_id: str) -> bool:
+        """
+        Remove a price line from the chart.
+
+        Args:
+            line_id: Line ID to remove
+
+        Returns:
+            True if successful, False if line not found
+        """
+        # Unregister from breakthrough monitor
+        if self._breakthrough_monitor:
+            self._breakthrough_monitor.unregister_line(line_id)
+        
+        return self._price_line_manager.delete_line(line_id)
+    
+    def set_vt_symbol(self, vt_symbol: str) -> None:
+        """
+        Set VT symbol for the chart.
+
+        Args:
+            vt_symbol: VT symbol (e.g., "MHI2512.HKFE")
+        """
+        self._vt_symbol = vt_symbol
+        if self._drawing_order_controller:
+            self._drawing_order_controller.set_vt_symbol(vt_symbol)
+    
+    def set_main_engine(self, main_engine: object) -> None:
+        """
+        Set MainEngine instance for order operations.
+
+        Args:
+            main_engine: MainEngine instance
+        """
+        self._main_engine = main_engine
+        if self._drawing_order_controller:
+            self._drawing_order_controller.set_main_engine(main_engine)
+    
+    def get_drawing_order_controller(self) -> DrawingOrderController | None:
+        """
+        Get drawing order controller instance.
+
+        Returns:
+            DrawingOrderController instance or None
+        """
+        return self._drawing_order_controller
+    
+    def save_price_lines(self) -> bool:
+        """
+        Save all price lines to storage.
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self._vt_symbol:
+            return False
+        
+        try:
+            all_lines = self._price_line_manager.get_all_lines()
+            line_data_list = []
+            
+            for line_id, line in all_lines.items():
+                # Get order ID if linked
+                vt_orderid = None
+                if self._drawing_order_controller:
+                    vt_orderid = self._drawing_order_controller.get_order_id_for_line(line_id)
+                
+                line_data = PriceLineData(
+                    line_id=line_id,
+                    price=line.get_price(),
+                    line_type=line.get_line_type(),
+                    direction=line.get_direction(),
+                    vt_symbol=self._vt_symbol,
+                    vt_orderid=vt_orderid
+                )
+                line_data_list.append(line_data)
+            
+            return self._price_line_storage.save_lines(line_data_list, self._vt_symbol)
+        except Exception as e:
+            print(f"Error saving price lines: {e}")
+            return False
+    
+    def load_price_lines(self) -> bool:
+        """
+        Load price lines from storage.
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self._vt_symbol:
+            return False
+        
+        try:
+            line_data_list = self._price_line_storage.load_lines(self._vt_symbol)
+            
+            for line_data in line_data_list:
+                # Create price line
+                line_id = self.add_price_line(
+                    price=line_data.price,
+                    line_type=line_data.line_type.value,
+                    direction=line_data.direction,
+                    line_id=line_data.line_id,
+                    movable=(line_data.line_type == PriceLineType.PENDING)
+                )
+                
+                # Link to order if exists
+                if line_data.vt_orderid and self._drawing_order_controller:
+                    self._drawing_order_controller.link_line_to_order(line_id, line_data.vt_orderid)
+                
+                # Register for breakthrough monitoring if pending
+                if line_data.line_type == PriceLineType.PENDING and self._breakthrough_monitor:
+                    line = self._price_line_manager.get_line(line_id)
+                    if line:
+                        # Register with a default callback (can be customized)
+                        self._breakthrough_monitor.register_line(
+                            line_id, line, self._on_price_breakthrough
+                        )
+            
+            return True
+        except Exception as e:
+            print(f"Error loading price lines: {e}")
+            return False
+    
+    def _on_price_breakthrough(self, event) -> None:
+        """
+        Handle price breakthrough event.
+
+        Args:
+            event: BreakthroughEvent instance
+        """
+        # This is a default callback - can be overridden or extended
+        print(f"Price breakthrough detected: {event.line_id} at {event.current_price}")
+
     def clear_all(self) -> None:
         """
         Clear all data.
@@ -152,6 +394,13 @@ class ChartWidget(pg.PlotWidget):
 
         if self._cursor:
             self._cursor.clear_all()
+
+        # Clear all price lines
+        self._price_line_manager.clear_all()
+        
+        # Clear breakthrough monitor
+        if self._breakthrough_monitor:
+            self._breakthrough_monitor.clear()
 
     def update_history(self, history: list[BarData]) -> None:
         """
@@ -182,6 +431,11 @@ class ChartWidget(pg.PlotWidget):
         data_count = self._manager.get_count()
         if self._right_ix <= data_count and self._right_ix >= (data_count - self._bar_count / 2):
             self.move_to_right()
+        
+        # Update breakthrough monitor with bar data
+        if self._breakthrough_monitor:
+            all_lines = self._price_line_manager.get_all_lines()
+            self._breakthrough_monitor.update_bar(bar, all_lines)
 
     def _update_plot_limits(self) -> None:
         """
@@ -244,6 +498,12 @@ class ChartWidget(pg.PlotWidget):
         """
         Key = QtCore.Qt.Key
 
+        # Handle ESC key to cancel drag
+        if event.key() == Key.Key_Escape:
+            if self._price_line_drag_handler and self._price_line_drag_handler.cancel_drag():
+                event.accept()
+                return
+
         if event.key() == Key.Key_Left:
             self._on_key_left()
         elif event.key() == Key.Key_Right:
@@ -263,6 +523,457 @@ class ChartWidget(pg.PlotWidget):
             self._on_key_up()
         elif delta.y() < 0:
             self._on_key_down()
+
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
+        """
+        Handle mouse move event for price line hover detection and dragging.
+        """
+        # Check if in drawing mode - show preview line
+        if self._drawing_order_controller and self._drawing_order_controller.is_enabled():
+            if self._first_plot:
+                view_box = self._first_plot.getViewBox()
+                if view_box:
+                    scene_pos = self.mapToScene(event.pos())
+                    view_pos = view_box.mapSceneToView(scene_pos)
+                    price = view_pos.y()
+                    
+                    if price > 0:
+                        self._drawing_order_controller.update_preview_line(price)
+                    super().mouseMoveEvent(event)
+                    return
+
+        if not self._price_line_drag_handler or not self._first_plot:
+            super().mouseMoveEvent(event)
+            return
+
+        # Get scene position
+        scene_pos = self.mapToScene(event.pos())
+        
+        # Get all price lines
+        all_lines = list(self._price_line_manager.get_all_lines().values())
+        
+        # If dragging, update drag position
+        if self._price_line_drag_handler.is_dragging():
+            new_price = self._price_line_drag_handler.convert_scene_to_price(scene_pos)
+            if new_price is not None:
+                self._price_line_drag_handler.update_drag(new_price)
+                # 如果拖拽的是挂单线，实时更新关联的止损/止盈线
+                dragging_line = self._price_line_drag_handler.get_dragging_line()
+                if dragging_line:
+                    self._update_related_lines_on_drag(dragging_line, new_price)
+        else:
+            # Check for hover
+            hovered_line = self._price_line_drag_handler.find_line_near_point(
+                scene_pos, all_lines
+            )
+            
+            # Change cursor style
+            if hovered_line:
+                self.setCursor(QtCore.Qt.CursorShape.SizeVerCursor)
+            else:
+                self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+
+        super().mouseMoveEvent(event)
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
+        """
+        Handle mouse press event to start dragging price line or create order in drawing mode.
+        """
+        # Only handle left button
+        if event.button() != QtCore.Qt.MouseButton.LeftButton:
+            super().mousePressEvent(event)
+            return
+
+        if not self._price_line_drag_handler or not self._first_plot:
+            super().mousePressEvent(event)
+            return
+
+        # Get scene position
+        scene_pos = self.mapToScene(event.pos())
+        
+        # Get all price lines
+        all_lines = list(self._price_line_manager.get_all_lines().values())
+        
+        # Find line near click position (优先检查是否可以拖拽)
+        clicked_line = self._price_line_drag_handler.find_line_near_point(
+            scene_pos, all_lines
+        )
+        
+        # 如果点击的是可拖拽的价格线，优先处理拖拽
+        if clicked_line and clicked_line.movable:
+            self._price_line_drag_handler.start_drag(clicked_line)
+            event.accept()
+            return
+
+        # Check if in drawing mode (只有在没有点击到价格线时才处理画线)
+        if self._drawing_order_controller and self._drawing_order_controller.is_enabled():
+            # Handle drawing order mode
+            if self._first_plot:
+                # Get click price
+                view_box = self._first_plot.getViewBox()
+                if view_box:
+                    scene_pos = self.mapToScene(event.pos())
+                    view_pos = view_box.mapSceneToView(scene_pos)
+                    price = view_pos.y()
+                    
+                    if price > 0:
+                        # Show preview line
+                        self._drawing_order_controller.show_preview_line(price, "long")
+                        
+                        # Emit signal for order dialog (will be handled by parent widget)
+                        # For now, we'll create a callback mechanism
+                        if hasattr(self, '_on_drawing_click'):
+                            self._on_drawing_click(price)
+                        event.accept()
+                        return
+
+        super().mousePressEvent(event)
+    
+    def set_drawing_click_callback(self, callback) -> None:
+        """
+        Set callback for drawing mode click events.
+        
+        Args:
+            callback: Callback function(price: float) called when clicking in drawing mode
+        """
+        self._on_drawing_click = callback
+
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
+        """
+        Handle mouse release event to end dragging price line.
+        """
+        if self._price_line_drag_handler and self._price_line_drag_handler.is_dragging():
+            dragging_line = self._price_line_drag_handler.get_dragging_line()
+            final_price = self._price_line_drag_handler.end_drag()
+            
+            if dragging_line and final_price is not None:
+                # 检查拖拽的是挂单线还是止损/止盈线
+                from .price_line import PriceLineType
+                line_type = dragging_line.get_line_type()
+                
+                if line_type == PriceLineType.PENDING:
+                    # 如果拖拽的是挂单线，更新关联的止损/止盈线
+                    self._update_related_lines_on_drag_end(dragging_line, final_price)
+                elif line_type in (PriceLineType.STOP_LOSS, PriceLineType.TAKE_PROFIT):
+                    # 如果拖拽的是止损/止盈线，更新保存的点数
+                    self._update_points_on_line_drag(dragging_line, final_price, line_type)
+            
+            event.accept()
+            return
+
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QtGui.QMouseEvent) -> None:
+        """
+        Handle double click event for price line actions.
+        
+        - Double click pending line: Delete entire pending order
+        - Double click entry line: Close position
+        - Double click stop loss/take profit line: Delete the line
+        """
+        if not self._price_line_drag_handler or not self._first_plot:
+            super().mouseDoubleClickEvent(event)
+            return
+
+        # Get scene position
+        scene_pos = self.mapToScene(event.pos())
+        
+        # Get all price lines
+        all_lines = list(self._price_line_manager.get_all_lines().values())
+        
+        # Find line near click position
+        clicked_line = self._price_line_drag_handler.find_line_near_point(
+            scene_pos, all_lines
+        )
+        
+        if clicked_line:
+            line_type = clicked_line.get_line_type()
+            
+            # Find line ID in manager
+            line_id = None
+            for lid, line in self._price_line_manager.get_all_lines().items():
+                if line == clicked_line:
+                    line_id = lid
+                    break
+            
+            if line_id:
+                if line_type == PriceLineType.PENDING:
+                    # Double click pending line: Delete entire pending order with confirmation
+                    from vnpy.trader.ui import QtWidgets
+                    from vnpy.trader.locale import _
+                    
+                    reply = QtWidgets.QMessageBox.question(
+                        self,
+                        _("确认删除"),
+                        _("确定要删除挂单线吗？\n这将同时撤销关联的订单。"),
+                        QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+                        QtWidgets.QMessageBox.StandardButton.No
+                    )
+                    
+                    if reply == QtWidgets.QMessageBox.StandardButton.Yes:
+                        # Get order ID if linked
+                        vt_orderid = None
+                        if self._drawing_order_controller:
+                            vt_orderid = self._drawing_order_controller.get_order_id_for_line(line_id)
+                            
+                            # 删除关联的止损线和止盈线
+                            if hasattr(self._drawing_order_controller, '_pending_line_relations'):
+                                relations = self._drawing_order_controller._pending_line_relations.get(line_id)
+                                if relations:
+                                    # 删除止损线
+                                    stop_loss_info = relations.get("stop_loss")
+                                    if stop_loss_info and stop_loss_info.get("line_id"):
+                                        self._price_line_manager.delete_line(stop_loss_info["line_id"])
+                                    # 删除止盈线
+                                    take_profit_info = relations.get("take_profit")
+                                    if take_profit_info and take_profit_info.get("line_id"):
+                                        self._price_line_manager.delete_line(take_profit_info["line_id"])
+                                # 清理关联关系
+                                self._drawing_order_controller._pending_line_relations.pop(line_id, None)
+                            
+                            # 清理挂单参数（如果存在）
+                            if hasattr(self._drawing_order_controller, '_pending_order_params'):
+                                self._drawing_order_controller._pending_order_params.pop(line_id, None)
+                            
+                            # 取消注册价格突破监控
+                            if self._breakthrough_monitor:
+                                self._breakthrough_monitor.unregister_line(line_id)
+                            
+                            if vt_orderid:
+                                # Cancel order if exists
+                                # Note: This requires access to main_engine, which should be set via set_main_engine
+                                if self._main_engine:
+                                    try:
+                                        # Get order to cancel
+                                        order = self._main_engine.get_order(vt_orderid)
+                                        if order:
+                                            from vnpy.trader.object import CancelRequest
+                                            cancel_req = CancelRequest(
+                                                orderid=order.orderid,
+                                                symbol=order.symbol,
+                                                exchange=order.exchange
+                                            )
+                                            self._main_engine.cancel_order(cancel_req, order.gateway_name)
+                                    except Exception as e:
+                                        print(f"Error canceling order {vt_orderid}: {e}")
+                            
+                            # Remove line from controller (this will also remove mappings)
+                            if vt_orderid:
+                                self._drawing_order_controller.remove_order_line(vt_orderid)
+                            else:
+                                # If no order linked, just remove the line
+                                self._price_line_manager.delete_line(line_id)
+                        else:
+                            # No controller, just remove the line
+                            self._price_line_manager.delete_line(line_id)
+                elif line_type == PriceLineType.ENTRY:
+                    # Double click entry line: Close position
+                    # TODO: In Phase 3, this will trigger close position order
+                    pass
+                elif line_type in (PriceLineType.STOP_LOSS, PriceLineType.TAKE_PROFIT):
+                    # Double click stop loss/take profit: Delete the line
+                    self._price_line_manager.delete_line(line_id)
+            
+            event.accept()
+            return
+
+        super().mouseDoubleClickEvent(event)
+    
+    def _update_related_lines_on_drag(self, dragging_line, new_price: float) -> None:
+        """
+        拖拽挂单线时，实时更新关联的止损/止盈线位置。
+        
+        Args:
+            dragging_line: 正在拖拽的价格线
+            new_price: 新的价格
+        """
+        if not self._drawing_order_controller:
+            return
+        
+        # 检查是否是挂单线
+        from .price_line import PriceLineType
+        if dragging_line.get_line_type() != PriceLineType.PENDING:
+            return
+        
+        # 找到挂单线的ID
+        line_id = None
+        for lid, line in self._price_line_manager.get_all_lines().items():
+            if line == dragging_line:
+                line_id = lid
+                break
+        
+        if not line_id:
+            return
+        
+        # 获取关联关系
+        if not hasattr(self._drawing_order_controller, '_pending_line_relations'):
+            return
+        
+        relations = self._drawing_order_controller._pending_line_relations.get(line_id)
+        if not relations:
+            return
+        
+        # 获取订单参数以获取方向和pricetick
+        if not hasattr(self._drawing_order_controller, '_pending_order_params'):
+            return
+        
+        order_data = self._drawing_order_controller._pending_order_params.get(line_id)
+        if not order_data:
+            return
+        
+        params = order_data.get("params", {})
+        contract = order_data.get("contract")
+        if not contract:
+            return
+        
+        direction = params.get("direction")
+        # 对于 MHImain，最小变动单位是 1 个点
+        # 如果合约数据中的 pricetick 不正确，使用默认值 1.0
+        pricetick = contract.pricetick if contract.pricetick > 0 else 1.0
+        pricetick = max(pricetick, 1.0)  # 确保至少为 1.0
+        
+        # 判断方向：Direction.LONG 或 "多" 表示做多
+        from vnpy.trader.constant import Direction
+        is_long = (direction == Direction.LONG)
+        
+        # 更新止损线
+        stop_loss_info = relations.get("stop_loss")
+        if stop_loss_info:
+            stop_loss_line_id = stop_loss_info.get("line_id")
+            stop_loss_points = stop_loss_info.get("points", 50)
+            if stop_loss_line_id:
+                stop_loss_line = self._price_line_manager.get_line(stop_loss_line_id)
+                if stop_loss_line:
+                    # 根据新价格和点数计算止损价格（使用pricetick）
+                    if is_long:
+                        new_stop_loss_price = new_price - stop_loss_points * pricetick
+                    else:
+                        new_stop_loss_price = new_price + stop_loss_points * pricetick
+                    # 获取价格精度
+                    price_precision = getattr(self, '_price_precision', 0)
+                    stop_loss_line.set_price(new_stop_loss_price, price_precision)
+        
+        # 更新止盈线
+        take_profit_info = relations.get("take_profit")
+        if take_profit_info:
+            take_profit_line_id = take_profit_info.get("line_id")
+            take_profit_points = take_profit_info.get("points", 50)
+            if take_profit_line_id:
+                take_profit_line = self._price_line_manager.get_line(take_profit_line_id)
+                if take_profit_line:
+                    # 根据新价格和点数计算止盈价格（使用pricetick）
+                    if is_long:
+                        new_take_profit_price = new_price + take_profit_points * pricetick
+                    else:
+                        new_take_profit_price = new_price - take_profit_points * pricetick
+                    # 获取价格精度
+                    price_precision = getattr(self, '_price_precision', 0)
+                    take_profit_line.set_price(new_take_profit_price, price_precision)
+    
+    def _update_related_lines_on_drag_end(self, dragging_line, final_price: float) -> None:
+        """
+        拖拽挂单线结束时，最终更新关联的止损/止盈线位置。
+        
+        Args:
+            dragging_line: 正在拖拽的价格线
+            final_price: 最终价格
+        """
+        # 使用相同的逻辑更新
+        self._update_related_lines_on_drag(dragging_line, final_price)
+    
+    def _update_points_on_line_drag(self, dragged_line, new_price: float, line_type) -> None:
+        """
+        当单独拖拽止损线或止盈线时，根据新价格反推点数并更新保存。
+        
+        Args:
+            dragged_line: 被拖拽的止损/止盈线
+            new_price: 新的价格
+            line_type: 价格线类型（STOP_LOSS 或 TAKE_PROFIT）
+        """
+        if not self._drawing_order_controller:
+            return
+        
+        # 找到被拖拽的线的ID
+        dragged_line_id = None
+        for lid, line in self._price_line_manager.get_all_lines().items():
+            if line == dragged_line:
+                dragged_line_id = lid
+                break
+        
+        if not dragged_line_id:
+            return
+        
+        # 反向查找：找到包含此止损/止盈线的挂单线
+        if not hasattr(self._drawing_order_controller, '_pending_line_relations'):
+            return
+        
+        pending_line_id = None
+        relation_key = None
+        
+        # 遍历所有挂单线的关联关系，找到包含此止损/止盈线的挂单线
+        for pid, relations in self._drawing_order_controller._pending_line_relations.items():
+            stop_loss_info = relations.get("stop_loss")
+            take_profit_info = relations.get("take_profit")
+            
+            if stop_loss_info and stop_loss_info.get("line_id") == dragged_line_id:
+                pending_line_id = pid
+                relation_key = "stop_loss"
+                break
+            elif take_profit_info and take_profit_info.get("line_id") == dragged_line_id:
+                pending_line_id = pid
+                relation_key = "take_profit"
+                break
+        
+        if not pending_line_id or not relation_key:
+            return
+        
+        # 获取挂单线的价格和订单参数
+        pending_line = self._price_line_manager.get_line(pending_line_id)
+        if not pending_line:
+            return
+        
+        pending_price = pending_line.get_price()
+        
+        # 获取订单参数以获取方向和pricetick
+        if not hasattr(self._drawing_order_controller, '_pending_order_params'):
+            return
+        
+        order_data = self._drawing_order_controller._pending_order_params.get(pending_line_id)
+        if not order_data:
+            return
+        
+        params = order_data.get("params", {})
+        contract = order_data.get("contract")
+        if not contract:
+            return
+        
+        direction = params.get("direction")
+        # 对于 MHImain，最小变动单位是 1 个点
+        pricetick = contract.pricetick if contract.pricetick > 0 else 1.0
+        pricetick = max(pricetick, 1.0)  # 确保至少为 1.0
+        
+        # 判断方向：Direction.LONG 或 "多" 表示做多
+        from vnpy.trader.constant import Direction
+        is_long = (direction == Direction.LONG)
+        
+        # 根据新价格和挂单线价格，反推点数
+        price_diff = abs(new_price - pending_price)
+        new_points = int(round(price_diff / pricetick))
+        
+        # 确保点数至少为1
+        if new_points < 1:
+            new_points = 1
+        
+        # 更新保存的点数
+        relations = self._drawing_order_controller._pending_line_relations.get(pending_line_id)
+        if relations and relation_key in relations:
+            relations[relation_key]["points"] = new_points
+            # 记录日志（如果有main_engine的话）
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log(
+                    f"更新{relation_key}点数: 挂单价格={pending_price:.2f}, 新价格={new_price:.2f}, "
+                    f"价格差={price_diff:.2f}, pricetick={pricetick}, 新点数={new_points}"
+                )
 
     def _on_key_left(self) -> None:
         """

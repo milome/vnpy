@@ -145,6 +145,10 @@ class ToastNotification(QtWidgets.QLabel):
             parent = self.parent()
             parent_rect = parent.geometry()
             
+            # 确保父窗口已显示
+            if not parent.isVisible():
+                parent.show()
+            
             # 水平居中
             x = parent_rect.x() + (parent_rect.width() - self.width()) // 2
             
@@ -155,6 +159,16 @@ class ToastNotification(QtWidgets.QLabel):
                 # 顶部（紧贴标题栏下方，不遮挡内容）
                 y = parent_rect.y() + 35  # 紧贴标题栏
             
+            self.move(x, y)
+        else:
+            # 如果没有父窗口，使用屏幕坐标
+            from PySide6 import QtWidgets
+            screen = QtWidgets.QApplication.primaryScreen().geometry()
+            x = (screen.width() - self.width()) // 2
+            if position == "center":
+                y = (screen.height() - self.height()) // 2
+            else:
+                y = 50  # 顶部
             self.move(x, y)
         
         # 显示并开始动画
@@ -351,6 +365,60 @@ class MsgCell(BaseCell):
         self.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
 
 
+class CommissionCell(BaseCell):
+    """
+    Cell used for showing commission/fee data from TradeData.extra field.
+    """
+
+    def __init__(self, content: Any, data: Any) -> None:
+        """"""
+        # content参数会被忽略，因为我们从data.extra中读取
+        super().__init__("", data)
+        self.set_content(content, data)
+
+    def set_content(self, content: Any, data: Any) -> None:
+        """
+        Extract commission and fee from data.extra field.
+        If not found, display "无".
+        """
+        if not hasattr(data, 'extra') or data.extra is None:
+            self.setText("无")
+            return
+        
+        # 尝试从extra中获取费用信息
+        commission = data.extra.get("commission", 0)
+        fee = data.extra.get("fee", 0)
+        cost = data.extra.get("cost", 0)
+        
+        # 优先使用commission，其次fee，最后cost
+        total_fee = 0
+        if commission:
+            total_fee = float(commission)
+        elif fee:
+            total_fee = float(fee)
+        elif cost:
+            total_fee = float(cost)
+        
+        # 如果都没有，尝试中文字段
+        if total_fee == 0:
+            commission_cn = data.extra.get("佣金", 0)
+            fee_cn = data.extra.get("费用", 0)
+            cost_cn = data.extra.get("手续费", 0)
+            
+            if commission_cn:
+                total_fee = float(commission_cn)
+            elif fee_cn:
+                total_fee = float(fee_cn)
+            elif cost_cn:
+                total_fee = float(cost_cn)
+        
+        if total_fee > 0:
+            # 格式化显示，保留2位小数
+            self.setText(f"{total_fee:.2f}")
+        else:
+            self.setText("无")
+
+
 class BaseMonitor(QtWidgets.QTableWidget):
     """
     Monitor data update.
@@ -451,7 +519,20 @@ class BaseMonitor(QtWidgets.QTableWidget):
         for column, header in enumerate(self.headers.keys()):
             setting: dict = self.headers[header]
 
-            content = data.__getattribute__(header)
+            # 特殊处理：如果header是"commission"且使用CommissionCell，从extra字段读取
+            if header == "commission" and setting["cell"] == CommissionCell:
+                content = None  # CommissionCell会从data.extra中读取，content参数会被忽略
+            else:
+                # 尝试获取属性，如果不存在则使用getattr的默认值
+                try:
+                    content = data.__getattribute__(header)
+                except AttributeError:
+                    # 如果属性不存在，尝试从extra字段获取
+                    if hasattr(data, 'extra') and data.extra and header in data.extra:
+                        content = data.extra[header]
+                    else:
+                        content = None
+            
             cell: QtWidgets.QTableWidgetItem = setting["cell"](content, data)
             self.setItem(0, column, cell)
 
@@ -470,7 +551,19 @@ class BaseMonitor(QtWidgets.QTableWidget):
         row_cells = self.cells[key]
 
         for header, cell in row_cells.items():
-            content = data.__getattribute__(header)
+            # 特殊处理：如果header是"commission"且使用CommissionCell，从extra字段读取
+            if header == "commission" and isinstance(cell, CommissionCell):
+                content = None  # CommissionCell会从data.extra中读取，content参数会被忽略
+            else:
+                # 尝试获取属性
+                try:
+                    content = data.__getattribute__(header)
+                except AttributeError:
+                    # 如果属性不存在，尝试从extra字段获取
+                    if hasattr(data, 'extra') and data.extra and header in data.extra:
+                        content = data.extra[header]
+                    else:
+                        content = None
             cell.set_content(content, data)
 
     def resize_columns(self) -> None:
@@ -590,6 +683,7 @@ class TradeMonitor(BaseMonitor):
         "offset": {"display": _("开平"), "cell": EnumCell, "update": False},
         "price": {"display": _("价格"), "cell": BaseCell, "update": False},
         "volume": {"display": _("数量"), "cell": BaseCell, "update": False},
+        "commission": {"display": _("佣金手续费"), "cell": CommissionCell, "update": False},
         "datetime": {"display": _("时间"), "cell": TimeCell, "update": False},
         "gateway_name": {"display": _("接口"), "cell": BaseCell, "update": False},
     }
@@ -2060,6 +2154,7 @@ class ChartWindow(QtWidgets.QWidget):
     def init_ui(self) -> None:
         """初始化界面"""
         from vnpy.chart import ChartWidget, CandleItem, VolumeItem
+        from vnpy.chart.order_dialog import OrderDialog
         
         self.setWindowTitle(_("K线图表"))
         self.setWindowFlags(
@@ -2075,6 +2170,12 @@ class ChartWindow(QtWidgets.QWidget):
         
         self.switch_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("切换"))
         self.switch_button.clicked.connect(self.switch_chart)
+        
+        # 画线交易功能按钮
+        self.drawing_mode_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("画线下单"))
+        self.drawing_mode_button.setCheckable(True)
+        self.drawing_mode_button.clicked.connect(self.toggle_drawing_mode)
+        self.drawing_mode_button.setToolTip(_("启用画线下单模式：在图表上点击价格位置创建订单"))
         
         # 周期选择下拉框
         self.interval_combo: QtWidgets.QComboBox = QtWidgets.QComboBox()
@@ -2153,6 +2254,7 @@ class ChartWindow(QtWidgets.QWidget):
         hbox1.addWidget(self.csv_button)
         hbox1.addWidget(self.csv_path_label)
         hbox1.addWidget(self.switch_button)
+        hbox1.addWidget(self.drawing_mode_button)
         
         # 顶部布局 - 第二行：时间范围选择（结束时间默认为最新）
         hbox2: QtWidgets.QHBoxLayout = QtWidgets.QHBoxLayout()
@@ -2175,6 +2277,12 @@ class ChartWindow(QtWidgets.QWidget):
         self.chart.add_item(CandleItem, "candle", "candle")
         self.chart.add_item(VolumeItem, "volume", "volume")
         self.chart.add_cursor()
+        
+        # 设置 MainEngine 和事件监听
+        self.chart.set_main_engine(self.main_engine)
+        
+        # 设置画线模式点击回调
+        self.chart.set_drawing_click_callback(self._on_drawing_click)
         
         # 时间滚动条（横向）
         self.time_slider: QtWidgets.QSlider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
@@ -2236,6 +2344,10 @@ class ChartWindow(QtWidgets.QWidget):
         self.signal_tick.connect(self.process_tick_event)
         self.signal_history.connect(self.process_history_data)
         self.event_engine.register(EVENT_TICK, self.signal_tick.emit)
+        
+        # 注册订单事件（用于画线交易功能）
+        from vnpy.trader.event import EVENT_ORDER
+        self.event_engine.register(EVENT_ORDER, self.process_order_event)
     
     def on_interval_changed(self, text: str) -> None:
         """周期选择改变时的处理"""
@@ -2445,6 +2557,9 @@ class ChartWindow(QtWidgets.QWidget):
         # 更新状态
         self.status_label.setText(_("正在加载 {} 的历史数据...").format(vt_symbol))
         
+        # 设置图表的 VT symbol（用于画线交易功能）
+        self.chart.set_vt_symbol(vt_symbol)
+        
         # 加载历史K线数据（最近7天的1分钟数据）
         self.load_history_data(vt_symbol)
         
@@ -2474,6 +2589,10 @@ class ChartWindow(QtWidgets.QWidget):
             self._gap_info = ""
             
             self.chart.clear_all()
+            
+            # 设置图表的 VT symbol（用于画线交易功能）
+            self.chart.set_vt_symbol(self.current_vt_symbol)
+            
             self.status_label.setStyleSheet("color: #888; font-size: 12px;")
             self.status_label.setText(_("正在刷新 {} 的数据...").format(self.current_vt_symbol))
             self.load_history_data(self.current_vt_symbol)
@@ -4248,6 +4367,398 @@ class ChartWindow(QtWidgets.QWidget):
         """外部设置合约代码"""
         self.symbol_line.setText(vt_symbol)
         self.switch_chart()
+    
+    def process_tick_event(self, event: Event) -> None:
+        """处理Tick事件"""
+        from vnpy.trader.object import TickData
+        from copy import copy
+        
+        tick: TickData = event.data
+        if tick.vt_symbol != self.current_vt_symbol:
+            return
+        
+        # 更新K线生成器
+        if self.bg:
+            self.bg.update_tick(tick)
+    
+    def process_history_data(self, history: list) -> None:
+        """处理历史数据加载完成事件"""
+        from vnpy.trader.object import BarData
+        
+        if not history:
+            self.status_label.setText(_("未加载到数据"))
+            return
+        
+        self.history_data = history
+        self.history_loaded = True
+        
+        # 更新图表
+        self.chart.update_history(history)
+        
+        # 更新滚动条范围
+        if history:
+            first_bar: BarData = history[0]
+            last_bar: BarData = history[-1]
+            self.time_start_label.setText(first_bar.datetime.strftime("%m-%d %H:%M"))
+            self.time_end_label.setText(last_bar.datetime.strftime("%m-%d %H:%M"))
+        
+        # 跳转到最新
+        self.goto_latest()
+        
+        # 更新状态
+        interval_name = self.interval_combo.currentText()
+        self.status_label.setText(
+            _("已加载 {} 根K线 | {} | {}").format(
+                len(history),
+                self.current_vt_symbol,
+                interval_name
+            )
+        )
+    
+    def subscribe_tick(self, vt_symbol: str) -> None:
+        """订阅行情数据"""
+        from vnpy.trader.object import SubscribeRequest
+        from vnpy.trader.utility import extract_vt_symbol
+        
+        try:
+            symbol, exchange = extract_vt_symbol(vt_symbol)
+            contract = self.main_engine.get_contract(vt_symbol)
+            if contract:
+                req = SubscribeRequest(symbol, exchange)
+                self.main_engine.subscribe(req, contract.gateway_name)
+                
+                # 注册tick事件处理（用于价格突破监控）
+                if not hasattr(self, '_tick_event_registered'):
+                    self.event_engine.register(EVENT_TICK, self.process_tick_event)
+                    self._tick_event_registered = True
+        except Exception as e:
+            self.main_engine.write_log(f"订阅行情失败: {e}")
+    
+    def on_bar(self, bar: "BarData") -> None:
+        """K线合成回调"""
+        from copy import copy
+        from vnpy.trader.object import BarData
+        
+        # 更新图表
+        bar_copy: BarData = copy(bar)
+        bar_copy.datetime = bar_copy.datetime.replace(second=0, microsecond=0)
+        self.chart.update_bar(bar_copy)
+        
+        # 保存价格线（自动保存）
+        self.chart.save_price_lines()
+    
+    def process_tick_event(self, event: Event) -> None:
+        """处理Tick事件，更新价格突破监控"""
+        from vnpy.trader.object import TickData
+        
+        tick: TickData = event.data
+        # 只处理当前图表的合约
+        if tick.vt_symbol != self.current_vt_symbol:
+            return
+        
+        # 更新价格突破监控
+        if self.chart and self.chart._breakthrough_monitor:
+            all_lines = self.chart._price_line_manager.get_all_lines()
+            self.chart._breakthrough_monitor.update_tick(tick, all_lines)
+    
+    def process_order_event(self, event: Event) -> None:
+        """处理订单事件，转发给图表的DrawingOrderController"""
+        from vnpy.trader.object import OrderData
+        
+        order: OrderData = event.data
+        if self.chart and self.chart.get_drawing_order_controller():
+            self.chart.get_drawing_order_controller().update_line_from_order(order)
+    
+    def toggle_drawing_mode(self) -> None:
+        """切换画线下单模式"""
+        if not self.chart:
+            self.drawing_mode_button.setChecked(False)
+            return
+
+        controller = self.chart.get_drawing_order_controller()
+        if not controller:
+            self.drawing_mode_button.setChecked(False)
+            return
+
+        if self.drawing_mode_button.isChecked():
+            controller.enable()
+            self.drawing_mode_button.setText(_("画线下单 (已启用)"))
+            self.drawing_mode_button.setStyleSheet("background-color: #4CAF50; color: white;")
+        else:
+            controller.disable()
+            self.drawing_mode_button.setText(_("画线下单"))
+            self.drawing_mode_button.setStyleSheet("")
+    
+    def _on_drawing_click(self, price: float) -> None:
+        """处理画线模式下的点击事件（用于画线下单）"""
+        from vnpy.chart.order_dialog import OrderDialog
+        
+        if not self.chart:
+            return
+
+        # 获取合约信息以获取最小变动单位和价格精度
+        vt_symbol = self.current_vt_symbol
+        pricetick = 1.0  # 默认值（MHImain 的最小变动单位是 1 个点）
+        size = 1.0  # 默认值
+        price_precision = 0  # 默认整数显示（MHImain）
+        
+        if vt_symbol:
+            contract = self.main_engine.get_contract(vt_symbol)
+            if contract:
+                # 对于 MHImain，最小变动单位是 1 个点
+                # 如果合约数据中的 pricetick 不正确，使用默认值 1.0
+                pricetick = contract.pricetick if contract.pricetick > 0 else 1.0
+                # 确保 pricetick 至少为 1.0（MHImain 的最小变动单位）
+                pricetick = max(pricetick, 1.0)
+                size = contract.size  # 合约乘数（一跳的价格数）
+                self.main_engine.write_log(f"[画线下单] 合约信息: {vt_symbol}, pricetick={pricetick}, size={size}")
+                
+                # 尝试从 FUTU gateway 查询价格精度
+                gateway_name = contract.gateway_name if hasattr(contract, 'gateway_name') else None
+                if gateway_name:
+                    gateway = self.main_engine.get_gateway(gateway_name)
+                    if gateway and hasattr(gateway, 'quote_ctx'):
+                        try:
+                            from vnpy_futu.vnpy_futu.futu_utils import convert_symbol_vt2futu
+                            from vnpy.trader.constant import Exchange
+                            futu_symbol = convert_symbol_vt2futu(vt_symbol.split('.')[0], Exchange(contract.exchange.value))
+                            ret, data = gateway.quote_ctx.get_future_info(futu_symbol)
+                            if ret == 0 and data is not None and not data.empty:
+                                # 从 FUTU API 获取 price_tick（如果存在）
+                                if 'price_tick' in data.columns:
+                                    futu_pricetick = float(data['price_tick'].iloc[0])
+                                    if futu_pricetick > 0:
+                                        pricetick = futu_pricetick
+                                        self.main_engine.write_log(f"[画线下单] 从FUTU API查询到pricetick: {pricetick}")
+                                
+                                # 根据 pricetick 计算价格精度
+                                # 如果 pricetick >= 1.0，显示整数；否则显示相应的小数位数
+                                if pricetick >= 1.0:
+                                    price_precision = 0  # 整数显示
+                                else:
+                                    # 计算需要的小数位数
+                                    price_precision = len(str(pricetick).split('.')[-1].rstrip('0'))
+                                    if price_precision == 0:
+                                        price_precision = 0  # 整数
+                                    else:
+                                        price_precision = min(price_precision, 4)  # 最多4位小数
+                                
+                                self.main_engine.write_log(f"[画线下单] 价格精度: {price_precision} (pricetick={pricetick})")
+                        except Exception as e:
+                            self.main_engine.write_log(f"[画线下单] 查询FUTU API失败: {str(e)}")
+
+        # 显示下单对话框
+        dialog = OrderDialog(price=price, direction="long", pricetick=pricetick, size=size, parent=self.chart)
+        # 设置价格精度
+        dialog._price_precision = price_precision
+        if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            params = dialog.get_order_params()
+            self._create_pending_order_line(params)
+        else:
+            # 取消时隐藏预览线
+            controller = self.chart.get_drawing_order_controller()
+            if controller:
+                controller.disable()
+                controller.enable()  # 重新启用以保持画线模式
+    
+    def _create_pending_order_line(self, params: dict) -> None:
+        """从画线模式创建挂单线（不立即下单，等待价格突破触发）"""
+        from vnpy.trader.utility import extract_vt_symbol
+        
+        vt_symbol = self.current_vt_symbol
+        if not vt_symbol:
+            return
+
+        contract = self.main_engine.get_contract(vt_symbol)
+        if not contract:
+            self.main_engine.write_log(f"合约 {vt_symbol} 未找到，无法创建挂单线")
+            return
+
+        # 添加挂单线到图表
+        controller = self.chart.get_drawing_order_controller()
+        if not controller:
+            return
+            
+        line_id = controller.create_pending_order_line(
+            price=params["price"],
+            direction=params["direction"].value
+        )
+        
+        # 存储订单参数到挂单线（用于价格突破时下单）
+        # 使用 controller 的额外存储来保存订单参数
+        if not hasattr(controller, '_pending_order_params'):
+            controller._pending_order_params = {}
+        if not hasattr(controller, '_pending_line_relations'):
+            controller._pending_line_relations = {}  # 挂单线ID -> [止损线ID, 止盈线ID]
+        
+        controller._pending_order_params[line_id] = {
+            "params": params,
+            "vt_symbol": vt_symbol,
+            "contract": contract
+        }
+        
+        # 初始化关联关系（存储止损/止盈线ID和点数信息）
+        controller._pending_line_relations[line_id] = {
+            "stop_loss": None,  # {"line_id": str, "points": int}
+            "take_profit": None  # {"line_id": str, "points": int}
+        }
+        
+        # 注册到价格突破监控
+        line = self.chart._price_line_manager.get_line(line_id)
+        if line and self.chart._breakthrough_monitor:
+            self.chart._breakthrough_monitor.register_line(
+                line_id, 
+                line, 
+                lambda event: self._on_price_breakthrough(event, controller)
+            )
+        
+        # 获取价格精度并设置到chart
+        price_precision = params.get("price_precision", 0)
+        self.chart._price_precision = price_precision
+        
+        # 更新挂单线的价格精度
+        line = self.chart._price_line_manager.get_line(line_id)
+        if line:
+            line.set_price_precision(price_precision)
+        
+        # 格式化价格显示
+        if price_precision == 0:
+            price_str = f"{int(params['price'])}"
+        else:
+            price_str = f"{params['price']:.{price_precision}f}"
+        
+        self.main_engine.write_log(
+            f"创建挂单线: {vt_symbol} {params['direction'].value} "
+            f"{params['volume']}@{price_str} (等待价格突破触发)"
+        )
+        
+        # 如果设置了止损，创建止损线
+        stop_loss_price = params.get("stop_loss")
+        if stop_loss_price is not None and stop_loss_price > 0:
+            from vnpy.chart.price_line import PriceLineType
+            # 获取方向字符串
+            direction_str = params["direction"].value if hasattr(params["direction"], "value") else str(params["direction"])
+            # 获取价格精度（从chart获取，如果chart有设置的话）
+            price_precision = getattr(self.chart, '_price_precision', 0)
+            stop_loss_line_id = self.chart._price_line_manager.create_line(
+                price=stop_loss_price,
+                line_type=PriceLineType.STOP_LOSS,
+                direction=direction_str,
+                movable=True,
+                price_precision=price_precision
+            )
+            stop_loss_line = self.chart._price_line_manager.get_line(stop_loss_line_id)
+            if stop_loss_line and self.chart._first_plot:
+                self.chart._first_plot.addItem(stop_loss_line)
+                # 建立关联关系（保存止损线ID和点数）
+                stop_loss_points = params.get("stop_loss_points", 50)
+                controller._pending_line_relations[line_id]["stop_loss"] = {
+                    "line_id": stop_loss_line_id,
+                    "points": stop_loss_points
+                }
+                # 添加详细日志
+                direction_str = params["direction"].value if hasattr(params["direction"], "value") else str(params["direction"])
+                order_price = params.get("price", 0)
+                # 格式化价格显示
+                price_precision = getattr(self.chart, '_price_precision', 0)
+                if price_precision == 0:
+                    price_str = f"{int(stop_loss_price)}"
+                    order_price_str = f"{int(order_price)}"
+                else:
+                    price_str = f"{stop_loss_price:.{price_precision}f}"
+                    order_price_str = f"{order_price:.{price_precision}f}"
+                
+                self.main_engine.write_log(
+                    f"创建止损线: {price_str} (关联挂单线: {line_id}, 点数: {stop_loss_points}, "
+                    f"订单价格: {order_price_str}, 方向: {direction_str}, size: {contract.size if contract else 'N/A'})"
+                )
+        
+        # 如果设置了止盈，创建止盈线
+        take_profit_price = params.get("take_profit")
+        if take_profit_price is not None and take_profit_price > 0:
+            from vnpy.chart.price_line import PriceLineType
+            # 获取方向字符串
+            direction_str = params["direction"].value if hasattr(params["direction"], "value") else str(params["direction"])
+            # 获取价格精度（从chart获取，如果chart有设置的话）
+            price_precision = getattr(self.chart, '_price_precision', 0)
+            take_profit_line_id = self.chart._price_line_manager.create_line(
+                price=take_profit_price,
+                line_type=PriceLineType.TAKE_PROFIT,
+                direction=direction_str,
+                movable=True,
+                price_precision=price_precision
+            )
+            take_profit_line = self.chart._price_line_manager.get_line(take_profit_line_id)
+            if take_profit_line and self.chart._first_plot:
+                self.chart._first_plot.addItem(take_profit_line)
+                # 建立关联关系（保存止盈线ID和点数）
+                take_profit_points = params.get("take_profit_points", 50)
+                controller._pending_line_relations[line_id]["take_profit"] = {
+                    "line_id": take_profit_line_id,
+                    "points": take_profit_points
+                }
+                # 添加详细日志
+                order_price = params.get("price", 0)
+                # 格式化价格显示
+                price_precision = getattr(self.chart, '_price_precision', 0)
+                if price_precision == 0:
+                    price_str = f"{int(take_profit_price)}"
+                    order_price_str = f"{int(order_price)}"
+                else:
+                    price_str = f"{take_profit_price:.{price_precision}f}"
+                    order_price_str = f"{order_price:.{price_precision}f}"
+                
+                self.main_engine.write_log(
+                    f"创建止盈线: {price_str} (关联挂单线: {line_id}, 点数: {take_profit_points}, "
+                    f"订单价格: {order_price_str}, 方向: {direction_str}, size: {contract.size if contract else 'N/A'})"
+                )
+    
+    def _on_price_breakthrough(self, event, controller) -> None:
+        """处理价格突破事件，触发下单"""
+        from vnpy.chart.price_breakthrough import BreakthroughEvent
+        from vnpy.trader.object import OrderRequest
+        from vnpy.trader.utility import extract_vt_symbol
+        
+        if not hasattr(controller, '_pending_order_params'):
+            return
+            
+        line_id = event.line_id
+        if line_id not in controller._pending_order_params:
+            return
+        
+        order_data = controller._pending_order_params[line_id]
+        params = order_data["params"]
+        vt_symbol = order_data["vt_symbol"]
+        contract = order_data["contract"]
+        
+        # 创建订单请求
+        symbol, exchange = extract_vt_symbol(vt_symbol)
+        req = OrderRequest(
+            symbol=symbol,
+            exchange=exchange,
+            direction=params["direction"],
+            type=OrderType.LIMIT,  # 画线下单使用限价单
+            volume=params["volume"],
+            price=params["price"],
+            offset=params["offset"]
+        )
+
+        # 发送订单
+        vt_orderid = self.main_engine.send_order(req, contract.gateway_name)
+        if vt_orderid:
+            self.main_engine.write_log(
+                f"价格突破触发下单: {vt_symbol} {params['direction'].value} "
+                f"{params['volume']}@{params['price']} (订单ID: {vt_orderid})"
+            )
+            # 关联订单ID和价格线
+            controller.link_line_to_order(line_id, vt_orderid)
+            # 移除挂单参数（已下单）
+            del controller._pending_order_params[line_id]
+            # 取消注册价格突破监控（已触发）
+            if self.chart._breakthrough_monitor:
+                self.chart._breakthrough_monitor.unregister_line(line_id)
+        else:
+            self.main_engine.write_log(f"价格突破触发下单失败: {vt_symbol}")
     
     def show(self) -> None:
         """显示窗口"""
