@@ -1497,24 +1497,25 @@ class TradingWidget(QtWidgets.QWidget):
         """
         Send new order manually.
         """
-        symbol: str = str(self.symbol_line.text())
+        # ✅ 性能优化：Qt组件已返回str类型，移除不必要的str()转换
+        symbol = self.symbol_line.text()
         if not symbol:
             QtWidgets.QMessageBox.critical(self, _("委托失败"), _("请输入合约代码"))
             return
 
-        volume_text: str = str(self.volume_line.text())
+        volume_text = self.volume_line.text()
         if not volume_text:
             QtWidgets.QMessageBox.critical(self, _("委托失败"), _("请输入委托数量"))
             return
         volume: float = float(volume_text)
 
-        price_text: str = str(self.price_line.text())
-        order_type = OrderType(str(self.order_type_combo.currentText()))
+        price_text = self.price_line.text()
+        order_type = OrderType(self.order_type_combo.currentText())
 
         # 确保vt_symbol已设置
         if not self.vt_symbol:
             # 尝试从symbol和exchange生成vt_symbol
-            exchange_value: str = str(self.exchange_combo.currentText())
+            exchange_value = self.exchange_combo.currentText()
             if symbol and exchange_value:
                 self.vt_symbol = f"{symbol}.{exchange_value}"
             else:
@@ -1524,7 +1525,7 @@ class TradingWidget(QtWidgets.QWidget):
         # 获取最新行情数据（用于市价单和OPPONENT订单）
         tick_data = self.main_engine.get_tick(self.vt_symbol)
 
-        direction = Direction(str(self.direction_combo.currentText()))
+        direction = Direction(self.direction_combo.currentText())
 
         # 根据订单类型确定价格
         if order_type == OrderType.OVER.value:
@@ -1658,12 +1659,12 @@ class TradingWidget(QtWidgets.QWidget):
 
         req: OrderRequest = OrderRequest(
             symbol=symbol,
-            exchange=Exchange(str(self.exchange_combo.currentText())),
-            direction=Direction(str(self.direction_combo.currentText())),
+            exchange=Exchange(self.exchange_combo.currentText()),
+            direction=Direction(self.direction_combo.currentText()),
             type=order_type,  # Use pre-calculated order_type
             volume=volume,
             price=price,
-            offset=Offset(str(self.offset_combo.currentText())),
+            offset=Offset(self.offset_combo.currentText()),
             reference=reference
         )
 
@@ -1675,7 +1676,7 @@ class TradingWidget(QtWidgets.QWidget):
         else:
             self.main_engine.write_log(order_info)
 
-        gateway_name: str = str(self.gateway_combo.currentText())
+        gateway_name = self.gateway_combo.currentText()
 
         self.main_engine.send_order(req, gateway_name)
 

@@ -1198,6 +1198,25 @@ class FutuGateway(BaseGateway):
 
             if code:
                 self.write_log(f"订阅行情失败：{data}")
+        
+        # ✅ 性能优化：订阅主力合约时，预初始化主力合约映射缓存
+        # 避免用户第一次下单时才初始化，导致226ms延迟
+        if req.symbol.endswith("main") and req.exchange == Exchange.HKFE:
+            # 检查缓存是否已存在，如果不存在则立即初始化
+            if req.symbol not in self.main_contract_mapping:
+                self.write_log(f"检测到订阅主力合约 {req.symbol}，预初始化主力合约映射缓存...")
+                try:
+                    # 调用解析方法，会自动更新缓存
+                    actual_code = self._resolve_main_contract(req.symbol, futu_symbol)
+                    if actual_code:
+                        self.write_log(f"✅ 主力合约映射缓存已预初始化: {req.symbol} -> {actual_code} (避免首次下单延迟)")
+                    else:
+                        self.write_log(f"⚠️ 主力合约映射缓存初始化失败: {req.symbol}，首次下单时可能需要等待")
+                except Exception as e:
+                    self.write_log(f"预初始化主力合约映射缓存异常: {str(e)}")
+            else:
+                cached_symbol = self.main_contract_mapping.get(req.symbol)
+                self.write_log(f"主力合约 {req.symbol} 映射缓存已存在: {cached_symbol}，无需初始化")
 
     def _resolve_main_contract(self, vt_symbol: str, futu_symbol: str) -> str:
         """
@@ -1442,41 +1461,51 @@ class FutuGateway(BaseGateway):
         """委托下单"""
         side: TrdSide = DIRECTION_VT2FUTU[req.direction]
 
-        # 确定订单价格和类型
+        # ✅ 性能优化：统一设置订单类型（所有类型都是NORMAL）
+        futu_order_type: OrderType = OrderType.NORMAL
+        
+        # ✅ 默认设置：限价单（ManualTrading）自动转换为对手价并启用智能追价
         order_price = req.price
-        futu_order_type: OrderType = OrderType.NORMAL  # 默认限价单
+        is_default_opponent = False
+        
+        # 如果reference是"ManualTrading"（限价单），自动转换为对手价并启用智能追价
+        if req.reference == "ManualTrading" or (req.reference == "" and req.type == VtOrderType.LIMIT):
+            is_default_opponent = True
+            # 获取tick数据计算对手价
+            tick_data = self._get_tick_for_chase(req.symbol, req.exchange)
+            if tick_data and tick_data.last_price > 0:
+                # 计算对手价：买用卖一，卖用买一
+                if req.direction == Direction.LONG:
+                    order_price = tick_data.ask_price_1 if tick_data.ask_price_1 > 0 else tick_data.last_price
+                else:
+                    order_price = tick_data.bid_price_1 if tick_data.bid_price_1 > 0 else tick_data.last_price
+                
+                # 更新reference，启用智能追价（重试2次）
+                req.reference = "OPPONENT_Retry2"
+                self.write_log(f"默认对手价订单（启用智能追价）：{req.direction.value} -> 对手价 {order_price} (原限价: {req.price})")
+            else:
+                # 无法获取tick数据，使用原价格，但仍启用追价
+                req.reference = "OPPONENT_Retry2"
+                self.write_log(f"默认对手价订单（启用智能追价，但无法获取tick，使用原价格）：{req.direction.value} -> {order_price}")
+        else:
+            # 已指定订单类型（对手价、超价等），使用UI计算的价格
+            order_price = req.price
 
-        # 根据VNpy订单类型决定实际执行方式
+        # 根据订单类型记录日志（保留日志用于调试）
         if req.reference == "OVER":
-            # 超价订单：UI已计算超价，直接使用
-            futu_order_type = OrderType.NORMAL
-            order_price = req.price
             self.write_log(f"超价订单：{req.direction.value} -> 使用UI计算的超价 {order_price}")
-
-        elif req.reference == "OPPONENT" or req.type == VtOrderType.OPPONENT:
-            # 对手价订单：UI已计算对手价，直接使用
-            futu_order_type = OrderType.NORMAL
-            order_price = req.price
-            self.write_log(f"对手价订单：{req.direction.value} -> 使用UI计算的对手价 {order_price}")
-
+        elif req.reference == "OPPONENT" or req.type == VtOrderType.OPPONENT or is_default_opponent:
+            if is_default_opponent:
+                # 日志已在上面输出
+                pass
+            else:
+                self.write_log(f"对手价订单：{req.direction.value} -> 使用UI计算的对手价 {order_price}")
         elif req.type == VtOrderType.OVER:
-            # 超价类型：UI已计算超价，直接使用
-            futu_order_type = OrderType.NORMAL
-            order_price = req.price
             self.write_log(f"超价类型：{req.direction.value} -> 使用UI计算的超价 {order_price}")
-
         elif req.type == VtOrderType.MARKET:
-            # 市价单处理：UI已经计算了实际对手价，直接使用（不推荐使用）
-            futu_order_type = OrderType.NORMAL
-            order_price = req.price
             self.write_log(f"市价单处理（不推荐）：使用UI计算的对手价 {order_price}")
-
         elif req.type == VtOrderType.LIMIT:
-            # 限价单：使用用户指定价格
-            futu_order_type = OrderType.NORMAL
-            order_price = req.price
             self.write_log(f"限价单处理：使用用户价格 {order_price}")
-
         else:
             # 其他订单类型暂不支持
             self.write_log(f"不支持的订单类型：{req.type}")
@@ -1504,20 +1533,21 @@ class FutuGateway(BaseGateway):
         self.write_log(f"当前市场设置: {self.market}")
         self.write_log(f"交易上下文类型: {type(self.trade_ctx).__name__}")
         
-        # 尝试查询可用的期货合约
-        if req.symbol == "MHImain":
-            try:
-                ret, contract_data = self.quote_ctx.get_stock_basicinfo("HK", "FUTURE")
-                if ret == 0:
-                    mhi_contracts = contract_data[contract_data['code'].str.contains('MHI', na=False)]
-                    if not mhi_contracts.empty:
-                        self.write_log(f"可用的MHI期货合约: {mhi_contracts['code'].tolist()}")
-                    else:
-                        self.write_log("未找到MHI期货合约")
-                else:
-                    self.write_log(f"查询期货合约失败: {contract_data}")
-            except Exception as e:
-                self.write_log(f"查询期货合约异常: {str(e)}")
+        # ⚠️ 已移除调试代码：查询可用期货合约的操作（耗时约500ms，影响性能）
+        # 如需调试，可临时取消注释以下代码
+        # if req.symbol == "MHImain":
+        #     try:
+        #         ret, contract_data = self.quote_ctx.get_stock_basicinfo("HK", "FUTURE")
+        #         if ret == 0:
+        #             mhi_contracts = contract_data[contract_data['code'].str.contains('MHI', na=False)]
+        #             if not mhi_contracts.empty:
+        #                 self.write_log(f"可用的MHI期货合约: {mhi_contracts['code'].tolist()}")
+        #             else:
+        #                 self.write_log("未找到MHI期货合约")
+        #         else:
+        #             self.write_log(f"查询期货合约失败: {contract_data}")
+        #     except Exception as e:
+        #         self.write_log(f"查询期货合约异常: {str(e)}")
         
         code, data = self.trade_ctx.place_order(
             order_price,  # 使用计算后的价格
