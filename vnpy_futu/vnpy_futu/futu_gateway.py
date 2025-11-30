@@ -230,6 +230,11 @@ class FutuGateway(BaseGateway):
         self.main_contract_check_count: int = 0  # 主力合约检查计数器
         self.main_contract_initialized: Set[str] = set()  # 记录已进行过初始化检查的主力合约
         
+        # ✅ 性能优化：tick数据缓存（用于下单时的价格计算）
+        # 缓存格式：symbol -> (tick_data, timestamp)
+        # TTL: 100ms（确保数据新鲜度）
+        self._tick_cache: Dict[str, Tuple[TickData, float]] = {}
+        
         # 撤单频率限制（避免触发API限制：每30秒最多20次）
         self.cancel_times: List[float] = []  # 记录撤单时间戳
         self.max_cancel_per_30s: int = 18  # 30秒内最多撤单次数（留2次余量）
@@ -1556,14 +1561,31 @@ class FutuGateway(BaseGateway):
         # 转换合约代码
         futu_symbol: str = convert_symbol_vt2futu(req.symbol, req.exchange)
 
-        # 处理主力合约：MHImain需要转换为实际月份合约
+        # ✅ 性能优化：处理主力合约时，先检查缓存，避免不必要的函数调用
         if req.symbol.endswith("main") and req.exchange == Exchange.HKFE:
-            actual_symbol = self._resolve_main_contract(req.symbol, futu_symbol)
-            if actual_symbol:
-                self.write_log(f"主力合约 {req.symbol} 转换为实际合约 {actual_symbol}")
-                futu_symbol = actual_symbol
+            # 先检查缓存
+            if hasattr(self, 'main_contract_mapping') and req.symbol in self.main_contract_mapping:
+                cached_actual_symbol = self.main_contract_mapping[req.symbol]
+                if cached_actual_symbol:
+                    actual_symbol = f"HK.{cached_actual_symbol}"
+                    self.write_log(f"主力合约 {req.symbol} 转换为实际合约 {actual_symbol} (缓存)")
+                    futu_symbol = actual_symbol
+                else:
+                    # 缓存未命中，调用解析函数
+                    actual_symbol = self._resolve_main_contract(req.symbol, futu_symbol)
+                    if actual_symbol:
+                        self.write_log(f"主力合约 {req.symbol} 转换为实际合约 {actual_symbol}")
+                        futu_symbol = actual_symbol
+                    else:
+                        self.write_log(f"警告：无法解析主力合约 {req.symbol}，使用原代码")
             else:
-                self.write_log(f"警告：无法解析主力合约 {req.symbol}，使用原代码")
+                # 缓存未命中，调用解析函数
+                actual_symbol = self._resolve_main_contract(req.symbol, futu_symbol)
+                if actual_symbol:
+                    self.write_log(f"主力合约 {req.symbol} 转换为实际合约 {actual_symbol}")
+                    futu_symbol = actual_symbol
+                else:
+                    self.write_log(f"警告：无法解析主力合约 {req.symbol}，使用原代码")
 
         self.write_log(f"转换后的富途合约代码: {futu_symbol}")
         self.write_log(f"当前市场设置: {self.market}")
@@ -2124,10 +2146,22 @@ class FutuGateway(BaseGateway):
         Returns:
             TickData对象，如果找不到则返回None
         """
+        # ✅ 性能优化：添加tick缓存，避免重复查询
+        cache_key = f"{symbol}.{exchange.value}"
+        current_time = time()
+        
+        # 检查缓存（100ms有效期）
+        if cache_key in self._tick_cache:
+            tick, timestamp = self._tick_cache[cache_key]
+            if current_time - timestamp < 0.1:  # 100ms缓存有效期
+                return tick  # 缓存命中
+        
         # 1. 首先尝试使用原始symbol查找
         futu_code = convert_symbol_vt2futu(symbol, exchange)
         tick = self.ticks.get(futu_code)
         if tick and tick.last_price > 0:
+            # 更新缓存
+            self._tick_cache[cache_key] = (tick, current_time)
             return tick
         
         # 1.5 富途API返回的行情数据使用"HK.xxx"格式而非"HK_FUTURE.xxx"
@@ -2141,8 +2175,17 @@ class FutuGateway(BaseGateway):
         # 2. 如果symbol是主力合约（以"main"结尾），尝试解析并查找实际合约的tick数据
         if symbol.endswith("main"):
             try:
-                # 解析主力合约
-                actual_code = self._resolve_main_contract(symbol, futu_code)
+                # ✅ 性能优化：先检查缓存，避免调用_resolve_main_contract
+                if hasattr(self, 'main_contract_mapping') and symbol in self.main_contract_mapping:
+                    cached_actual_symbol = self.main_contract_mapping[symbol]
+                    if cached_actual_symbol:
+                        actual_code = f"HK.{cached_actual_symbol}"
+                    else:
+                        actual_code = None
+                else:
+                    # 缓存未命中，调用解析函数
+                    actual_code = self._resolve_main_contract(symbol, futu_code)
+                
                 if actual_code:
                     # 尝试使用解析出的实际合约代码查找tick
                     tick = self.ticks.get(actual_code)

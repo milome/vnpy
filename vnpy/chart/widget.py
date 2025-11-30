@@ -1,4 +1,5 @@
 from datetime import datetime
+from time import time
 from typing import Optional
 
 import pyqtgraph as pg      # type: ignore
@@ -20,6 +21,7 @@ from .price_line_drag import PriceLineDragHandler
 from .drawing_order import DrawingOrderController
 from .price_breakthrough import PriceBreakthroughMonitor, BreakthroughEvent
 from .price_line_storage import PriceLineStorage, PriceLineData
+from .price_line_database import PriceLineDatabase
 from .position_holding import PositionHolding, EntryPosition
 from .widget_position_helper import (
     add_entry_to_holding,
@@ -52,8 +54,11 @@ class ChartWidget(pg.PlotWidget):
         self._first_plot: pg.PlotItem | None = None
         self._cursor: ChartCursor | None = None
         
-        # Price line manager
-        self._price_line_manager: PriceLineManager = PriceLineManager()
+        # Price line database (for persistence)
+        self._price_line_database: PriceLineDatabase | None = None
+        
+        # Price line manager (will be initialized with database after vt_symbol is set)
+        self._price_line_manager: PriceLineManager | None = None
         
         # Price line drag handler (will be initialized when plot is added)
         self._price_line_drag_handler: PriceLineDragHandler | None = None
@@ -64,12 +69,28 @@ class ChartWidget(pg.PlotWidget):
         # Price breakthrough monitor
         self._breakthrough_monitor: PriceBreakthroughMonitor = PriceBreakthroughMonitor()
         
-        # Price line storage
+        # Price line storage (legacy, kept for compatibility)
         self._price_line_storage: PriceLineStorage = PriceLineStorage()
         
         # 持仓管理：direction -> PositionHolding
         # 用于管理同方向的多个入场持仓，支持FIFO平仓和合并显示
         self._position_holdings: dict[str, PositionHolding] = {}  # "long" or "short" -> PositionHolding
+        
+        # 入场线与止损/止盈线的关联关系
+        # entry_line_id -> {"stop_loss": line_id, "take_profit": line_id}
+        self._entry_line_relations: dict[str, dict[str, str]] = {}
+        
+        # ✅ 性能优化：订单更新事件去重机制
+        # 记录已处理的订单更新事件，避免重复处理
+        # 格式：order_key -> timestamp
+        # order_key = f"{vt_orderid}_{status.value}"
+        self._processed_order_updates: dict[str, float] = {}
+        self._order_update_dedup_ttl = 1.0  # 去重TTL：1秒（确保短时间内相同事件只处理一次）
+        
+        # ✅ 双击事件防抖机制：防止短时间内对同一入场线重复触发平仓
+        # 格式：entry_line_id -> timestamp
+        self._last_double_click_close: dict[str, float] = {}
+        self._double_click_debounce_ttl = 2.0  # 防抖TTL：2秒（防止短时间内重复双击）
         
         # VT symbol for the chart
         self._vt_symbol: str | None = None
@@ -217,7 +238,18 @@ class ChartWidget(pg.PlotWidget):
     def get_price_line_manager(self) -> PriceLineManager:
         """
         Get price line manager instance.
+        
+        Returns:
+            PriceLineManager instance. If not initialized, creates a default one.
         """
+        if self._price_line_manager is None:
+            # 延迟初始化
+            if self._price_line_database is None:
+                self._price_line_database = PriceLineDatabase()
+            self._price_line_manager = PriceLineManager(
+                database=self._price_line_database,
+                vt_symbol=self._vt_symbol if hasattr(self, '_vt_symbol') else None
+            )
         return self._price_line_manager
 
     def add_price_line(
@@ -304,6 +336,34 @@ class ChartWidget(pg.PlotWidget):
             vt_symbol: VT symbol (e.g., "MHI2512.HKFE")
         """
         self._vt_symbol = vt_symbol
+        
+        # 初始化数据库和价格线管理器
+        if self._price_line_database is None:
+            self._price_line_database = PriceLineDatabase()
+        
+        if self._price_line_manager is None:
+            self._price_line_manager = PriceLineManager(
+                database=self._price_line_database,
+                vt_symbol=vt_symbol
+            )
+        else:
+            self._price_line_manager.set_database(self._price_line_database, vt_symbol)
+        
+        # 从数据库加载价格线
+        if self._first_plot:
+            count = self._price_line_manager.load_from_database(self._first_plot)
+            if hasattr(self, '_main_engine') and self._main_engine and count > 0:
+                self._main_engine.write_log(
+                    f"[ChartWidget] 从数据库加载了 {count} 条价格线",
+                    "ChartWidget"
+                )
+            
+            # 加载关联关系
+            self._load_line_relations()
+            
+            # 加载持仓记录（用于FIFO平仓）
+            self._load_position_holdings()
+        
         if self._drawing_order_controller:
             self._drawing_order_controller.set_vt_symbol(vt_symbol)
     
@@ -628,6 +688,57 @@ class ChartWidget(pg.PlotWidget):
             for line_id in lines_to_delete:
                 line = self._price_line_manager.get_line(line_id)
                 if line:
+                    # 删除关联的止损线和止盈线
+                    if hasattr(self, '_entry_line_relations') and line_id in self._entry_line_relations:
+                        relations = self._entry_line_relations[line_id]
+                        
+                        # 删除止损线
+                        stop_loss_line_id = relations.get("stop_loss")
+                        if stop_loss_line_id:
+                            stop_loss_line = self._price_line_manager.get_line(stop_loss_line_id)
+                            if stop_loss_line:
+                                # 从 plot 中移除
+                                if self._first_plot:
+                                    try:
+                                        self._first_plot.removeItem(stop_loss_line)
+                                    except Exception:
+                                        pass
+                                # 从管理器中删除
+                                if self._price_line_manager.delete_line(stop_loss_line_id):
+                                    deleted_count += 1
+                                    if hasattr(self, '_main_engine') and self._main_engine:
+                                        self._main_engine.write_log(
+                                            f"[ChartWidget] 已删除关联止损线: {stop_loss_line_id}",
+                                            "ChartWidget"
+                                        )
+                        
+                        # 删除止盈线
+                        take_profit_line_id = relations.get("take_profit")
+                        if take_profit_line_id:
+                            take_profit_line = self._price_line_manager.get_line(take_profit_line_id)
+                            if take_profit_line:
+                                # 从 plot 中移除
+                                if self._first_plot:
+                                    try:
+                                        self._first_plot.removeItem(take_profit_line)
+                                    except Exception:
+                                        pass
+                                # 从管理器中删除
+                                if self._price_line_manager.delete_line(take_profit_line_id):
+                                    deleted_count += 1
+                                    if hasattr(self, '_main_engine') and self._main_engine:
+                                        self._main_engine.write_log(
+                                            f"[ChartWidget] 已删除关联止盈线: {take_profit_line_id}",
+                                            "ChartWidget"
+                                        )
+                        
+                        # 清理关联关系
+                        self._entry_line_relations.pop(line_id, None)
+                        
+                        # 从数据库删除关联关系
+                        if self._price_line_database:
+                            self._price_line_database.delete_relation(line_id)
+                    
                     # 先从 plot 中移除（如果存在）
                     if self._first_plot:
                         try:
@@ -673,7 +784,7 @@ class ChartWidget(pg.PlotWidget):
             
             if hasattr(self, '_main_engine') and self._main_engine:
                 self._main_engine.write_log(
-                    f"[ChartWidget] 持仓为0，已删除 {deleted_count} 条{position_direction}方向的入场线（共找到 {len(lines_to_delete)} 条）",
+                    f"[ChartWidget] 持仓为0，已删除 {deleted_count} 条{position_direction}方向的价格线（包括入场线及关联的止损/止盈线，共找到 {len(lines_to_delete)} 条入场线）",
                     "ChartWidget"
                 )
             return
@@ -778,7 +889,17 @@ class ChartWidget(pg.PlotWidget):
                             # 创建持仓记录
                             holding = PositionHolding(position_direction)
                             self._position_holdings[position_direction] = holding
-                            holding.add_entry(created_line_id, entry_price, position.volume, None, datetime.now())
+                            add_entry_to_holding(
+                                self._position_holdings,
+                                line_id=created_line_id,
+                                direction=position_direction,
+                                price=entry_price,
+                                volume=position.volume,
+                                vt_orderid=None,
+                                trade_time=datetime.now(),
+                                database=self._price_line_database,
+                                vt_symbol=self._vt_symbol
+                            )
                             
                             if hasattr(self, '_main_engine') and self._main_engine:
                                 self._main_engine.write_log(
@@ -849,7 +970,13 @@ class ChartWidget(pg.PlotWidget):
                     "ChartWidget"
                 )
             
-            closed_entries = process_position_close(self._position_holdings, position_direction, close_volume)
+            closed_entries = process_position_close(
+                self._position_holdings, 
+                position_direction, 
+                close_volume,
+                database=self._price_line_database,
+                vt_symbol=self._vt_symbol
+            )
             
             if hasattr(self, '_main_engine') and self._main_engine:
                 self._main_engine.write_log(
@@ -1048,7 +1175,17 @@ class ChartWidget(pg.PlotWidget):
                     else:
                         # 平均分配（简单处理，实际应该根据价格加权）
                         volume = position.volume / len(entry_lines)
-                    holding.add_entry(line_id, line.get_price(), volume, line.get_vt_orderid(), datetime.now())
+                    add_entry_to_holding(
+                        self._position_holdings,
+                        line_id=line_id,
+                        direction=position_direction,
+                        price=line.get_price(),
+                        volume=volume,
+                        vt_orderid=line.get_vt_orderid(),
+                        trade_time=datetime.now(),
+                        database=self._price_line_database,
+                        vt_symbol=self._vt_symbol
+                    )
         
         # ========== 直接使用 position.price 和 position.volume（不再从 PositionHolding 计算） ==========
         # 使用 futu_gateway 上报的加权平均价格
@@ -1127,17 +1264,106 @@ class ChartWidget(pg.PlotWidget):
                 )
         
         # 隐藏其他入场线（但不删除，保留原始信息）
+        # 保留所有止损/止盈线，并为每条设置对应的手数
         for line_id, line in entry_lines[1:]:  # 跳过第一条（合并显示线）
+            # 获取被隐藏入场线的手数（从 PositionHolding 中获取）
+            entry_volume = 0.0
+            if holding:
+                entry = next((e for e in holding.get_all_entries() if e.line_id == line_id), None)
+                if entry:
+                    entry_volume = entry.volume
+            
+            # 为被隐藏入场线的止损/止盈线设置手数
+            if hasattr(self, '_entry_line_relations') and line_id in self._entry_line_relations:
+                hidden_relations = self._entry_line_relations[line_id]
+                
+                # 设置止损线手数（即使 entry_volume == 0，也要确保止损线可见）
+                stop_loss_line_id = hidden_relations.get("stop_loss")
+                if stop_loss_line_id:
+                    stop_loss_line = self._price_line_manager.get_line(stop_loss_line_id)
+                    if stop_loss_line:
+                        if entry_volume > 0:
+                            stop_loss_line.set_volume(entry_volume)
+                        stop_loss_line.setVisible(True)  # 确保可见
+                        if hasattr(self, '_main_engine') and self._main_engine:
+                            self._main_engine.write_log(
+                                f"[ChartWidget] 合并显示：为入场线 {line_id} 的止损线 {stop_loss_line_id} 设置手数 {entry_volume}，确保可见",
+                                "ChartWidget"
+                            )
+                
+                # 设置止盈线手数（即使 entry_volume == 0，也要确保止盈线可见）
+                take_profit_line_id = hidden_relations.get("take_profit")
+                if take_profit_line_id:
+                    take_profit_line = self._price_line_manager.get_line(take_profit_line_id)
+                    if take_profit_line:
+                        if entry_volume > 0:
+                            take_profit_line.set_volume(entry_volume)
+                        take_profit_line.setVisible(True)  # 确保可见
+                        if hasattr(self, '_main_engine') and self._main_engine:
+                            self._main_engine.write_log(
+                                f"[ChartWidget] 合并显示：为入场线 {line_id} 的止盈线 {take_profit_line_id} 设置手数 {entry_volume}，确保可见",
+                                "ChartWidget"
+                            )
+            
             # 隐藏入场线（通过设置不可见）
             line.setVisible(False)
             if hasattr(self, '_main_engine') and self._main_engine:
                 self._main_engine.write_log(
-                    f"[ChartWidget] 已隐藏入场线: {line_id} (保留原始信息)",
+                    f"[ChartWidget] 已隐藏入场线: {line_id} (保留原始信息，手数={entry_volume})",
                     "ChartWidget"
                 )
         
         # 确保合并显示线可见
         main_line.setVisible(True)
+        
+        # 为合并显示线的止损/止盈线设置手数（如果有）
+        if hasattr(self, '_entry_line_relations') and main_line_id in self._entry_line_relations:
+            main_relations = self._entry_line_relations[main_line_id]
+            
+            # 获取合并显示线的手数（直接使用 position.volume，这是实际持仓总手数）
+            # 注意：total_volume 已经在上面计算出来了（第1209行：total_volume = position.volume）
+            # 这是最准确的总持仓手数，应该优先使用
+            main_entry_volume = total_volume  # 使用已计算的 total_volume（来自 position.volume）
+            
+            # 如果 total_volume 为 0，尝试从 PositionHolding 获取（备用方案）
+            if main_entry_volume <= 0 and holding:
+                # 计算总持仓手数（从 PositionHolding 中计算）
+                calculated_total_volume = sum(e.volume for e in holding.get_all_entries())
+                if calculated_total_volume > 0:
+                    main_entry_volume = calculated_total_volume
+                else:
+                    # 如果总手数为0，尝试从单个入场线获取（兼容旧逻辑）
+                    main_entry = next((e for e in holding.get_all_entries() if e.line_id == main_line_id), None)
+                    if main_entry:
+                        main_entry_volume = main_entry.volume
+            
+            # 设置止损线手数并确保可见
+            stop_loss_line_id = main_relations.get("stop_loss")
+            if stop_loss_line_id:
+                stop_loss_line = self._price_line_manager.get_line(stop_loss_line_id)
+                if stop_loss_line:
+                    if main_entry_volume > 0:
+                        stop_loss_line.set_volume(main_entry_volume)
+                    stop_loss_line.setVisible(True)
+                    if hasattr(self, '_main_engine') and self._main_engine:
+                        self._main_engine.write_log(
+                            f"[ChartWidget] 合并显示：确保止损线 {stop_loss_line_id} 可见（关联到合并显示线 {main_line_id}，手数={main_entry_volume}）",
+                            "ChartWidget"
+                        )
+            
+            # 设置止盈线手数并确保可见
+            take_profit_line_id = main_relations.get("take_profit")
+            if take_profit_line_id:
+                take_profit_line = self._price_line_manager.get_line(take_profit_line_id)
+                if take_profit_line:
+                    if main_entry_volume > 0:
+                        take_profit_line.set_volume(main_entry_volume)
+                    take_profit_line.setVisible(True)
+                    if hasattr(self, '_main_engine') and self._main_engine:
+                        self._main_engine.write_log(
+                            f"[ChartWidget] 合并显示：确保止盈线 {take_profit_line_id} 可见（关联到合并显示线 {main_line_id}，手数={main_entry_volume}）",
+                            "ChartWidget"
+                        )
         
         # 如果持仓数为0，检查是否应该清除入场线
         # 只有当该合约的所有方向持仓都为0时，才清除所有入场线
@@ -1204,23 +1430,138 @@ class ChartWidget(pg.PlotWidget):
                                 f"[ChartWidget] 标记删除入场线: {line_id} (方向={line.get_direction()})",
                                 "ChartWidget"
                             )
+                        
+                        # 通过关联关系查找并标记关联的止损线和止盈线
+                        if hasattr(self, '_entry_line_relations') and line_id in self._entry_line_relations:
+                            relations = self._entry_line_relations[line_id]
+                            
+                            if hasattr(self, '_main_engine') and self._main_engine:
+                                self._main_engine.write_log(
+                                    f"[ChartWidget] 入场线 {line_id} 的关联关系: {relations}",
+                                    "ChartWidget"
+                                )
+                            
+                            # 标记止损线
+                            stop_loss_line_id = relations.get("stop_loss")
+                            if stop_loss_line_id:
+                                if stop_loss_line_id not in lines_to_delete:
+                                    lines_to_delete.append(stop_loss_line_id)
+                                    if hasattr(self, '_main_engine') and self._main_engine:
+                                        self._main_engine.write_log(
+                                            f"[ChartWidget] 通过关联关系标记删除止损线: {stop_loss_line_id} (关联到入场线 {line_id})",
+                                            "ChartWidget"
+                                        )
+                                else:
+                                    if hasattr(self, '_main_engine') and self._main_engine:
+                                        self._main_engine.write_log(
+                                            f"[ChartWidget] 止损线 {stop_loss_line_id} 已在删除列表中",
+                                            "ChartWidget"
+                                        )
+                            else:
+                                if hasattr(self, '_main_engine') and self._main_engine:
+                                    self._main_engine.write_log(
+                                        f"[ChartWidget] 入场线 {line_id} 没有关联的止损线",
+                                        "ChartWidget"
+                                    )
+                            
+                            # 标记止盈线
+                            take_profit_line_id = relations.get("take_profit")
+                            if take_profit_line_id:
+                                if take_profit_line_id not in lines_to_delete:
+                                    lines_to_delete.append(take_profit_line_id)
+                                    if hasattr(self, '_main_engine') and self._main_engine:
+                                        self._main_engine.write_log(
+                                            f"[ChartWidget] 通过关联关系标记删除止盈线: {take_profit_line_id} (关联到入场线 {line_id})",
+                                            "ChartWidget"
+                                        )
+                                else:
+                                    if hasattr(self, '_main_engine') and self._main_engine:
+                                        self._main_engine.write_log(
+                                            f"[ChartWidget] 止盈线 {take_profit_line_id} 已在删除列表中",
+                                            "ChartWidget"
+                                        )
+                            else:
+                                if hasattr(self, '_main_engine') and self._main_engine:
+                                    self._main_engine.write_log(
+                                        f"[ChartWidget] 入场线 {line_id} 没有关联的止盈线",
+                                        "ChartWidget"
+                                    )
+                        else:
+                            if hasattr(self, '_main_engine') and self._main_engine:
+                                self._main_engine.write_log(
+                                    f"[ChartWidget] 入场线 {line_id} 没有关联关系记录",
+                                    "ChartWidget"
+                                )
                 
-                # 查找所有止损线和止盈线
+                # 查找所有未关联的止损线和止盈线（作为兜底，确保所有止损/止盈线都被删除）
                 for line_id, line in all_lines.items():
                     line_type = line.get_line_type()
-                    if line_type == PriceLineType.STOP_LOSS or line_type == PriceLineType.TAKE_PROFIT:
+                    if (line_type == PriceLineType.STOP_LOSS or line_type == PriceLineType.TAKE_PROFIT) and line_id not in lines_to_delete:
                         lines_to_delete.append(line_id)
                         if hasattr(self, '_main_engine') and self._main_engine:
                             self._main_engine.write_log(
-                                f"[ChartWidget] 标记删除{line_type.value}线: {line_id} (方向={line.get_direction()})",
+                                f"[ChartWidget] 标记删除未关联的{line_type.value}线: {line_id} (方向={line.get_direction()})",
                                 "ChartWidget"
                             )
                 
                 # 删除所有标记的线
                 deleted_count = 0
+                deleted_entry_count = 0
+                deleted_stop_loss_count = 0
+                deleted_take_profit_count = 0
+                
                 for line_id in lines_to_delete:
+                    # 获取线的类型，用于统计
+                    line = self._price_line_manager.get_line(line_id)
+                    if not line:
+                        # 线不存在，跳过
+                        if hasattr(self, '_main_engine') and self._main_engine:
+                            self._main_engine.write_log(
+                                f"[ChartWidget] 警告：标记删除的线 {line_id} 不存在，跳过",
+                                "ChartWidget"
+                            )
+                        continue
+                    
+                    line_type = line.get_line_type()
+                    
+                    # 如果是入场线，先清理关联关系
+                    if line_type == PriceLineType.ENTRY:
+                        if hasattr(self, '_entry_line_relations') and line_id in self._entry_line_relations:
+                            # 清理关联关系
+                            self._entry_line_relations.pop(line_id, None)
+                            # 清理数据库中的关联关系
+                            if self._price_line_database:
+                                self._price_line_database.delete_all_relations(line_id)
+                    
+                    # 从 plot 中移除
+                    if line.scene() is not None and self._first_plot:
+                        try:
+                            self._first_plot.removeItem(line)
+                        except Exception as e:
+                            if hasattr(self, '_main_engine') and self._main_engine:
+                                self._main_engine.write_log(
+                                    f"[ChartWidget] 从plot移除线 {line_id} 失败: {str(e)}",
+                                    "ChartWidget"
+                                )
+                    
+                    # 从管理器中删除
                     if self._price_line_manager.delete_line(line_id):
                         deleted_count += 1
+                        
+                        # 统计删除的线类型
+                        if line_type == PriceLineType.ENTRY:
+                            deleted_entry_count += 1
+                        elif line_type == PriceLineType.STOP_LOSS:
+                            deleted_stop_loss_count += 1
+                        elif line_type == PriceLineType.TAKE_PROFIT:
+                            deleted_take_profit_count += 1
+                        
+                        if hasattr(self, '_main_engine') and self._main_engine:
+                            self._main_engine.write_log(
+                                f"[ChartWidget] 已删除{line_type.value}线: {line_id}",
+                                "ChartWidget"
+                            )
+                        
                         # 清理订单映射（如果存在）
                         if hasattr(self, '_drawing_order_controller') and self._drawing_order_controller:
                             # 从订单映射中移除
@@ -1231,10 +1572,20 @@ class ChartWidget(pg.PlotWidget):
                             # 从挂单线关联关系中移除（如果存在）
                             if hasattr(self._drawing_order_controller, '_pending_line_relations'):
                                 self._drawing_order_controller._pending_line_relations.pop(line_id, None)
+                        
+                        # 清理双击防抖记录
+                        self._last_double_click_close.pop(line_id, None)
+                    else:
+                        if hasattr(self, '_main_engine') and self._main_engine:
+                            self._main_engine.write_log(
+                                f"[ChartWidget] 警告：删除{line_type.value}线 {line_id} 失败",
+                                "ChartWidget"
+                            )
                 
                 if hasattr(self, '_main_engine') and self._main_engine:
                     self._main_engine.write_log(
-                        f"[ChartWidget] 持仓数为0，已清除 {deleted_count} 条价格线",
+                        f"[ChartWidget] 持仓数为0，已清除 {deleted_count} 条价格线 "
+                        f"(入场线={deleted_entry_count}, 止损线={deleted_stop_loss_count}, 止盈线={deleted_take_profit_count})",
                         "ChartWidget"
                     )
                 return
@@ -1259,21 +1610,98 @@ class ChartWidget(pg.PlotWidget):
                                 f"[ChartWidget] 标记删除{position_direction}方向入场线: {line_id}",
                                 "ChartWidget"
                             )
+                        
+                        # 通过关联关系查找并标记关联的止损线和止盈线
+                        if hasattr(self, '_entry_line_relations') and line_id in self._entry_line_relations:
+                            relations = self._entry_line_relations[line_id]
+                            
+                            # 标记止损线
+                            stop_loss_line_id = relations.get("stop_loss")
+                            if stop_loss_line_id and stop_loss_line_id not in lines_to_delete:
+                                lines_to_delete.append(stop_loss_line_id)
+                                if hasattr(self, '_main_engine') and self._main_engine:
+                                    self._main_engine.write_log(
+                                        f"[ChartWidget] 通过关联关系标记删除止损线: {stop_loss_line_id} (关联到入场线 {line_id})",
+                                        "ChartWidget"
+                                    )
+                            
+                            # 标记止盈线
+                            take_profit_line_id = relations.get("take_profit")
+                            if take_profit_line_id and take_profit_line_id not in lines_to_delete:
+                                lines_to_delete.append(take_profit_line_id)
+                                if hasattr(self, '_main_engine') and self._main_engine:
+                                    self._main_engine.write_log(
+                                        f"[ChartWidget] 通过关联关系标记删除止盈线: {take_profit_line_id} (关联到入场线 {line_id})",
+                                        "ChartWidget"
+                                    )
                     
-                    # 只清除匹配方向的止损线和止盈线
-                    if (line_type == PriceLineType.STOP_LOSS or line_type == PriceLineType.TAKE_PROFIT) and line_direction == position_direction:
+                    # 只清除匹配方向的未关联的止损线和止盈线（作为兜底）
+                    if (line_type == PriceLineType.STOP_LOSS or line_type == PriceLineType.TAKE_PROFIT) and line_direction == position_direction and line_id not in lines_to_delete:
                         lines_to_delete.append(line_id)
                         if hasattr(self, '_main_engine') and self._main_engine:
                             self._main_engine.write_log(
-                                f"[ChartWidget] 标记删除{position_direction}方向{line_type.value}线: {line_id}",
+                                f"[ChartWidget] 标记删除{position_direction}方向未关联的{line_type.value}线: {line_id}",
                                 "ChartWidget"
                             )
                 
                 # 删除标记的线
                 deleted_count = 0
+                deleted_entry_count = 0
+                deleted_stop_loss_count = 0
+                deleted_take_profit_count = 0
+                
                 for line_id in lines_to_delete:
+                    # 获取线的类型，用于统计
+                    line = self._price_line_manager.get_line(line_id)
+                    if not line:
+                        # 线不存在，跳过
+                        if hasattr(self, '_main_engine') and self._main_engine:
+                            self._main_engine.write_log(
+                                f"[ChartWidget] 警告：标记删除的线 {line_id} 不存在，跳过",
+                                "ChartWidget"
+                            )
+                        continue
+                    
+                    line_type = line.get_line_type()
+                    
+                    # 如果是入场线，先清理关联关系
+                    if line_type == PriceLineType.ENTRY:
+                        if hasattr(self, '_entry_line_relations') and line_id in self._entry_line_relations:
+                            # 清理关联关系
+                            self._entry_line_relations.pop(line_id, None)
+                            # 清理数据库中的关联关系
+                            if self._price_line_database:
+                                self._price_line_database.delete_all_relations(line_id)
+                    
+                    # 从 plot 中移除
+                    if line.scene() is not None and self._first_plot:
+                        try:
+                            self._first_plot.removeItem(line)
+                        except Exception as e:
+                            if hasattr(self, '_main_engine') and self._main_engine:
+                                self._main_engine.write_log(
+                                    f"[ChartWidget] 从plot移除线 {line_id} 失败: {str(e)}",
+                                    "ChartWidget"
+                                )
+                    
+                    # 从管理器中删除
                     if self._price_line_manager.delete_line(line_id):
                         deleted_count += 1
+                        
+                        # 统计删除的线类型
+                        if line_type == PriceLineType.ENTRY:
+                            deleted_entry_count += 1
+                        elif line_type == PriceLineType.STOP_LOSS:
+                            deleted_stop_loss_count += 1
+                        elif line_type == PriceLineType.TAKE_PROFIT:
+                            deleted_take_profit_count += 1
+                        
+                        if hasattr(self, '_main_engine') and self._main_engine:
+                            self._main_engine.write_log(
+                                f"[ChartWidget] 已删除{line_type.value}线: {line_id}",
+                                "ChartWidget"
+                            )
+                        
                         # 清理订单映射
                         if hasattr(self, '_drawing_order_controller') and self._drawing_order_controller:
                             order_id = self._drawing_order_controller.get_order_id_for_line(line_id)
@@ -1282,10 +1710,20 @@ class ChartWidget(pg.PlotWidget):
                                 self._drawing_order_controller._order_line_map.pop(order_id, None)
                             if hasattr(self._drawing_order_controller, '_pending_line_relations'):
                                 self._drawing_order_controller._pending_line_relations.pop(line_id, None)
+                        
+                        # 清理双击防抖记录
+                        self._last_double_click_close.pop(line_id, None)
+                    else:
+                        if hasattr(self, '_main_engine') and self._main_engine:
+                            self._main_engine.write_log(
+                                f"[ChartWidget] 警告：删除{line_type.value}线 {line_id} 失败",
+                                "ChartWidget"
+                            )
                 
                 if hasattr(self, '_main_engine') and self._main_engine:
                     self._main_engine.write_log(
-                        f"[ChartWidget] 已清除 {deleted_count} 条{position_direction}方向的价格线",
+                        f"[ChartWidget] 已清除 {deleted_count} 条{position_direction}方向的价格线 "
+                        f"(入场线={deleted_entry_count}, 止损线={deleted_stop_loss_count}, 止盈线={deleted_take_profit_count})",
                         "ChartWidget"
                     )
                 return
@@ -1294,6 +1732,12 @@ class ChartWidget(pg.PlotWidget):
         all_positions = []
         if hasattr(self, '_main_engine') and self._main_engine:
             all_positions = self._main_engine.get_all_positions()
+        
+        if hasattr(self, '_main_engine') and self._main_engine:
+            self._main_engine.write_log(
+                f"[ChartWidget] 获取所有持仓: 总数={len(all_positions)}, 当前持仓方向={position_direction}, 当前持仓数量={position.volume}",
+                "ChartWidget"
+            )
         
         # 构建持仓映射：direction -> volume
         position_map = {}
@@ -1324,6 +1768,11 @@ class ChartWidget(pg.PlotWidget):
             if matched:
                 pos_direction = "long" if pos.direction.value == "多" else "short"
                 position_map[pos_direction] = pos.volume
+                if hasattr(self, '_main_engine') and self._main_engine:
+                    self._main_engine.write_log(
+                        f"[ChartWidget] 匹配持仓: {pos.vt_symbol} {pos.direction.value} {pos.volume}手 -> position_map[{pos_direction}]={pos.volume}",
+                        "ChartWidget"
+                    )
         
         updated_count = 0
         entry_lines = [l for l in all_lines.values() if l.get_line_type() == PriceLineType.ENTRY]
@@ -1357,8 +1806,21 @@ class ChartWidget(pg.PlotWidget):
                 )
             
             # 检查该方向的持仓是否存在且不为0
+            # 优先使用当前持仓更新的值（position.volume），如果为0，则检查position_map
             line_position_volume = position_map.get(direction, 0.0)
             
+            # 如果当前持仓更新显示该方向持仓为0，且入场线方向匹配，则应该删除
+            if direction == position_direction and position.volume <= 0:
+                # 当前持仓更新显示持仓为0，应该删除这条入场线
+                lines_to_delete.append((line_id, direction))
+                if hasattr(self, '_main_engine') and self._main_engine:
+                    self._main_engine.write_log(
+                        f"[ChartWidget] 标记删除入场线 {line_id}: 方向={direction}的持仓为0 (当前持仓更新: {position.volume}, 持仓映射中的值={line_position_volume})",
+                        "ChartWidget"
+                    )
+                continue
+            
+            # 如果持仓映射中该方向的持仓为0或不存在，也应该删除这条入场线
             if line_position_volume <= 0:
                 # 该方向的持仓为0或不存在，应该删除这条入场线
                 lines_to_delete.append((line_id, direction))
@@ -1422,50 +1884,228 @@ class ChartWidget(pg.PlotWidget):
                     )
         
         # 删除没有持仓的入场线及其关联的止损止盈线
-        deleted_count = 0
-        for line_id, line_direction in lines_to_delete:
-            # 删除入场线
-            if self._price_line_manager.delete_line(line_id):
-                deleted_count += 1
-                if hasattr(self, '_main_engine') and self._main_engine:
+        # 先打印数据库状态（用于调试）
+        if hasattr(self, '_price_line_database') and self._price_line_database and hasattr(self, '_main_engine') and self._main_engine:
+            debug_info = self._price_line_database.debug_print_all_lines_and_relations(vt_symbol=self._vt_symbol)
+            self._main_engine.write_log(
+                f"[ChartWidget] 删除入场线前，数据库状态:\n{debug_info}",
+                "ChartWidget"
+            )
+        
+        # 添加详细日志
+        if hasattr(self, '_main_engine') and self._main_engine:
+            self._main_engine.write_log(
+                f"[ChartWidget] 准备删除入场线: lines_to_delete数量={len(lines_to_delete)}, "
+                f"持仓方向={position_direction}, 持仓数量={position.volume}, 持仓映射={list(position_map.items()) if position_map else []}",
+                "ChartWidget"
+            )
+            if lines_to_delete:
+                for line_id, line_direction in lines_to_delete:
                     self._main_engine.write_log(
-                        f"[ChartWidget] 已删除入场线 {line_id} (方向={line_direction}的持仓为0)",
+                        f"[ChartWidget] 待删除入场线: {line_id}, 方向={line_direction}",
                         "ChartWidget"
                     )
+            else:
+                self._main_engine.write_log(
+                    f"[ChartWidget] 警告: lines_to_delete为空，没有入场线需要删除",
+                    "ChartWidget"
+                )
+        
+        deleted_count = 0
+        deleted_entry_count = 0
+        deleted_stop_loss_count = 0
+        deleted_take_profit_count = 0
+        
+        for line_id, line_direction in lines_to_delete:
+            # 先通过关联关系查找并标记关联的止损线和止盈线
+            related_lines_to_delete = []
+            if hasattr(self, '_entry_line_relations') and line_id in self._entry_line_relations:
+                relations = self._entry_line_relations[line_id]
                 
-                # 清理订单映射
-                if hasattr(self, '_drawing_order_controller') and self._drawing_order_controller:
-                    order_id = self._drawing_order_controller.get_order_id_for_line(line_id)
-                    if order_id:
-                        self._drawing_order_controller._line_order_map.pop(line_id, None)
-                        self._drawing_order_controller._order_line_map.pop(order_id, None)
-                    if hasattr(self._drawing_order_controller, '_pending_line_relations'):
-                        self._drawing_order_controller._pending_line_relations.pop(line_id, None)
+                # 标记止损线
+                stop_loss_line_id = relations.get("stop_loss")
+                if stop_loss_line_id:
+                    related_lines_to_delete.append(("stop_loss", stop_loss_line_id))
+                    if hasattr(self, '_main_engine') and self._main_engine:
+                        self._main_engine.write_log(
+                            f"[ChartWidget] 通过关联关系标记删除止损线: {stop_loss_line_id} (关联到入场线 {line_id})",
+                            "ChartWidget"
+                        )
+                
+                # 标记止盈线
+                take_profit_line_id = relations.get("take_profit")
+                if take_profit_line_id:
+                    related_lines_to_delete.append(("take_profit", take_profit_line_id))
+                    if hasattr(self, '_main_engine') and self._main_engine:
+                        self._main_engine.write_log(
+                            f"[ChartWidget] 通过关联关系标记删除止盈线: {take_profit_line_id} (关联到入场线 {line_id})",
+                            "ChartWidget"
+                        )
             
-            # 查找并删除关联的止损线和止盈线
-            for other_line_id, other_line in all_lines.items():
-                other_line_type = other_line.get_line_type()
-                other_line_direction = other_line.get_direction()
-                if (other_line_type == PriceLineType.STOP_LOSS or other_line_type == PriceLineType.TAKE_PROFIT) and other_line_direction == line_direction:
-                    # 检查是否与已删除的入场线关联（通过检查是否有相同的订单ID或通过_pending_line_relations）
-                    # 简单方法：如果止损/止盈线的方向与已删除的入场线方向相同，也删除它
-                    if self._price_line_manager.delete_line(other_line_id):
+            # 先删除关联的止损线和止盈线
+            for relation_type, related_line_id in related_lines_to_delete:
+                related_line = self._price_line_manager.get_line(related_line_id)
+                if related_line:
+                    # 从 plot 中移除
+                    if related_line.scene() is not None and self._first_plot:
+                        try:
+                            self._first_plot.removeItem(related_line)
+                        except Exception as e:
+                            if hasattr(self, '_main_engine') and self._main_engine:
+                                self._main_engine.write_log(
+                                    f"[ChartWidget] 从plot移除{relation_type}线 {related_line_id} 失败: {str(e)}",
+                                    "ChartWidget"
+                                )
+                    
+                    # 从管理器中删除
+                    if self._price_line_manager.delete_line(related_line_id):
                         deleted_count += 1
+                        # 清理数据库中的关联关系（通过关联线ID删除）
+                        if hasattr(self, '_price_line_database') and self._price_line_database:
+                            if hasattr(self._price_line_database, 'delete_relations_by_related_line_id'):
+                                self._price_line_database.delete_relations_by_related_line_id(related_line_id)
+                                if hasattr(self, '_main_engine') and self._main_engine:
+                                    self._main_engine.write_log(
+                                        f"[ChartWidget] 已清理数据库中的{relation_type}线关联关系: {related_line_id}",
+                                        "ChartWidget"
+                                    )
+                        
+                        if relation_type == "stop_loss":
+                            deleted_stop_loss_count += 1
+                            if hasattr(self, '_main_engine') and self._main_engine:
+                                self._main_engine.write_log(
+                                    f"[ChartWidget] 已删除关联止损线: {related_line_id}",
+                                    "ChartWidget"
+                                )
+                        elif relation_type == "take_profit":
+                            deleted_take_profit_count += 1
+                            if hasattr(self, '_main_engine') and self._main_engine:
+                                self._main_engine.write_log(
+                                    f"[ChartWidget] 已删除关联止盈线: {related_line_id}",
+                                    "ChartWidget"
+                                )
+                else:
+                    if hasattr(self, '_main_engine') and self._main_engine:
+                        self._main_engine.write_log(
+                            f"[ChartWidget] 警告：关联的{relation_type}线 {related_line_id} 不存在",
+                            "ChartWidget"
+                        )
+            
+            # 删除入场线
+            entry_line = self._price_line_manager.get_line(line_id)
+            if entry_line:
+                # 从 plot 中移除
+                if entry_line.scene() is not None and self._first_plot:
+                    try:
+                        self._first_plot.removeItem(entry_line)
+                    except Exception as e:
                         if hasattr(self, '_main_engine') and self._main_engine:
                             self._main_engine.write_log(
-                                f"[ChartWidget] 已删除{other_line_type.value}线 {other_line_id} (方向={line_direction}的入场线已删除)",
+                                f"[ChartWidget] 从plot移除入场线 {line_id} 失败: {str(e)}",
                                 "ChartWidget"
                             )
+                
+                # 从管理器中删除
+                if self._price_line_manager.delete_line(line_id):
+                    deleted_count += 1
+                    deleted_entry_count += 1
+                    if hasattr(self, '_main_engine') and self._main_engine:
+                        self._main_engine.write_log(
+                            f"[ChartWidget] 已从plot中移除入场线: {line_id}",
+                            "ChartWidget"
+                        )
+                        self._main_engine.write_log(
+                            f"[ChartWidget] 已删除入场线: {line_id}",
+                            "ChartWidget"
+                        )
+                    
+                    # 清理关联关系
+                    if hasattr(self, '_entry_line_relations') and line_id in self._entry_line_relations:
+                        self._entry_line_relations.pop(line_id, None)
+                        # 清理数据库中的关联关系
+                        if self._price_line_database:
+                            self._price_line_database.delete_all_relations(line_id)
+                    
+                    # 清理订单映射
+                    if hasattr(self, '_drawing_order_controller') and self._drawing_order_controller:
+                        order_id = self._drawing_order_controller.get_order_id_for_line(line_id)
+                        if order_id:
+                            self._drawing_order_controller._line_order_map.pop(line_id, None)
+                            self._drawing_order_controller._order_line_map.pop(order_id, None)
+                        if hasattr(self._drawing_order_controller, '_pending_line_relations'):
+                            self._drawing_order_controller._pending_line_relations.pop(line_id, None)
+                    
+                    # 清理双击防抖记录
+                    self._last_double_click_close.pop(line_id, None)
+                else:
+                    if hasattr(self, '_main_engine') and self._main_engine:
+                        self._main_engine.write_log(
+                            f"[ChartWidget] 警告：删除入场线 {line_id} 失败",
+                            "ChartWidget"
+                        )
+            else:
+                if hasattr(self, '_main_engine') and self._main_engine:
+                    self._main_engine.write_log(
+                        f"[ChartWidget] 警告：入场线 {line_id} 不存在",
+                        "ChartWidget"
+                    )
+        
+        # 删除后再次打印数据库状态（用于调试）
+        if hasattr(self, '_price_line_database') and self._price_line_database and hasattr(self, '_main_engine') and self._main_engine:
+            debug_info = self._price_line_database.debug_print_all_lines_and_relations(vt_symbol=self._vt_symbol)
+            self._main_engine.write_log(
+                f"[ChartWidget] 删除入场线后，数据库状态:\n{debug_info}",
+                "ChartWidget"
+            )
         
         if hasattr(self, '_main_engine') and self._main_engine:
             self._main_engine.write_log(
-                f"[ChartWidget] 盈亏更新完成: 共更新 {updated_count} 条入场线，删除 {deleted_count} 条价格线",
+                f"[ChartWidget] 盈亏更新完成: 共更新 {updated_count} 条入场线，删除 {deleted_count} 条价格线 "
+                f"(入场线={deleted_entry_count}, 止损线={deleted_stop_loss_count}, 止盈线={deleted_take_profit_count})",
                 "ChartWidget"
             )
     
     def _on_order_update(self, event: Event) -> None:
         """处理订单更新事件，订单成交后创建入场线（确保在主线程中执行）"""
         order: OrderData = event.data
+        
+        # ✅ 性能优化：订单更新事件去重检查
+        order_key = f"{order.vt_orderid}_{order.status.value}"
+        current_time = time()
+        
+        # 检查是否已处理过（在TTL内）
+        from vnpy.trader.constant import Status
+        is_duplicate = False
+        if order_key in self._processed_order_updates:
+            last_time = self._processed_order_updates[order_key]
+            if current_time - last_time < self._order_update_dedup_ttl:
+                is_duplicate = True
+                # 对于"全部成交"状态，即使去重已标记，也要继续处理以确保挂单线被删除
+                if order.status == Status.ALLTRADED:
+                    if hasattr(self, '_main_engine') and self._main_engine:
+                        self._main_engine.write_log(
+                            f"[ChartWidget] 订单更新事件已处理，但ALLTRADED状态需要强制处理以确保挂单线被删除: {order.vt_orderid}",
+                            "ChartWidget"
+                        )
+                    # 继续处理，不return
+                else:
+                    # 已处理过，跳过（非ALLTRADED状态）
+                    if hasattr(self, '_main_engine') and self._main_engine:
+                        self._main_engine.write_log(
+                            f"[ChartWidget] 订单更新事件已处理，跳过重复处理: {order.vt_orderid} status={order.status.value}",
+                            "ChartWidget"
+                        )
+                    return
+        
+        # 标记为已处理
+        self._processed_order_updates[order_key] = current_time
+        
+        # 清理过期的去重记录（保留最近100条）
+        if len(self._processed_order_updates) > 100:
+            # 删除最旧的记录
+            sorted_items = sorted(self._processed_order_updates.items(), key=lambda x: x[1])
+            for old_key, _ in sorted_items[:-100]:
+                self._processed_order_updates.pop(old_key, None)
         
         # 添加详细日志
         if hasattr(self, '_main_engine') and self._main_engine:
@@ -1566,6 +2206,271 @@ class ChartWidget(pg.PlotWidget):
     
     def _process_order_update(self, order: OrderData) -> None:
         """在主线程中处理订单更新"""
+        from vnpy.trader.constant import Status
+        
+        # ✅ 性能优化：再次检查去重（防止信号槽多次触发）
+        order_key = f"{order.vt_orderid}_{order.status.value}"
+        current_time = time()
+        
+        # 检查是否已处理过（在TTL内）
+        is_duplicate = False
+        if order_key in self._processed_order_updates:
+            last_time = self._processed_order_updates[order_key]
+            if current_time - last_time < self._order_update_dedup_ttl:
+                is_duplicate = True
+                # 对于"全部成交"状态，即使去重已标记，也要确保挂单线、入场线及关联的止损/止盈线被删除
+                if order.status == Status.ALLTRADED:
+                    if self._drawing_order_controller and self._price_line_manager:
+                        line_id = self._drawing_order_controller.get_line_id_for_order(order.vt_orderid)
+                        if line_id:
+                            from .price_line import PriceLineType
+                            line = self._price_line_manager.get_line(line_id)
+                            if line:
+                                line_type = line.get_line_type()
+                                
+                                # 检查挂单线是否还存在
+                                if line_type == PriceLineType.PENDING:
+                                    # 挂单线仍然存在，需要删除（可能是之前的处理没有成功）
+                                    # 但需要先判断是否为平仓操作，以决定止损/止盈线的处理方式
+                                    if hasattr(self, '_main_engine') and self._main_engine:
+                                        self._main_engine.write_log(
+                                            f"[ChartWidget] 检测到重复的订单更新事件，但挂单线 {line_id} 仍然存在，需要判断是否为平仓操作",
+                                            "ChartWidget"
+                                        )
+                                    
+                                    # 判断是否为平仓操作（使用与 update_line_from_order 相同的逻辑）
+                                    from vnpy.trader.constant import Direction
+                                    direction = "long" if order.direction == Direction.LONG else "short"
+                                    opposite_direction = "short" if direction == "long" else "long"
+                                    
+                                    is_closing = False
+                                    # 1. 检查下单时是否已标记为平仓订单
+                                    if hasattr(self._drawing_order_controller, '_pending_order_params') and line_id in self._drawing_order_controller._pending_order_params:
+                                        order_data = self._drawing_order_controller._pending_order_params.get(line_id)
+                                        if order_data and order_data.get("is_closing", False):
+                                            is_closing = True
+                                    
+                                    # 2. 如果未标记，检查反向持仓手数
+                                    if not is_closing:
+                                        opposite_total_volume = 0.0
+                                        if hasattr(self, '_position_holdings'):
+                                            opposite_holding = self._position_holdings.get(opposite_direction)
+                                            if opposite_holding:
+                                                opposite_total_volume = sum(e.volume for e in opposite_holding.get_all_entries())
+                                        
+                                        # 如果PositionHolding中没有记录，尝试从main_engine获取
+                                        if opposite_total_volume == 0 and hasattr(self, '_main_engine') and self._main_engine:
+                                            all_positions = self._main_engine.get_all_positions()
+                                            for pos in all_positions:
+                                                # 检查合约是否匹配（考虑主力合约映射）
+                                                pos_vt_symbol = pos.vt_symbol
+                                                chart_vt_symbol = self._vt_symbol
+                                                
+                                                matched = False
+                                                if chart_vt_symbol and pos_vt_symbol == chart_vt_symbol:
+                                                    matched = True
+                                                elif chart_vt_symbol:
+                                                    position_symbol = pos.symbol
+                                                    chart_symbol = chart_vt_symbol.split('.')[0] if '.' in chart_vt_symbol else chart_vt_symbol
+                                                    for gateway_name in self._main_engine.get_all_gateway_names():
+                                                        gateway = self._main_engine.get_gateway(gateway_name)
+                                                        if gateway and hasattr(gateway, 'get_main_contract_mapping'):
+                                                            mapping = gateway.get_main_contract_mapping()
+                                                            for main_symbol, actual_symbol in mapping.items():
+                                                                if actual_symbol == position_symbol:
+                                                                    main_vt_symbol = f"{main_symbol}.{pos.exchange.value}"
+                                                                    if main_vt_symbol == chart_vt_symbol:
+                                                                        matched = True
+                                                                        break
+                                                            if matched:
+                                                                break
+                                                
+                                                if matched:
+                                                    pos_direction = "long" if pos.direction.value == "多" else "short"
+                                                    if pos_direction == opposite_direction:
+                                                        opposite_total_volume = pos.volume
+                                                        break
+                                        
+                                        # 检查是否为平仓：订单手数 <= 反向持仓手数
+                                        if order.traded > 0 and order.traded <= opposite_total_volume:
+                                            is_closing = True
+                                    
+                                    # 根据是否为平仓，决定止损/止盈线的处理方式
+                                    if is_closing:
+                                        # 平仓操作：删除挂单线关联的止损/止盈线
+                                        if hasattr(self._drawing_order_controller, '_pending_line_relations') and line_id in self._drawing_order_controller._pending_line_relations:
+                                            relations = self._drawing_order_controller._pending_line_relations[line_id]
+                                            
+                                            # 删除止损线
+                                            stop_loss_info = relations.get("stop_loss")
+                                            if stop_loss_info and stop_loss_info.get("line_id"):
+                                                stop_loss_line_id = stop_loss_info["line_id"]
+                                                stop_loss_line = self._price_line_manager.get_line(stop_loss_line_id)
+                                                if stop_loss_line:
+                                                    if hasattr(self, '_main_engine') and self._main_engine:
+                                                        self._main_engine.write_log(
+                                                            f"[ChartWidget] 平仓订单，删除挂单线 {line_id} 关联的止损线: {stop_loss_line_id}",
+                                                            "ChartWidget"
+                                                        )
+                                                    # 从 plot 中移除
+                                                    if self._first_plot:
+                                                        try:
+                                                            self._first_plot.removeItem(stop_loss_line)
+                                                        except Exception:
+                                                            pass
+                                                    # 从管理器中删除
+                                                    self._price_line_manager.delete_line(stop_loss_line_id)
+                                            
+                                            # 删除止盈线
+                                            take_profit_info = relations.get("take_profit")
+                                            if take_profit_info and take_profit_info.get("line_id"):
+                                                take_profit_line_id = take_profit_info["line_id"]
+                                                take_profit_line = self._price_line_manager.get_line(take_profit_line_id)
+                                                if take_profit_line:
+                                                    if hasattr(self, '_main_engine') and self._main_engine:
+                                                        self._main_engine.write_log(
+                                                            f"[ChartWidget] 平仓订单，删除挂单线 {line_id} 关联的止盈线: {take_profit_line_id}",
+                                                            "ChartWidget"
+                                                        )
+                                                    # 从 plot 中移除
+                                                    if self._first_plot:
+                                                        try:
+                                                            self._first_plot.removeItem(take_profit_line)
+                                                        except Exception:
+                                                            pass
+                                                    # 从管理器中删除
+                                                    self._price_line_manager.delete_line(take_profit_line_id)
+                                            
+                                            # 清理关联关系
+                                            self._drawing_order_controller._pending_line_relations.pop(line_id, None)
+                                        
+                                        # 删除挂单线
+                                        if self._first_plot:
+                                            try:
+                                                self._first_plot.removeItem(line)
+                                            except Exception:
+                                                pass
+                                        self._price_line_manager.delete_line(line_id)
+                                        # 清理订单映射
+                                        if hasattr(self._drawing_order_controller, '_line_order_map'):
+                                            self._drawing_order_controller._line_order_map.pop(line_id, None)
+                                        if hasattr(self._drawing_order_controller, '_order_line_map'):
+                                            self._drawing_order_controller._order_line_map.pop(order.vt_orderid, None)
+                                        
+                                        if hasattr(self, '_main_engine') and self._main_engine:
+                                            self._main_engine.write_log(
+                                                f"[ChartWidget] 平仓订单，已删除挂单线 {line_id} 及其关联的止损/止盈线",
+                                                "ChartWidget"
+                                            )
+                                        return
+                                    else:
+                                        # 非平仓操作：不应该在这里直接删除止损/止盈线
+                                        # 应该继续处理，让 update_line_from_order 方法正确处理（创建入场线并迁移止损/止盈线）
+                                        if hasattr(self, '_main_engine') and self._main_engine:
+                                            self._main_engine.write_log(
+                                                f"[ChartWidget] 非平仓订单，挂单线 {line_id} 仍然存在，继续处理以创建入场线并迁移止损/止盈线",
+                                                "ChartWidget"
+                                            )
+                                        # 继续处理，不return，确保调用 update_line_from_order
+                                
+                                # 检查入场线是否还存在，以及是否有关联的止损/止盈线
+                                elif line_type == PriceLineType.ENTRY:
+                                    # 入场线仍然存在，检查是否有关联的止损/止盈线需要删除
+                                    if hasattr(self, '_entry_line_relations') and line_id in self._entry_line_relations:
+                                        relations = self._entry_line_relations[line_id]
+                                        
+                                        # 删除止损线
+                                        stop_loss_line_id = relations.get("stop_loss")
+                                        if stop_loss_line_id:
+                                            stop_loss_line = self._price_line_manager.get_line(stop_loss_line_id)
+                                            if stop_loss_line:
+                                                if hasattr(self, '_main_engine') and self._main_engine:
+                                                    self._main_engine.write_log(
+                                                        f"[ChartWidget] 检测到重复的订单更新事件，但止损线 {stop_loss_line_id} 仍然存在，强制删除",
+                                                        "ChartWidget"
+                                                    )
+                                                # 从 plot 中移除
+                                                if self._first_plot:
+                                                    try:
+                                                        self._first_plot.removeItem(stop_loss_line)
+                                                    except Exception:
+                                                        pass
+                                                # 从管理器中删除
+                                                self._price_line_manager.delete_line(stop_loss_line_id)
+                                        
+                                        # 删除止盈线
+                                        take_profit_line_id = relations.get("take_profit")
+                                        if take_profit_line_id:
+                                            take_profit_line = self._price_line_manager.get_line(take_profit_line_id)
+                                            if take_profit_line:
+                                                if hasattr(self, '_main_engine') and self._main_engine:
+                                                    self._main_engine.write_log(
+                                                        f"[ChartWidget] 检测到重复的订单更新事件，但止盈线 {take_profit_line_id} 仍然存在，强制删除",
+                                                        "ChartWidget"
+                                                    )
+                                                # 从 plot 中移除
+                                                if self._first_plot:
+                                                    try:
+                                                        self._first_plot.removeItem(take_profit_line)
+                                                    except Exception:
+                                                        pass
+                                                # 从管理器中删除
+                                                self._price_line_manager.delete_line(take_profit_line_id)
+                                        
+                                        # 清理关联关系
+                                        self._entry_line_relations.pop(line_id, None)
+                                        
+                                        # 从数据库删除关联关系
+                                        if self._price_line_database:
+                                            self._price_line_database.delete_relation(line_id)
+                                        
+                                        if hasattr(self, '_main_engine') and self._main_engine:
+                                            self._main_engine.write_log(
+                                                f"[ChartWidget] 已清理入场线 {line_id} 的关联关系（止损/止盈线）",
+                                                "ChartWidget"
+                                            )
+                                    
+                                    # 删除入场线本身
+                                    if hasattr(self, '_main_engine') and self._main_engine:
+                                        self._main_engine.write_log(
+                                            f"[ChartWidget] 检测到重复的订单更新事件，但入场线 {line_id} 仍然存在，强制删除",
+                                            "ChartWidget"
+                                        )
+                                    # 从 plot 中移除
+                                    if self._first_plot:
+                                        try:
+                                            self._first_plot.removeItem(line)
+                                        except Exception:
+                                            pass
+                                    # 从管理器中删除
+                                    self._price_line_manager.delete_line(line_id)
+                                    # 清理订单映射
+                                    if hasattr(self._drawing_order_controller, '_line_order_map'):
+                                        self._drawing_order_controller._line_order_map.pop(line_id, None)
+                                    if hasattr(self._drawing_order_controller, '_order_line_map'):
+                                        self._drawing_order_controller._order_line_map.pop(order.vt_orderid, None)
+                                    return
+                
+                # 对于ALLTRADED状态，即使去重已标记，也要继续处理以确保挂单线被删除和入场线被创建
+                if order.status == Status.ALLTRADED:
+                    if hasattr(self, '_main_engine') and self._main_engine:
+                        self._main_engine.write_log(
+                            f"[ChartWidget] _process_order_update: 订单更新事件已处理，但ALLTRADED状态需要继续处理: {order.vt_orderid}",
+                            "ChartWidget"
+                        )
+                    # 继续处理，不return，确保调用 update_line_from_order
+                else:
+                    # 已处理过，跳过（非ALLTRADED状态）
+                    if hasattr(self, '_main_engine') and self._main_engine:
+                        self._main_engine.write_log(
+                            f"[ChartWidget] _process_order_update: 订单更新事件已处理，跳过重复处理: {order.vt_orderid} status={order.status.value}",
+                            "ChartWidget"
+                        )
+                    return
+        
+        # 标记为已处理
+        self._processed_order_updates[order_key] = current_time
+        
         if hasattr(self, '_main_engine') and self._main_engine:
             self._main_engine.write_log(
                 f"[ChartWidget] 开始处理订单更新: {order.vt_orderid} status={order.status.value}",
@@ -1652,7 +2557,7 @@ class ChartWidget(pg.PlotWidget):
                 
                 # Register for breakthrough monitoring if pending
                 if line_data.line_type == PriceLineType.PENDING and self._breakthrough_monitor:
-                    line = self._price_line_manager.get_line(line_id)
+                    line = self.get_price_line_manager().get_line(line_id)
                     if line:
                         # Register with a default callback (can be customized)
                         self._breakthrough_monitor.register_line(
@@ -1686,8 +2591,9 @@ class ChartWidget(pg.PlotWidget):
         if self._cursor:
             self._cursor.clear_all()
 
-        # Clear all price lines
-        self._price_line_manager.clear_all()
+        # Clear all price lines (if manager is initialized)
+        if self._price_line_manager:
+            self._price_line_manager.clear_all()
         
         # Clear breakthrough monitor
         if self._breakthrough_monitor:
@@ -1847,15 +2753,77 @@ class ChartWidget(pg.PlotWidget):
         if self._price_line_drag_handler.is_dragging():
             new_price = self._price_line_drag_handler.convert_scene_to_price(scene_pos)
             if new_price is not None:
-                self._price_line_drag_handler.update_drag(new_price)
-                # 如果拖拽的是挂单线，实时更新关联的止损/止盈线
-                dragging_line = self._price_line_drag_handler.get_dragging_line()
-                if dragging_line:
-                    self._update_related_lines_on_drag(dragging_line, new_price)
+                # 如果是从入场线拖拽，更新预览线并判断类型
+                if self._price_line_drag_handler.is_dragging_from_entry():
+                    entry_line = self._price_line_drag_handler.get_entry_line()
+                    if entry_line:
+                        entry_price = entry_line.get_price()
+                        direction = entry_line.get_direction()
+                        
+                        # 根据拖拽方向判断是止损还是止盈
+                        if direction == "long":
+                            # 多仓：价格低于入场价是止损，高于入场价是止盈
+                            line_type = PriceLineType.STOP_LOSS if new_price < entry_price else PriceLineType.TAKE_PROFIT
+                        else:
+                            # 空仓：价格高于入场价是止损，低于入场价是止盈
+                            line_type = PriceLineType.STOP_LOSS if new_price > entry_price else PriceLineType.TAKE_PROFIT
+                        
+                        preview_line = self._price_line_drag_handler.get_preview_line()
+                        if preview_line:
+                            # 更新预览线的类型和价格
+                            old_line_type = preview_line.get_line_type()
+                            if old_line_type != line_type:
+                                # 类型改变，需要重新创建预览线
+                                if preview_line.scene() is not None:
+                                    view_box = self._first_plot.getViewBox()
+                                    if view_box:
+                                        view_box.removeItem(preview_line)
+                                
+                                # 删除旧预览线
+                                for lid, line in self._price_line_manager.get_all_lines().items():
+                                    if line == preview_line:
+                                        self._price_line_manager.delete_line(lid)
+                                        break
+                                
+                                # 创建新预览线
+                                preview_line_id = self._price_line_manager.create_line(
+                                    price=new_price,
+                                    line_type=line_type,
+                                    direction=direction,
+                                    movable=True,
+                                    price_precision=self._price_precision
+                                )
+                                preview_line = self._price_line_manager.get_line(preview_line_id)
+                                if preview_line and self._first_plot:
+                                    self._first_plot.addItem(preview_line)
+                                    self._price_line_drag_handler.set_preview_line(preview_line)
+                            else:
+                                # 类型相同，只更新价格
+                                preview_line.set_price(new_price, self._price_precision)
+                        else:
+                            # 没有预览线，创建新的
+                            preview_line_id = self._price_line_manager.create_line(
+                                price=new_price,
+                                line_type=line_type,
+                                direction=direction,
+                                movable=True,
+                                price_precision=self._price_precision
+                            )
+                            preview_line = self._price_line_manager.get_line(preview_line_id)
+                            if preview_line and self._first_plot:
+                                self._first_plot.addItem(preview_line)
+                                self._price_line_drag_handler.set_preview_line(preview_line)
+                else:
+                    # 正常拖拽
+                    self._price_line_drag_handler.update_drag(new_price)
+                    # 如果拖拽的是挂单线，实时更新关联的止损/止盈线
+                    dragging_line = self._price_line_drag_handler.get_dragging_line()
+                    if dragging_line:
+                        self._update_related_lines_on_drag(dragging_line, new_price)
         else:
-            # Check for hover
+            # Check for hover (包括入场线)
             hovered_line = self._price_line_drag_handler.find_line_near_point(
-                scene_pos, all_lines
+                scene_pos, all_lines, include_entry_lines=True
             )
             
             # Change cursor style
@@ -1874,6 +2842,29 @@ class ChartWidget(pg.PlotWidget):
         if event.button() != QtCore.Qt.MouseButton.LeftButton:
             super().mousePressEvent(event)
             return
+
+        # 优先检查是否在画线下单模式
+        # 在画线下单模式下，任何点击都应该弹出下单对话框，不允许从入场线生成止损/止盈线
+        if self._drawing_order_controller and self._drawing_order_controller.is_enabled():
+            # Handle drawing order mode
+            if self._first_plot:
+                # Get click price
+                view_box = self._first_plot.getViewBox()
+                if view_box:
+                    scene_pos = self.mapToScene(event.pos())
+                    view_pos = view_box.mapSceneToView(scene_pos)
+                    price = view_pos.y()
+                    
+                    if price > 0:
+                        # Show preview line
+                        self._drawing_order_controller.show_preview_line(price, "long")
+                        
+                        # Emit signal for order dialog (will be handled by parent widget)
+                        # For now, we'll create a callback mechanism
+                        if hasattr(self, '_on_drawing_click'):
+                            self._on_drawing_click(price)
+                        event.accept()
+                        return
 
         if not self._price_line_drag_handler or not self._first_plot:
             super().mousePressEvent(event)
@@ -1895,28 +2886,55 @@ class ChartWidget(pg.PlotWidget):
             self._price_line_drag_handler.start_drag(clicked_line)
             event.accept()
             return
-
-        # Check if in drawing mode (只有在没有点击到价格线时才处理画线)
-        if self._drawing_order_controller and self._drawing_order_controller.is_enabled():
-            # Handle drawing order mode
-            if self._first_plot:
-                # Get click price
-                view_box = self._first_plot.getViewBox()
-                if view_box:
-                    scene_pos = self.mapToScene(event.pos())
-                    view_pos = view_box.mapSceneToView(scene_pos)
-                    price = view_pos.y()
+        
+        # 如果点击的是入场线，开始从入场线拖拽生成止损/止盈线
+        # 注意：只有在画线下单未启用时才允许此操作
+        if clicked_line is None:
+            # 尝试查找入场线（包括不可移动的）
+            clicked_line = self._price_line_drag_handler.find_line_near_point(
+                scene_pos, all_lines, include_entry_lines=True
+            )
+        
+        if clicked_line and clicked_line.get_line_type() == PriceLineType.ENTRY:
+            # 从入场线开始拖拽
+            self._price_line_drag_handler.start_drag_from_entry(clicked_line)
+            
+            # 创建预览线
+            entry_price = clicked_line.get_price()
+            direction = clicked_line.get_direction()
+            
+            # 获取当前鼠标位置的价格
+            view_box = self._first_plot.getViewBox()
+            if view_box:
+                view_pos = view_box.mapSceneToView(scene_pos)
+                preview_price = view_pos.y()
+                
+                # 根据拖拽方向判断是止损还是止盈
+                # 对于多仓：向下拖拽是止损，向上拖拽是止盈
+                # 对于空仓：向上拖拽是止损，向下拖拽是止盈
+                if preview_price > 0:
+                    if direction == "long":
+                        # 多仓：价格低于入场价是止损，高于入场价是止盈
+                        line_type = PriceLineType.STOP_LOSS if preview_price < entry_price else PriceLineType.TAKE_PROFIT
+                    else:
+                        # 空仓：价格高于入场价是止损，低于入场价是止盈
+                        line_type = PriceLineType.STOP_LOSS if preview_price > entry_price else PriceLineType.TAKE_PROFIT
                     
-                    if price > 0:
-                        # Show preview line
-                        self._drawing_order_controller.show_preview_line(price, "long")
-                        
-                        # Emit signal for order dialog (will be handled by parent widget)
-                        # For now, we'll create a callback mechanism
-                        if hasattr(self, '_on_drawing_click'):
-                            self._on_drawing_click(price)
-                        event.accept()
-                        return
+                    # 创建预览线
+                    preview_line_id = self._price_line_manager.create_line(
+                        price=preview_price,
+                        line_type=line_type,
+                        direction=direction,
+                        movable=True,
+                        price_precision=self._price_precision
+                    )
+                    preview_line = self._price_line_manager.get_line(preview_line_id)
+                    if preview_line and self._first_plot:
+                        self._first_plot.addItem(preview_line)
+                        self._price_line_drag_handler.set_preview_line(preview_line)
+            
+            event.accept()
+            return
 
         super().mousePressEvent(event)
     
@@ -1960,13 +2978,198 @@ class ChartWidget(pg.PlotWidget):
         """
         Handle mouse release event to end dragging price line.
         """
+        from .price_line import PriceLineType
+        
         if self._price_line_drag_handler and self._price_line_drag_handler.is_dragging():
+            # 如果是从入场线拖拽，创建止损/止盈线
+            if self._price_line_drag_handler.is_dragging_from_entry():
+                entry_line = self._price_line_drag_handler.get_entry_line()
+                preview_line = self._price_line_drag_handler.get_preview_line()
+                final_price = self._price_line_drag_handler.end_drag()
+                
+                if entry_line and preview_line and final_price is not None:
+                    # 获取入场线的ID
+                    manager = self.get_price_line_manager()
+                    entry_line_id = None
+                    for lid, line in manager.get_all_lines().items():
+                        if line == entry_line:
+                            entry_line_id = lid
+                            break
+                    
+                    if entry_line_id:
+                        # 获取预览线的类型和方向
+                        line_type = preview_line.get_line_type()
+                        direction = preview_line.get_direction()
+                        
+                        # 删除预览线
+                        preview_line_id = None
+                        for lid, line in manager.get_all_lines().items():
+                            if line == preview_line:
+                                preview_line_id = lid
+                                break
+                        
+                        if preview_line_id:
+                            # 从图表中移除预览线
+                            if preview_line.scene() is not None:
+                                view_box = self._first_plot.getViewBox()
+                                if view_box:
+                                    view_box.removeItem(preview_line)
+                            
+                            # 删除预览线，创建真正的止损/止盈线
+                            manager.delete_line(preview_line_id)
+                            
+                            # 创建止损/止盈线
+                            new_line_id = manager.create_line(
+                                price=final_price,
+                                line_type=line_type,
+                                direction=direction,
+                                movable=True,
+                                price_precision=self._price_precision
+                            )
+                            
+                            new_line = manager.get_line(new_line_id)
+                            if new_line and self._first_plot:
+                                self._first_plot.addItem(new_line)
+                                
+                                # 获取入场线的手数（如果是合并显示的，获取总持仓手数）
+                                entry_volume = entry_line.get_volume()
+                                
+                                # 如果入场线手数为0或很小，尝试从 PositionHolding 获取总持仓手数
+                                if entry_volume <= 0.01:
+                                    if hasattr(self, '_position_holdings') and self._position_holdings:
+                                        holding = self._position_holdings.get(direction)
+                                        if holding:
+                                            # 计算总持仓手数
+                                            total_volume = sum(e.volume for e in holding.get_all_entries())
+                                            if total_volume > 0:
+                                                entry_volume = total_volume
+                                
+                                # 为创建的止损/止盈线设置手数
+                                if entry_volume > 0:
+                                    new_line.set_volume(entry_volume)
+                                    if hasattr(self, '_main_engine') and self._main_engine:
+                                        line_type_name = "止损" if line_type == PriceLineType.STOP_LOSS else "止盈"
+                                        self._main_engine.write_log(
+                                            f"[ChartWidget] 从入场线创建{line_type_name}线: 价格={final_price:.2f}, "
+                                            f"入场线ID={entry_line_id}, 手数={entry_volume}",
+                                            "ChartWidget"
+                                        )
+                                
+                                # 存储入场线和止损/止盈线的关联关系
+                                if not hasattr(self, '_entry_line_relations'):
+                                    self._entry_line_relations = {}
+                                
+                                if entry_line_id not in self._entry_line_relations:
+                                    self._entry_line_relations[entry_line_id] = {}
+                                
+                                if line_type == PriceLineType.STOP_LOSS:
+                                    # 如果已有旧的止损线关联，先清理旧的关联关系和数据库记录
+                                    old_stop_loss_id = self._entry_line_relations[entry_line_id].get("stop_loss")
+                                    if old_stop_loss_id and old_stop_loss_id != new_line_id:
+                                        # 删除数据库中的旧关联关系
+                                        if self._price_line_database:
+                                            self._price_line_database.delete_relation(entry_line_id, "stop_loss")
+                                        # 删除旧的止损线（如果存在）
+                                        old_stop_loss_line = manager.get_line(old_stop_loss_id)
+                                        if old_stop_loss_line:
+                                            # 从图表中移除
+                                            if old_stop_loss_line.scene() is not None and self._first_plot:
+                                                try:
+                                                    self._first_plot.removeItem(old_stop_loss_line)
+                                                except Exception:
+                                                    pass
+                                            # 从管理器中删除
+                                            manager.delete_line(old_stop_loss_id)
+                                            # 清理数据库中的关联关系（通过关联线ID删除）
+                                            if self._price_line_database and hasattr(self._price_line_database, 'delete_relations_by_related_line_id'):
+                                                self._price_line_database.delete_relations_by_related_line_id(old_stop_loss_id)
+                                            if hasattr(self, '_main_engine') and self._main_engine:
+                                                self._main_engine.write_log(
+                                                    f"[ChartWidget] 已删除旧的止损线关联: {entry_line_id} -> {old_stop_loss_id}",
+                                                    "ChartWidget"
+                                                )
+                                    
+                                    self._entry_line_relations[entry_line_id]["stop_loss"] = new_line_id
+                                    # 保存关联关系到数据库
+                                    if self._price_line_database:
+                                        success = self._price_line_database.save_relation(
+                                            entry_line_id, new_line_id, "stop_loss"
+                                        )
+                                        if hasattr(self, '_main_engine') and self._main_engine:
+                                            if success:
+                                                self._main_engine.write_log(
+                                                    f"[ChartWidget] 已保存止损线关联关系到数据库: {entry_line_id} -> {new_line_id}",
+                                                    "ChartWidget"
+                                                )
+                                            else:
+                                                self._main_engine.write_log(
+                                                    f"[ChartWidget] 警告：保存止损线关联关系到数据库失败: {entry_line_id} -> {new_line_id}",
+                                                    "ChartWidget"
+                                                )
+                                elif line_type == PriceLineType.TAKE_PROFIT:
+                                    # 如果已有旧的止盈线关联，先清理旧的关联关系和数据库记录
+                                    old_take_profit_id = self._entry_line_relations[entry_line_id].get("take_profit")
+                                    if old_take_profit_id and old_take_profit_id != new_line_id:
+                                        # 删除数据库中的旧关联关系
+                                        if self._price_line_database:
+                                            self._price_line_database.delete_relation(entry_line_id, "take_profit")
+                                        # 删除旧的止盈线（如果存在）
+                                        old_take_profit_line = manager.get_line(old_take_profit_id)
+                                        if old_take_profit_line:
+                                            # 从图表中移除
+                                            if old_take_profit_line.scene() is not None and self._first_plot:
+                                                try:
+                                                    self._first_plot.removeItem(old_take_profit_line)
+                                                except Exception:
+                                                    pass
+                                            # 从管理器中删除
+                                            manager.delete_line(old_take_profit_id)
+                                            # 清理数据库中的关联关系（通过关联线ID删除）
+                                            if self._price_line_database and hasattr(self._price_line_database, 'delete_relations_by_related_line_id'):
+                                                self._price_line_database.delete_relations_by_related_line_id(old_take_profit_id)
+                                            if hasattr(self, '_main_engine') and self._main_engine:
+                                                self._main_engine.write_log(
+                                                    f"[ChartWidget] 已删除旧的止盈线关联: {entry_line_id} -> {old_take_profit_id}",
+                                                    "ChartWidget"
+                                                )
+                                    
+                                    self._entry_line_relations[entry_line_id]["take_profit"] = new_line_id
+                                    # 保存关联关系到数据库
+                                    if self._price_line_database:
+                                        success = self._price_line_database.save_relation(
+                                            entry_line_id, new_line_id, "take_profit"
+                                        )
+                                        if hasattr(self, '_main_engine') and self._main_engine:
+                                            if success:
+                                                self._main_engine.write_log(
+                                                    f"[ChartWidget] 已保存止盈线关联关系到数据库: {entry_line_id} -> {new_line_id}",
+                                                    "ChartWidget"
+                                                )
+                                            else:
+                                                self._main_engine.write_log(
+                                                    f"[ChartWidget] 警告：保存止盈线关联关系到数据库失败: {entry_line_id} -> {new_line_id}",
+                                                    "ChartWidget"
+                                                )
+                                
+                                # 记录日志
+                                if hasattr(self, '_main_engine') and self._main_engine:
+                                    line_type_name = "止损" if line_type == PriceLineType.STOP_LOSS else "止盈"
+                                    volume_info = f", 手数={entry_volume}" if entry_volume > 0 else ""
+                                    self._main_engine.write_log(
+                                        f"[ChartWidget] 从入场线创建{line_type_name}线: 价格={final_price:.2f}, "
+                                        f"入场线ID={entry_line_id}{volume_info}",
+                                        "ChartWidget"
+                                    )
+                
+                event.accept()
+                return
+            
+            # 正常拖拽处理
             dragging_line = self._price_line_drag_handler.get_dragging_line()
             final_price = self._price_line_drag_handler.end_drag()
             
             if dragging_line and final_price is not None:
                 # 检查拖拽的是挂单线还是止损/止盈线
-                from .price_line import PriceLineType
                 line_type = dragging_line.get_line_type()
                 
                 if line_type == PriceLineType.PENDING:
@@ -1993,26 +3196,142 @@ class ChartWidget(pg.PlotWidget):
             super().mouseDoubleClickEvent(event)
             return
 
+        # 如果正在从入场线拖拽，先取消拖拽（避免双击时创建预览线）
+        if self._price_line_drag_handler.is_dragging_from_entry():
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log(
+                    f"[ChartWidget] 双击事件: 检测到正在从入场线拖拽，先取消拖拽",
+                    "ChartWidget"
+                )
+            # 取消拖拽并删除预览线
+            self._price_line_drag_handler.cancel_drag()
+            # 删除预览线（如果存在）
+            preview_line = self._price_line_drag_handler.get_preview_line()
+            if preview_line:
+                # 查找预览线的ID并删除
+                manager = self.get_price_line_manager()
+                for lid, line in manager.get_all_lines().items():
+                    if line == preview_line:
+                        # 从 plot 中移除
+                        if preview_line.scene() is not None and self._first_plot:
+                            try:
+                                self._first_plot.removeItem(preview_line)
+                            except Exception:
+                                pass
+                        # 从管理器中删除
+                        manager.delete_line(lid)
+                        break
+
         # Get scene position
         scene_pos = self.mapToScene(event.pos())
         
-        # Get all price lines
+        # Get all price lines（在取消拖拽后重新获取，确保不包含刚创建的预览线）
         all_lines = list(self._price_line_manager.get_all_lines().values())
         
-        # Find line near click position
+        # Find line near click position (include entry lines for double click)
         clicked_line = self._price_line_drag_handler.find_line_near_point(
-            scene_pos, all_lines
+            scene_pos, all_lines, include_entry_lines=True
         )
+        
+        # 添加调试日志
+        if hasattr(self, '_main_engine') and self._main_engine:
+            self._main_engine.write_log(
+                f"[ChartWidget] 双击事件: 场景位置={scene_pos}, 价格线数量={len(all_lines)}, "
+                f"找到价格线={clicked_line is not None}",
+                "ChartWidget"
+            )
         
         if clicked_line:
             line_type = clicked_line.get_line_type()
             
+            # 添加调试日志
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log(
+                    f"[ChartWidget] 双击事件: 找到价格线类型={line_type.value if hasattr(line_type, 'value') else line_type}",
+                    "ChartWidget"
+                )
+            
+            # 如果找到的是止损/止盈线，检查附近是否有入场线（优先处理入场线）
+            if line_type in (PriceLineType.STOP_LOSS, PriceLineType.TAKE_PROFIT):
+                # 手动查找附近的入场线（使用相同的阈值）
+                view_box = self._first_plot.getViewBox() if self._first_plot else None
+                if view_box:
+                    view_pos = view_box.mapSceneToView(scene_pos)
+                    mouse_price = view_pos.y()
+                    
+                    # 计算阈值（价格单位）
+                    view_range = view_box.viewRange()
+                    if view_range:
+                        y_range = view_range[1]
+                        y_height = y_range[1] - y_range[0]
+                        plot_height = view_box.height()
+                        if plot_height > 0:
+                            price_per_pixel = y_height / plot_height
+                            hover_threshold_pixels = self._price_line_drag_handler._hover_threshold if hasattr(self._price_line_drag_handler, '_hover_threshold') else 10
+                            price_threshold = hover_threshold_pixels * price_per_pixel
+                            
+                            # 查找附近的入场线
+                            nearby_entry_line = None
+                            min_entry_distance = float('inf')
+                            
+                            for line in all_lines:
+                                if line.get_line_type() == PriceLineType.ENTRY:
+                                    line_price = line.get_price()
+                                    distance = abs(mouse_price - line_price)
+                                    
+                                    if distance < price_threshold and distance < min_entry_distance:
+                                        min_entry_distance = distance
+                                        nearby_entry_line = line
+                            
+                            # 如果找到附近的入场线，优先处理入场线
+                            if nearby_entry_line:
+                                if hasattr(self, '_main_engine') and self._main_engine:
+                                    self._main_engine.write_log(
+                                        f"[ChartWidget] 双击事件: 找到止损/止盈线，但附近有入场线（距离={min_entry_distance:.2f}），优先处理入场线",
+                                        "ChartWidget"
+                                    )
+                                clicked_line = nearby_entry_line
+                                line_type = PriceLineType.ENTRY
+            
             # Find line ID in manager
+            # 使用对象引用比较（优先）
             line_id = None
+            clicked_price = clicked_line.get_price()
+            clicked_direction = clicked_line.get_direction()
+            
+            # 首先尝试对象引用比较
             for lid, line in self._price_line_manager.get_all_lines().items():
                 if line == clicked_line:
                     line_id = lid
+                    if hasattr(self, '_main_engine') and self._main_engine:
+                        self._main_engine.write_log(
+                            f"[ChartWidget] 双击事件: 通过对象引用找到line_id={line_id}",
+                            "ChartWidget"
+                        )
                     break
+            
+            # 如果对象引用比较失败，使用价格、类型和方向匹配（备用方案）
+            if not line_id:
+                for lid, line in self._price_line_manager.get_all_lines().items():
+                    if (line.get_line_type() == line_type and 
+                        abs(line.get_price() - clicked_price) < 0.01 and
+                        line.get_direction() == clicked_direction):
+                        line_id = lid
+                        if hasattr(self, '_main_engine') and self._main_engine:
+                            self._main_engine.write_log(
+                                f"[ChartWidget] 双击事件: 通过价格和类型匹配找到line_id={line_id} "
+                                f"(价格={clicked_price}, 类型={line_type.value if hasattr(line_type, 'value') else line_type}, 方向={clicked_direction})",
+                                "ChartWidget"
+                            )
+                        break
+            
+            # 添加调试日志
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log(
+                    f"[ChartWidget] 双击事件: line_id={line_id}, 价格线管理器中的线数量={len(self._price_line_manager.get_all_lines())}, "
+                    f"点击的价格={clicked_price}, 方向={clicked_direction}",
+                    "ChartWidget"
+                )
             
             if line_id:
                 if line_type == PriceLineType.PENDING:
@@ -2080,17 +3399,272 @@ class ChartWidget(pg.PlotWidget):
                                 self._drawing_order_controller.remove_order_line(vt_orderid)
                             else:
                                 # If no order linked, just remove the line
-                                self._price_line_manager.delete_line(line_id)
+                                self.get_price_line_manager().delete_line(line_id)
                         else:
                             # No controller, just remove the line
-                            self._price_line_manager.delete_line(line_id)
+                            self.get_price_line_manager().delete_line(line_id)
                 elif line_type == PriceLineType.ENTRY:
                     # Double click entry line: Close position
-                    # TODO: In Phase 3, this will trigger close position order
-                    pass
+                    # 添加调试日志
+                    if hasattr(self, '_main_engine') and self._main_engine:
+                        drawing_enabled = self._drawing_order_controller.is_enabled() if self._drawing_order_controller else False
+                        self._main_engine.write_log(
+                            f"[ChartWidget] 双击入场线: line_id={line_id}, 画线下单状态={drawing_enabled}, "
+                            f"入场线价格={clicked_line.get_price()}, 方向={clicked_line.get_direction()}, 手数={clicked_line.get_volume()}",
+                            "ChartWidget"
+                        )
+                    
+                    # 只有在画线下单未启动时才触发平仓
+                    if not self._drawing_order_controller or not self._drawing_order_controller.is_enabled():
+                        # 防抖检查：防止短时间内对同一入场线重复触发平仓
+                        current_time = time()
+                        if line_id in self._last_double_click_close:
+                            last_time = self._last_double_click_close[line_id]
+                            if current_time - last_time < self._double_click_debounce_ttl:
+                                if hasattr(self, '_main_engine') and self._main_engine:
+                                    self._main_engine.write_log(
+                                        f"[ChartWidget] 双击入场线防抖：入场线 {line_id} 在 {current_time - last_time:.2f} 秒前已触发平仓，跳过重复操作",
+                                        "ChartWidget"
+                                    )
+                                return
+                        
+                        # 记录本次双击时间
+                        self._last_double_click_close[line_id] = current_time
+                        
+                        if hasattr(self, '_main_engine') and self._main_engine:
+                            self._main_engine.write_log(
+                                f"[ChartWidget] 画线下单未启用，准备触发平仓",
+                                "ChartWidget"
+                            )
+                        # 获取入场线的方向和手数
+                        direction_str = clicked_line.get_direction()
+                        entry_volume = clicked_line.get_volume()
+                        
+                        if hasattr(self, '_main_engine') and self._main_engine:
+                            self._main_engine.write_log(
+                                f"[ChartWidget] 双击入场线平仓: 方向={direction_str}, 入场线手数={entry_volume}",
+                                "ChartWidget"
+                            )
+                        
+                        # 如果入场线手数为0或很小，尝试从 PositionHolding 获取总持仓手数
+                        if entry_volume <= 0.01:
+                            if hasattr(self, '_position_holdings') and self._position_holdings:
+                                holding = self._position_holdings.get(direction_str)
+                                if holding:
+                                    # 计算总持仓手数
+                                    total_volume = sum(e.volume for e in holding.get_all_entries())
+                                    if total_volume > 0:
+                                        entry_volume = total_volume
+                        
+                        # 如果手数仍然为0，尝试从 main_engine 获取持仓信息
+                        if entry_volume <= 0.01 and self._main_engine:
+                            all_positions = self._main_engine.get_all_positions()
+                            for pos in all_positions:
+                                # 检查合约是否匹配（考虑主力合约映射）
+                                pos_vt_symbol = pos.vt_symbol
+                                chart_vt_symbol = self._vt_symbol
+                                
+                                matched = False
+                                if chart_vt_symbol and pos_vt_symbol == chart_vt_symbol:
+                                    matched = True
+                                elif chart_vt_symbol:
+                                    position_symbol = pos.symbol
+                                    chart_symbol = chart_vt_symbol.split('.')[0] if '.' in chart_vt_symbol else chart_vt_symbol
+                                    for gateway_name in self._main_engine.get_all_gateway_names():
+                                        gateway = self._main_engine.get_gateway(gateway_name)
+                                        if gateway and hasattr(gateway, 'get_main_contract_mapping'):
+                                            mapping = gateway.get_main_contract_mapping()
+                                            for main_symbol, actual_symbol in mapping.items():
+                                                if actual_symbol == position_symbol:
+                                                    main_vt_symbol = f"{main_symbol}.{pos.exchange.value}"
+                                                    if main_vt_symbol == chart_vt_symbol:
+                                                        matched = True
+                                                        break
+                                            if matched:
+                                                break
+                                
+                                if matched:
+                                    pos_direction = "long" if pos.direction.value == "多" else "short"
+                                    if pos_direction == direction_str:
+                                        entry_volume = pos.volume
+                                        break
+                        
+                        # 如果手数仍然为0，提示用户
+                        if entry_volume <= 0.01:
+                            if self._main_engine:
+                                self._main_engine.write_log(
+                                    f"[ChartWidget] 双击入场线平仓失败：持仓手数为0",
+                                    "ChartWidget"
+                                )
+                            return
+                        
+                        # 显示确认对话框
+                        from vnpy.trader.ui import QtWidgets
+                        from vnpy.trader.locale import _
+                        
+                        direction_display = "多仓" if direction_str == "long" else "空仓"
+                        message = _(
+                            f"确定要平仓吗？\n\n"
+                            f"方向：{direction_display}\n"
+                            f"手数：{int(entry_volume) if entry_volume == int(entry_volume) else entry_volume}手\n"
+                            f"入场价格：{clicked_line.get_price():.2f}"
+                        )
+                        
+                        reply = QtWidgets.QMessageBox.question(
+                            self,
+                            _("确认平仓"),
+                            message,
+                            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+                            QtWidgets.QMessageBox.StandardButton.No
+                        )
+                        
+                        if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+                            # 用户取消，清理防抖记录
+                            self._last_double_click_close.pop(line_id, None)
+                            if hasattr(self, '_main_engine') and self._main_engine:
+                                self._main_engine.write_log(
+                                    f"[ChartWidget] 用户取消平仓操作",
+                                    "ChartWidget"
+                                )
+                            return
+                        
+                        # 获取对价（对手价）
+                        if not self._main_engine or not self._vt_symbol:
+                            if self._main_engine:
+                                self._main_engine.write_log(
+                                    f"[ChartWidget] 双击入场线平仓失败：缺少必要信息",
+                                    "ChartWidget"
+                                )
+                            return
+                        
+                        # 获取行情数据
+                        tick_data = self._main_engine.get_tick(self._vt_symbol)
+                        if not tick_data:
+                            if self._main_engine:
+                                self._main_engine.write_log(
+                                    f"[ChartWidget] 双击入场线平仓失败：无法获取行情数据",
+                                    "ChartWidget"
+                                )
+                            return
+                        
+                        # 计算对手价：平多仓用买一价，平空仓用卖一价
+                        from vnpy.trader.constant import Direction
+                        if direction_str == "long":
+                            # 平多仓：使用买一价（对手价）
+                            opponent_price = tick_data.bid_price_1 if tick_data.bid_price_1 > 0 else tick_data.last_price
+                            close_direction = Direction.SHORT
+                        else:
+                            # 平空仓：使用卖一价（对手价）
+                            opponent_price = tick_data.ask_price_1 if tick_data.ask_price_1 > 0 else tick_data.last_price
+                            close_direction = Direction.LONG
+                        
+                        if opponent_price <= 0:
+                            if self._main_engine:
+                                self._main_engine.write_log(
+                                    f"[ChartWidget] 双击入场线平仓失败：无法获取有效对手价",
+                                    "ChartWidget"
+                                )
+                            return
+                        
+                        # 解析合约信息
+                        if '.' not in self._vt_symbol:
+                            if self._main_engine:
+                                self._main_engine.write_log(
+                                    f"[ChartWidget] 双击入场线平仓失败：合约格式错误",
+                                    "ChartWidget"
+                                )
+                            return
+                        
+                        symbol, exchange_str = self._vt_symbol.split('.', 1)
+                        from vnpy.trader.constant import Exchange
+                        try:
+                            exchange = Exchange(exchange_str)
+                        except ValueError:
+                            if self._main_engine:
+                                self._main_engine.write_log(
+                                    f"[ChartWidget] 双击入场线平仓失败：交易所格式错误",
+                                    "ChartWidget"
+                                )
+                            return
+                        
+                        # 获取网关名称
+                        gateway_name = None
+                        for gw_name in self._main_engine.get_all_gateway_names():
+                            gateway = self._main_engine.get_gateway(gw_name)
+                            if gateway:
+                                # 检查网关是否支持该合约
+                                contract = self._main_engine.get_contract(self._vt_symbol)
+                                if contract and contract.gateway_name == gw_name:
+                                    gateway_name = gw_name
+                                    break
+                        
+                        if not gateway_name:
+                            if self._main_engine:
+                                self._main_engine.write_log(
+                                    f"[ChartWidget] 双击入场线平仓失败：无法找到对应的网关",
+                                    "ChartWidget"
+                                )
+                            return
+                        
+                        # 创建平仓订单请求
+                        from vnpy.trader.object import OrderRequest
+                        from vnpy.trader.constant import OrderType, Offset
+                        
+                        req = OrderRequest(
+                            symbol=symbol,
+                            exchange=exchange,
+                            direction=close_direction,
+                            offset=Offset.CLOSE,
+                            type=OrderType.OPPONENT,
+                            price=opponent_price,
+                            volume=entry_volume,
+                            reference="双击入场线平仓"
+                        )
+                        
+                        # 发送订单
+                        try:
+                            vt_orderid = self._main_engine.send_order(req, gateway_name)
+                            if self._main_engine:
+                                self._main_engine.write_log(
+                                    f"[ChartWidget] 双击入场线平仓：方向={direction_str}, 手数={entry_volume}, "
+                                    f"对手价={opponent_price:.2f}, 订单ID={vt_orderid}",
+                                    "ChartWidget"
+                                )
+                        except Exception as e:
+                            if self._main_engine:
+                                self._main_engine.write_log(
+                                    f"[ChartWidget] 双击入场线平仓失败：{str(e)}",
+                                    "ChartWidget"
+                                )
                 elif line_type in (PriceLineType.STOP_LOSS, PriceLineType.TAKE_PROFIT):
                     # Double click stop loss/take profit: Delete the line
-                    self._price_line_manager.delete_line(line_id)
+                    # 双击止损/止盈线只删除该线，不触发平仓
+                    if hasattr(self, '_main_engine') and self._main_engine:
+                        self._main_engine.write_log(
+                            f"[ChartWidget] 双击{line_type.value}线，准备删除: line_id={line_id}",
+                            "ChartWidget"
+                        )
+                    
+                    # 从 plot 中移除
+                    if self._first_plot:
+                        try:
+                            clicked_line_item = self._price_line_manager.get_line(line_id)
+                            if clicked_line_item:
+                                self._first_plot.removeItem(clicked_line_item)
+                        except Exception as e:
+                            if hasattr(self, '_main_engine') and self._main_engine:
+                                self._main_engine.write_log(
+                                    f"[ChartWidget] 从plot移除{line_type.value}线失败: {str(e)}",
+                                    "ChartWidget"
+                                )
+                    
+                    # 从管理器中删除
+                    delete_result = self._price_line_manager.delete_line(line_id)
+                    if hasattr(self, '_main_engine') and self._main_engine:
+                        self._main_engine.write_log(
+                            f"[ChartWidget] 双击{line_type.value}线，删除结果: line_id={line_id}, 成功={delete_result}",
+                            "ChartWidget"
+                        )
             
             event.accept()
             return
@@ -2359,6 +3933,76 @@ class ChartWidget(pg.PlotWidget):
         """
         self._future_bars = bars
         self._update_plot_limits()
+    
+    def _load_line_relations(self) -> None:
+        """从数据库加载价格线关联关系。"""
+        if not self._price_line_database or not self._vt_symbol:
+            return
+        
+        manager = self.get_price_line_manager()
+        if not manager:
+            return
+        
+        # 加载所有关联关系
+        all_relations = self._price_line_database.load_relations()
+        
+        # 按入场线ID分组
+        for relation in all_relations:
+            entry_line_id = relation["entry_line_id"]
+            related_line_id = relation["related_line_id"]
+            relation_type = relation["relation_type"]
+            
+            # 验证关联的价格线是否存在
+            entry_line = manager.get_line(entry_line_id)
+            related_line = manager.get_line(related_line_id)
+            
+            # 只加载存在的价格线的关联关系
+            if entry_line and related_line:
+                if entry_line_id not in self._entry_line_relations:
+                    self._entry_line_relations[entry_line_id] = {}
+                self._entry_line_relations[entry_line_id][relation_type] = related_line_id
+    
+    def _load_position_holdings(self) -> None:
+        """从数据库加载持仓记录（用于FIFO平仓）。"""
+        if not self._price_line_database or not self._vt_symbol:
+            return
+        
+        # 加载所有方向的持仓记录
+        for direction in ["long", "short"]:
+            entries_data = self._price_line_database.load_position_entries(
+                vt_symbol=self._vt_symbol,
+                direction=direction
+            )
+            
+            if not entries_data:
+                continue
+            
+            # 创建或获取 PositionHolding
+            if direction not in self._position_holdings:
+                self._position_holdings[direction] = PositionHolding(direction)
+            
+            holding = self._position_holdings[direction]
+            
+            # 加载持仓记录（按成交时间排序，确保FIFO顺序）
+            for entry_data in entries_data:
+                line_id = entry_data["line_id"]
+                
+                # 验证入场线是否存在
+                manager = self.get_price_line_manager()
+                if manager and manager.get_line(line_id):
+                    holding.add_entry(
+                        line_id=line_id,
+                        price=entry_data["price"],
+                        volume=entry_data["volume"],
+                        vt_orderid=entry_data["vt_orderid"],
+                        trade_time=entry_data["trade_time"]
+                    )
+            
+            if hasattr(self, '_main_engine') and self._main_engine and entries_data:
+                self._main_engine.write_log(
+                    f"[ChartWidget] 从数据库加载了 {len(entries_data)} 条{direction}方向的持仓记录",
+                    "ChartWidget"
+                )
 
 
 class ChartCursor(QtCore.QObject):
@@ -2594,3 +4238,42 @@ class ChartCursor(QtCore.QObject):
 
         for label in list(self._y_labels.values()) + [self._x_label]:
             label.hide()
+    
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        """
+        处理窗口关闭事件，确保数据库数据已保存。
+        
+        Args:
+            event: 关闭事件
+        """
+        # 刷新数据库，确保所有数据已持久化
+        if self._price_line_database:
+            try:
+                self._price_line_database.flush()
+            except Exception as e:
+                if hasattr(self, '_main_engine') and self._main_engine:
+                    self._main_engine.write_log(
+                        f"[ChartWidget] 关闭时刷新数据库失败: {e}",
+                        "ChartWidget"
+                    )
+        
+        # 调用父类方法
+        super().closeEvent(event)
+    
+    def close(self) -> None:
+        """
+        关闭图表组件，确保数据库连接正确关闭。
+        """
+        # 关闭数据库连接
+        if self._price_line_database:
+            try:
+                self._price_line_database.close()
+            except Exception as e:
+                if hasattr(self, '_main_engine') and self._main_engine:
+                    self._main_engine.write_log(
+                        f"[ChartWidget] 关闭数据库连接失败: {e}",
+                        "ChartWidget"
+                    )
+        
+        # 调用父类方法
+        super().close()

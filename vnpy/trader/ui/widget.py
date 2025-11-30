@@ -5257,12 +5257,21 @@ class ChartWindow(QtWidgets.QWidget):
                 f"突破条件: {'last_price < line_price_int <= current_price' if direction == 'long' else 'last_price > line_price_int >= current_price'} = {breakthrough_condition_met})"
             )
             
+            # ✅ 性能优化：直接同步执行（已在主线程中，无需异步）
             # 调用价格突破监控的update_tick方法
-            # 确保在主线程中执行，避免线程问题（QObject::startTimer错误）
+            # 模拟成交功能在主线程中执行，可以直接同步调用，无需使用QTimer.singleShot
             from vnpy.trader.ui import QtCore
-            # 使用QTimer.singleShot确保在主线程中执行
-            QtCore.QTimer.singleShot(0, lambda: self.chart._breakthrough_monitor.update_tick(simulate_tick, {line_id: line}))
             
+            # 检查是否在主线程中（安全验证）
+            app = QtCore.QCoreApplication.instance()
+            if app and QtCore.QThread.currentThread() == app.thread():
+                # 在主线程中，直接同步执行
+                self.chart._breakthrough_monitor.update_tick(simulate_tick, {line_id: line})
+            else:
+                # 不在主线程中（理论上不会发生），使用异步执行
+                QtCore.QTimer.singleShot(0, lambda: self.chart._breakthrough_monitor.update_tick(simulate_tick, {line_id: line}))
+            
+            # ✅ 优化：同步执行后可以立即检查结果（无需延迟）
             # 检查是否真的触发了突破（通过检查挂单参数是否被移除）
             if line_id not in controller._pending_order_params:
                 triggered_count += 1

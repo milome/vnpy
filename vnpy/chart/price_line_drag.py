@@ -39,6 +39,11 @@ class PriceLineDragHandler:
         self._is_dragging: bool = False
         self._dragging_line: Optional[PriceLineItem] = None
         self._drag_start_price: float = 0.0
+        
+        # Entry line drag state (for creating stop loss/take profit)
+        self._is_dragging_from_entry: bool = False
+        self._entry_line: Optional[PriceLineItem] = None
+        self._preview_line: Optional[PriceLineItem] = None
 
     def set_hover_threshold(self, threshold: float) -> None:
         """
@@ -52,7 +57,8 @@ class PriceLineDragHandler:
     def find_line_near_point(
         self,
         pos: QtCore.QPointF,
-        lines: list[PriceLineItem]
+        lines: list[PriceLineItem],
+        include_entry_lines: bool = False
     ) -> Optional[PriceLineItem]:
         """
         Find price line near the given point.
@@ -60,6 +66,7 @@ class PriceLineDragHandler:
         Args:
             pos: Mouse position in scene coordinates
             lines: List of price lines to check
+            include_entry_lines: If True, also check entry lines (even if not movable)
 
         Returns:
             PriceLineItem if found, None otherwise
@@ -79,8 +86,14 @@ class PriceLineDragHandler:
         min_distance = float('inf')
 
         for line in lines:
-            if not line.movable:
+            # Check if line should be considered
+            if not include_entry_lines and not line.movable:
                 continue
+            
+            # If including entry lines, check if it's an entry line
+            if include_entry_lines and not line.movable:
+                if line.get_line_type() != PriceLineType.ENTRY:
+                    continue
 
             line_price = line.get_price()
             distance = abs(mouse_price - line_price)
@@ -118,6 +131,20 @@ class PriceLineDragHandler:
         self._dragging_line = line
         self._drag_start_price = line.get_price()
         line.set_original_price(self._drag_start_price)
+    
+    def start_drag_from_entry(self, entry_line: PriceLineItem) -> None:
+        """
+        Start dragging from an entry line to create stop loss/take profit line.
+
+        Args:
+            entry_line: Entry line to drag from
+        """
+        if entry_line.get_line_type() != PriceLineType.ENTRY:
+            return
+        
+        self._is_dragging_from_entry = True
+        self._entry_line = entry_line
+        self._drag_start_price = entry_line.get_price()
 
     def update_drag(self, new_price: float) -> None:
         """
@@ -126,6 +153,13 @@ class PriceLineDragHandler:
         Args:
             new_price: New price value
         """
+        # Handle entry line drag
+        if self._is_dragging_from_entry:
+            if self._preview_line:
+                self._preview_line.set_price(new_price)
+            return
+        
+        # Handle normal drag
         if not self._is_dragging or self._dragging_line is None:
             return
 
@@ -138,6 +172,28 @@ class PriceLineDragHandler:
         Returns:
             Final price if drag was active, None otherwise
         """
+        # Handle entry line drag
+        if self._is_dragging_from_entry:
+            final_price = None
+            if self._preview_line:
+                final_price = self._preview_line.get_price()
+            
+            # Clear preview line
+            if self._preview_line:
+                # Remove preview line from plot if it exists
+                if self._preview_line.scene() is not None:
+                    view_box = self._plot.getViewBox()
+                    if view_box:
+                        view_box.removeItem(self._preview_line)
+                self._preview_line = None
+            
+            self._is_dragging_from_entry = False
+            self._entry_line = None
+            self._drag_start_price = 0.0
+            
+            return final_price
+        
+        # Handle normal drag
         if not self._is_dragging or self._dragging_line is None:
             return None
 
@@ -155,6 +211,22 @@ class PriceLineDragHandler:
         Returns:
             True if drag was cancelled, False if no drag was active
         """
+        # Handle entry line drag cancellation
+        if self._is_dragging_from_entry:
+            # Remove preview line
+            if self._preview_line:
+                if self._preview_line.scene() is not None:
+                    view_box = self._plot.getViewBox()
+                    if view_box:
+                        view_box.removeItem(self._preview_line)
+                self._preview_line = None
+            
+            self._is_dragging_from_entry = False
+            self._entry_line = None
+            self._drag_start_price = 0.0
+            return True
+        
+        # Handle normal drag cancellation
         if not self._is_dragging or self._dragging_line is None:
             return False
 
@@ -171,7 +243,23 @@ class PriceLineDragHandler:
 
     def is_dragging(self) -> bool:
         """Check if currently dragging."""
-        return self._is_dragging
+        return self._is_dragging or self._is_dragging_from_entry
+    
+    def is_dragging_from_entry(self) -> bool:
+        """Check if currently dragging from entry line."""
+        return self._is_dragging_from_entry
+    
+    def get_entry_line(self) -> Optional[PriceLineItem]:
+        """Get entry line being dragged from."""
+        return self._entry_line
+    
+    def set_preview_line(self, preview_line: Optional[PriceLineItem]) -> None:
+        """Set preview line for entry drag."""
+        self._preview_line = preview_line
+    
+    def get_preview_line(self) -> Optional[PriceLineItem]:
+        """Get preview line."""
+        return self._preview_line
 
     def get_dragging_line(self) -> Optional[PriceLineItem]:
         """Get currently dragging line."""

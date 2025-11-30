@@ -206,6 +206,21 @@ class PriceLineItem(pg.InfiniteLine):
                 else:
                     return f"{price_str} {direction_text}"
         
+        # 对于止损线和止盈线，如果设置了手数，也显示手数
+        if line_type == PriceLineType.STOP_LOSS or line_type == PriceLineType.TAKE_PROFIT:
+            volume = getattr(self, '_volume', 0.0)
+            if price_precision == 0:
+                price_str = str(int(price))
+            else:
+                price_str = f"{price:.{price_precision}f}"
+            
+            # 如果有手数，显示手数信息
+            if volume > 0:
+                volume_str = f"{int(volume)}手" if volume == int(volume) else f"{volume:.1f}手"
+                return f"{type_name} {price_str} {volume_str}"
+            else:
+                return f"{type_name} {price_str}"
+        
         # 其他类型的价格线，正常显示
         # 根据精度格式化价格（0表示整数，MHImain默认显示整数）
         if price_precision == 0:
@@ -271,8 +286,8 @@ class PriceLineItem(pg.InfiniteLine):
     def set_volume(self, volume: float) -> None:
         """设置持仓手数并更新标签"""
         self._volume = volume
-        # 更新标签显示
-        if self._line_type == PriceLineType.ENTRY:
+        # 更新标签显示（入场线、止损线、止盈线都需要更新）
+        if self._line_type in (PriceLineType.ENTRY, PriceLineType.STOP_LOSS, PriceLineType.TAKE_PROFIT):
             price_precision = 0  # 默认整数显示
             label_text = self._create_label(self._price, self._line_type, price_precision, self._direction)
             if self.label is not None:
@@ -310,15 +325,30 @@ class PriceLineManager:
     Manager for all price lines in the chart.
     
     Handles creation, update, and deletion of price lines.
+    Supports optional database persistence.
     """
 
-    def __init__(self) -> None:
-        """Initialize price line manager."""
+    def __init__(self, database=None, vt_symbol: Optional[str] = None, use_uuid: bool = True) -> None:
+        """
+        Initialize price line manager.
+        
+        Args:
+            database: Optional PriceLineDatabase instance for persistence
+            vt_symbol: VT symbol for this chart (used for filtering saved lines)
+            use_uuid: If True, use UUID for line IDs. If False, use counter-based IDs.
+        """
         # Map: line_id -> PriceLineItem
         self._lines: dict[str, PriceLineItem] = {}
         
-        # Counter for generating unique line IDs
+        # Counter for generating unique line IDs (only used if use_uuid=False)
         self._line_id_counter: int = 0
+        
+        # Database for persistence (optional)
+        self._database = database
+        self._vt_symbol = vt_symbol
+        
+        # ID generation strategy
+        self._use_uuid = use_uuid
 
     def create_line(
         self,
@@ -327,7 +357,8 @@ class PriceLineManager:
         direction: str = "long",
         movable: bool = False,
         line_id: Optional[str] = None,
-        price_precision: Optional[int] = None
+        price_precision: Optional[int] = None,
+        vt_orderid: Optional[str] = None
     ) -> str:
         """
         Create a new price line.
@@ -338,13 +369,31 @@ class PriceLineManager:
             direction: Trading direction ("long" or "short")
             movable: Whether the line can be dragged
             line_id: Optional custom line ID. If None, auto-generate.
+            price_precision: Price precision (number of decimal places)
+            vt_orderid: Optional VT order ID if linked to an order
 
         Returns:
             Line ID string
         """
         if line_id is None:
-            line_id = f"line_{self._line_id_counter}"
-            self._line_id_counter += 1
+            # 根据价格线类型生成不同的前缀，便于区分和调试
+            prefix_map = {
+                PriceLineType.ENTRY: "entry",
+                PriceLineType.PENDING: "pending",
+                PriceLineType.STOP_LOSS: "stop",
+                PriceLineType.TAKE_PROFIT: "profit",
+                PriceLineType.PREVIEW: "preview",
+            }
+            prefix = prefix_map.get(line_type, "line")  # 默认使用 "line" 作为前缀
+            
+            if self._use_uuid:
+                # 使用 UUID 生成唯一ID
+                import uuid
+                line_id = f"{prefix}_{uuid.uuid4().hex[:12]}"  # 使用UUID的前12位，保持可读性
+            else:
+                # 使用计数器生成ID（需要从数据库初始化计数器）
+                line_id = f"{prefix}_{self._line_id_counter}"
+                self._line_id_counter += 1
 
         if line_id in self._lines:
             raise ValueError(f"Line ID {line_id} already exists")
@@ -361,8 +410,26 @@ class PriceLineManager:
             line.set_price_precision(price_precision)
         else:
             line.set_price_precision(0)  # 默认整数显示
+        
+        # 设置订单ID（如果提供）
+        if vt_orderid:
+            line.set_vt_orderid(vt_orderid)
 
         self._lines[line_id] = line
+        
+        # 保存到数据库（如果启用）
+        if self._database and self._vt_symbol:
+            self._database.save_line(
+                line_id=line_id,
+                price=price,
+                line_type=line_type,
+                direction=direction,
+                vt_symbol=self._vt_symbol,
+                movable=movable,
+                price_precision=price_precision or 0,
+                vt_orderid=vt_orderid
+            )
+        
         return line_id
 
     def get_line(self, line_id: str) -> Optional[PriceLineItem]:
@@ -393,6 +460,20 @@ class PriceLineManager:
             return False
 
         line.set_price(price)
+        
+        # 更新数据库（如果启用）
+        if self._database and self._vt_symbol:
+            self._database.save_line(
+                line_id=line_id,
+                price=price,
+                line_type=line.get_line_type(),
+                direction=line.get_direction(),
+                vt_symbol=self._vt_symbol,
+                movable=line.movable,
+                price_precision=0,  # 可以从 line 获取，这里简化处理
+                vt_orderid=line.get_vt_orderid()
+            )
+        
         return True
 
     def delete_line(self, line_id: str) -> bool:
@@ -458,6 +539,10 @@ class PriceLineManager:
                     scene.removeItem(line)
             except Exception:
                 pass
+        
+        # 从数据库删除（如果启用）
+        if self._database:
+            self._database.delete_line(line_id)
 
         return True
 
@@ -495,6 +580,78 @@ class PriceLineManager:
                     plot.removeItem(line)
 
         self._lines.clear()
+    
+    def set_database(self, database, vt_symbol: Optional[str] = None) -> None:
+        """
+        设置数据库和VT符号。
+        
+        Args:
+            database: PriceLineDatabase 实例
+            vt_symbol: VT符号
+        """
+        self._database = database
+        self._vt_symbol = vt_symbol
+    
+    def load_from_database(self, plot: Optional[object] = None) -> int:
+        """
+        从数据库加载价格线。
+        
+        Args:
+            plot: Optional PlotItem to add lines to
+            
+        Returns:
+            加载的价格线数量
+        """
+        if not self._database or not self._vt_symbol:
+            return 0
+        
+        lines_data = self._database.load_lines(vt_symbol=self._vt_symbol)
+        count = 0
+        max_counter = 0
+        
+        for line_data in lines_data:
+            line_id = line_data["line_id"]
+            
+            # 如果已存在，跳过
+            if line_id in self._lines:
+                continue
+            
+            # 如果使用计数器模式，尝试从line_id中提取最大计数器值
+            if not self._use_uuid and line_id.startswith("line_"):
+                try:
+                    # 尝试提取数字部分
+                    counter_str = line_id[5:]  # 跳过 "line_"
+                    if counter_str.isdigit():
+                        counter_val = int(counter_str)
+                        max_counter = max(max_counter, counter_val)
+                except (ValueError, IndexError):
+                    pass
+            
+            # 创建价格线
+            line = PriceLineItem(
+                price=line_data["price"],
+                line_type=line_data["line_type"],
+                direction=line_data["direction"],
+                movable=line_data["movable"]
+            )
+            
+            line.set_price_precision(line_data["price_precision"])
+            if line_data["vt_orderid"]:
+                line.set_vt_orderid(line_data["vt_orderid"])
+            
+            self._lines[line_id] = line
+            
+            # 添加到 plot（如果提供）
+            if plot and hasattr(plot, 'addItem'):
+                plot.addItem(line)
+            
+            count += 1
+        
+        # 如果使用计数器模式，初始化计数器为最大ID+1，避免ID冲突
+        if not self._use_uuid:
+            self._line_id_counter = max_counter + 1
+        
+        return count
 
     def get_count(self) -> int:
         """Get total number of price lines."""
