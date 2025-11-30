@@ -1,0 +1,648 @@
+# PyQt画线功能移植评估报告
+
+> 本文档评估在PyQt实现的K线图表UI里移植实现multi-timeframe-webapp已实现的画线显示4小时K线、画线下单、双止损线等功能的可行性。
+
+## 一、multi-timeframe-webapp 已实现功能清单
+
+### 1. 图表显示功能
+
+| 功能 | 文件 | 描述 |
+|------|------|------|
+| **4小时K线叠加显示** | `TradingViewChart.tsx` | 在1分钟K线上用画线方式显示4小时K线框体和影线 |
+| **HKFE交易时段计算** | `calculate4HourCandlesFromOneMin` | 支持香港期货交易所特殊4小时周期(17:15-21:15等) |
+| **十字光标信息面板** | `crosshairData` | 显示OHLC、涨跌、成交量 |
+| **多周期图层切换** | `TradingViewChart.tsx` | TradingView Lightweight Charts 实现的多周期图表 |
+
+### 2. 画线下单功能 (`useDrawingOrder.ts`)
+
+| 功能 | 描述 |
+|------|------|
+| 画线模式切换 | 启用/禁用画线下单模式 |
+| 预览线 | 鼠标移动时显示半透明预览价格线 |
+| 下单对话框 | 点击确定价格后弹出，设置数量/止损/止盈 |
+| 自动创建价格线 | 下单后自动创建挂单线、止损线、止盈线 |
+
+### 3. 价格线管理 (`priceLineManager.ts`)
+
+| 价格线类型 | 颜色 | 样式 | 可拖拽 |
+|------------|------|------|--------|
+| 入场线(ENTRY) | 红/青 | 实线 | ❌ |
+| 挂单线(PENDING) | 红/青 | 点线 | ✅ |
+| 止损线(STOP_LOSS) | 橙色 | 虚线 | ✅ |
+| 止盈线(TAKE_PROFIT) | 蓝色 | 虚线 | ✅ |
+| 预览线(PREVIEW) | 白色半透明 | 点线 | ❌ |
+
+### 4. 价格线拖拽 (`usePriceLineDrag.ts`)
+
+| 功能 | 描述 |
+|------|------|
+| 悬停检测 | 鼠标靠近价格线时改变光标样式 |
+| 拖拽更新 | 实时更新价格线位置和标签 |
+| 取消恢复 | 按ESC取消拖拽并恢复原价格 |
+
+### 5. 双止损保护 (`useDualStopLoss.ts`)
+
+| 功能 | 描述 |
+|------|------|
+| 影子止损线 | 拖拽止损线时创建半透明保护线 |
+| 滞后跟随 | 影子线以30%速度跟随主线 |
+| 信息面板 | 显示原止损、保护线、新止损三个价位 |
+
+### 6. 自动追踪止损 (`useAutoTrailingStopLoss.ts`)
+
+| 功能 | 描述 |
+|------|------|
+| 联动更新 | 拖拽挂单线时自动更新止损线 |
+| 可配置偏移 | 设置止损点数（默认50点） |
+| 开关控制 | 可启用/禁用自动追踪 |
+
+### 7. 从入场线创建止损/止盈 (`useEntryLineDrag.ts`)
+
+| 功能 | 描述 |
+|------|------|
+| 智能判断 | 根据拖拽方向自动判断创建止损还是止盈 |
+| 最小拖拽距离 | 小于15px视为点击，防止误触发 |
+| 预览线 | 拖拽过程中显示预览 |
+
+### 8. 双击交互
+
+| 操作 | 对象 | 效果 |
+|------|------|------|
+| 双击 | 挂单线 | 删除整个挂单 |
+| 双击 | 入场线 | 执行平仓 |
+| 双击 | 止损/止盈线 | 删除该线 |
+
+---
+
+## 二、vnpy_chartwizard 现有架构分析
+
+### 技术栈
+- **UI框架**: PyQt5/PyQt6
+- **图表库**: pyqtgraph
+- **架构**: 基于 `ChartWidget` + 自定义 `ChartItem`
+
+### 现有能力
+
+```
+vnpy/chart/
+├── widget.py       # ChartWidget 主控件 + ChartCursor 光标
+├── item.py         # CandleItem, VolumeItem 图表元素
+├── manager.py      # BarManager 数据管理
+├── axis.py         # DatetimeAxis 时间轴
+└── base.py         # 颜色、字体等基础配置
+```
+
+### 已有功能
+- ✅ K线绘制（CandleItem）
+- ✅ 成交量（VolumeItem）
+- ✅ 十字光标 + 信息标签
+- ✅ 键盘/鼠标缩放平移
+- ✅ 多图层（plot）支持
+- ✅ 自定义ChartItem扩展机制
+
+### 缺失功能
+- ❌ 水平价格线（InfiniteLine配置）
+- ❌ 可拖拽交互元素
+- ❌ 画线下单模式
+- ❌ 订单管理集成
+- ❌ 双击事件处理
+
+---
+
+## 三、移植可行性评估
+
+### 技术难度评估
+
+| 功能模块 | 难度 | 工作量 | 说明 |
+|----------|------|--------|------|
+| 4小时K线叠加 | ⭐⭐ | 2天 | pyqtgraph支持多层绘制，实现类似TradingView的4H框体 |
+| 价格线显示 | ⭐⭐ | 1天 | 使用`pg.InfiniteLine`封装 |
+| 价格线拖拽 | ⭐⭐⭐⭐ | 4天 | 需自定义拖拽逻辑，pyqtgraph的InfiniteLine支持movable |
+| 画线下单模式 | ⭐⭐⭐ | 3天 | 需要模式状态管理 + 鼠标事件 |
+| 下单对话框 | ⭐⭐ | 1天 | PyQt标准对话框 |
+| 双止损保护 | ⭐⭐⭐ | 2天 | 主要是状态逻辑 |
+| 自动追踪止损 | ⭐ | 0.5天 | 纯业务逻辑 |
+| 入场线拖拽创建 | ⭐⭐⭐ | 2天 | 需要拖拽方向判断 |
+| 双击交互 | ⭐⭐ | 1天 | 重写mouseDoubleClickEvent |
+| 订单服务集成 | ⭐⭐⭐ | 2天 | 需与vnpy订单系统对接 |
+
+**总计估算**: 约 **18-20 人天**
+
+### 主要技术挑战
+
+#### 1. TradingView Lightweight Charts vs pyqtgraph
+
+| 对比项 | TradingView Lightweight Charts | pyqtgraph |
+|--------|-------------------|-----------|
+| **价格线** | 原生 `series.createPriceLine()` API，支持完整配置 | 需封装 `pg.InfiniteLine`，功能较基础 |
+| **拖拽支持** | 原生支持，通过 `priceLineOptions.movable` 配置 | `InfiniteLine(movable=True)` 需要自定义拖拽逻辑 |
+| **事件系统** | `subscribeCrosshairMove`、`subscribeClick` 等事件订阅 | Qt Signal/Slot 机制 |
+| **坐标转换** | `series.priceToCoordinate()` / `series.coordinateToPrice()` | `mapSceneToView()` / `mapViewToScene()` |
+| **价格线样式** | 支持 LineStyle (Solid/Dashed/Dotted)、颜色、宽度、标签 | 通过 QPen 配置，功能相对简单 |
+| **性能** | 专为金融图表优化，高性能渲染 | 通用图表库，性能良好但非专为金融优化 |
+
+#### 2. 架构差异
+
+**TradingView Lightweight Charts 架构**：
+- 基于 React Hooks 模式
+- `useState/useRef` 管理状态
+- `useCallback` 优化回调性能
+- 组件组合模式
+- `useEffect` 处理副作用
+
+**PyQt + pyqtgraph 架构**：
+- 基于类继承模式
+- 类属性 + Qt Signal 管理状态
+- 方法 + `@pyqtSlot` 装饰器
+- 继承 + 组合模式
+- Signal/Slot 连接处理事件
+
+**对应关系**：
+```
+React Hooks 模式              PyQt 模式
+─────────────────           ─────────────────
+useState/useRef       →     类属性 + Signal
+useCallback           →     方法 + @pyqtSlot
+组件组合              →     继承 + 组合
+useEffect依赖         →     Signal连接
+PriceLineManager      →     PriceLineManager (类)
+useDrawingOrder       →     DrawingOrderController (类)
+usePriceLineDrag      →     PriceLineDragHandler (类)
+```
+
+#### 3. 核心改造点
+
+**TradingView 实现的关键类/模块**：
+- `PriceLineManager`: 管理所有价格线，使用 `series.createPriceLine()` API
+- `useDrawingOrder`: 画线下单模式管理 Hook
+- `usePriceLineDrag`: 价格线拖拽交互 Hook
+- `useDualStopLoss`: 双止损保护逻辑 Hook
+- `useAutoTrailingStopLoss`: 自动追踪止损 Hook
+- `useEntryLineDrag`: 从入场线创建止损/止盈 Hook
+
+**PyQt 对应实现**：
+```python
+# 需要新增的类
+class PriceLineManager:
+    """价格线管理器 - 移植自 priceLineManager.ts
+    使用 pyqtgraph 的 InfiniteLine 实现
+    """
+    
+class DraggablePriceLine(pg.InfiniteLine):
+    """可拖拽价格线 - 对应 TradingView 的 movable price line
+    需要自定义拖拽逻辑和坐标转换
+    """
+    
+class DrawingOrderController:
+    """画线下单模式管理 - 移植自 useDrawingOrder.ts
+    管理画线模式状态、预览线、下单对话框
+    """
+    
+class DualStopLossController:
+    """双止损保护控制器 - 移植自 useDualStopLoss.ts
+    实现影子止损线和滞后跟随逻辑
+    """
+    
+class AutoTrailingStopLossController:
+    """自动追踪止损控制器 - 移植自 useAutoTrailingStopLoss.ts
+    实现挂单线拖拽时自动更新止损线
+    """
+```
+
+---
+
+## 四、移植方案建议
+
+### 推荐实现路径
+
+```
+Phase 1: 基础价格线 (3天)
+├── 创建 PriceLineItem (基于InfiniteLine)
+├── 实现 PriceLineManager
+└── 支持显示入场/挂单/止损/止盈线
+
+Phase 2: 拖拽交互 (5天)
+├── 实现可拖拽价格线
+├── 鼠标悬停检测
+├── ESC取消/恢复机制
+└── 双击事件处理
+
+Phase 3: 画线下单 (4天)
+├── 画线模式状态管理
+├── 预览线实现
+├── 下单对话框
+└── 与订单系统集成
+
+Phase 4: 高级功能 (5天)
+├── 双止损保护
+├── 自动追踪止损
+├── 从入场线创建止损/止盈
+└── 4小时K线叠加显示
+
+Phase 5: 测试优化 (3天)
+├── 功能测试
+├── 性能优化
+└── 边界情况处理
+```
+
+### 关键代码示例
+
+#### TradingView 实现参考
+
+```typescript
+// priceLineManager.ts - TradingView 实现
+export class PriceLineManager {
+  private series: ISeriesApi<SeriesType>;
+  private lines: Map<string, ChartPriceLine> = new Map();
+  private chartLines: Map<string, IPriceLine> = new Map();
+
+  createPriceLine(config: ChartPriceLine): ChartPriceLine {
+    // TradingView 原生 API
+    const chartLine = this.series.createPriceLine({
+      id: config.id,
+      price: config.price,
+      color: config.color,
+      lineWidth: config.lineWidth as 1 | 2 | 3 | 4,
+      lineStyle: this.getLineStyle(config.lineStyle),
+      title: config.title || '',
+      axisLabelVisible: true,
+      lineVisible: true,
+    });
+    this.chartLines.set(config.id, chartLine);
+    return config;
+  }
+}
+```
+
+#### PyQt 对应实现
+
+```python
+# price_line.py - PyQt 实现
+class DraggablePriceLine(pg.InfiniteLine):
+    """可拖拽的价格线 - 对应 TradingView 的 movable price line"""
+    
+    sigPriceChanged = QtCore.Signal(str, float)  # (line_id, new_price)
+    
+    def __init__(self, line_id: str, price: float, 
+                 line_type: str, draggable: bool = True):
+        # 根据类型设置样式
+        pen = self._get_pen(line_type)
+        label = self._get_label(line_type, price)
+        
+        super().__init__(
+            pos=price,
+            angle=0,  # 水平线
+            movable=draggable,
+            pen=pen,
+            label=label,
+            labelOpts={'position': 0.95, 'color': 'w'}
+        )
+        self.line_id = line_id
+        self.line_type = line_type
+        self.original_price = price
+        
+        if draggable:
+            # 监听位置变化
+            self.sigPositionChanged.connect(self._on_position_changed)
+    
+    def _on_position_changed(self):
+        """位置变化时更新价格"""
+        new_price = self.value()
+        self.sigPriceChanged.emit(self.line_id, new_price)
+        self._update_label(new_price)
+    
+    def _get_pen(self, line_type: str) -> QtGui.QPen:
+        """根据类型获取画笔样式"""
+        colors = {
+            'ENTRY': QtGui.QColor('#ff4757'),      # 红色
+            'PENDING': QtGui.QColor('#00d9ff'),    # 青色
+            'STOP_LOSS': QtGui.QColor('#ffa502'),  # 橙色
+            'TAKE_PROFIT': QtGui.QColor('#1e90ff'), # 蓝色
+        }
+        styles = {
+            'ENTRY': QtCore.Qt.PenStyle.SolidLine,
+            'PENDING': QtCore.Qt.PenStyle.DotLine,
+            'STOP_LOSS': QtCore.Qt.PenStyle.DashLine,
+            'TAKE_PROFIT': QtCore.Qt.PenStyle.DashLine,
+        }
+        pen = pg.mkPen(color=colors.get(line_type, QtGui.QColor('white')),
+                      style=styles.get(line_type, QtCore.Qt.PenStyle.SolidLine),
+                      width=2 if line_type == 'ENTRY' else 1)
+        return pen
+```
+
+---
+
+## 五、结论与建议
+
+### 可行性结论: ✅ **可行**
+
+pyqtgraph 具备实现所有功能的底层能力：
+- `InfiniteLine` 支持水平价格线和拖拽
+- 完整的鼠标事件系统
+- 高性能绑定重绘机制
+
+### 建议
+
+1. **分阶段实施** - 按上述Phase逐步推进，每阶段可独立交付
+
+2. **保持架构一致** - 参考webapp的模块划分，在PyQt中保持类似的职责分离
+
+3. **复用vnpy订单系统** - 与现有`MainEngine`、订单事件集成，而非重新实现订单服务
+
+4. **考虑性能** - pyqtgraph使用QPicture缓存，大量价格线时注意性能
+
+5. **UI风格统一** - 保持与vnpy现有UI风格一致的配色和交互
+
+### 预计收益
+
+- **交易效率提升**: 画线下单大幅减少操作步骤
+- **风控增强**: 双止损保护、自动追踪止损降低风险
+- **用户体验**: 直观的可视化订单管理
+
+---
+
+## 六、两种移植方案对比评估
+
+### 方案概述
+
+| | **方案A: QT移植** | **方案B: Web集成** |
+|---|---|---|
+| **技术路径** | 将功能移植到 PyQt + pyqtgraph | 将 webapp 整合到 vnpy_webtrader |
+| **前端技术** | PyQt5/6 + pyqtgraph | React + TypeScript + lightweight-charts |
+| **后端通信** | 直接调用 MainEngine | FastAPI + WebSocket + RPC |
+| **运行方式** | 桌面应用（进程内） | B/S架构（浏览器访问） |
+
+### 方案B: Web集成方案详细分析
+
+#### vnpy_webtrader 现有架构
+
+```
+┌────────────────────────────────────────────────────────┐
+│                    Browser (前端)                       │
+│    ┌─────────────┐     ┌─────────────┐                │
+│    │  REST API   │     │  WebSocket  │                │
+│    │  (HTTP)     │     │  (实时推送)  │                │
+│    └──────┬──────┘     └──────┬──────┘                │
+└───────────┼────────────────────┼───────────────────────┘
+            │                    │
+            ▼                    ▼
+┌────────────────────────────────────────────────────────┐
+│                FastAPI Web Server                       │
+│  ┌─────────────────────────────────────────────────┐  │
+│  │ REST API:                                         │  │
+│  │ - POST /order (下单)                             │  │
+│  │ - DELETE /order (撤单)                           │  │
+│  │ - GET /tick, /order, /position, /account...      │  │
+│  ├─────────────────────────────────────────────────┤  │
+│  │ WebSocket /ws/ (实时推送):                        │  │
+│  │ - EVENT_TICK, EVENT_ORDER, EVENT_TRADE...        │  │
+│  └─────────────────────────────────────────────────┘  │
+└──────────────────────────┬─────────────────────────────┘
+                           │ RPC (ZeroMQ)
+                           ▼
+┌────────────────────────────────────────────────────────┐
+│              vnpy MainEngine + WebEngine                │
+│  ┌─────────────────────────────────────────────────┐  │
+│  │ RpcServer: 暴露 MainEngine 方法                   │  │
+│  │ - subscribe, send_order, cancel_order           │  │
+│  │ - get_all_ticks, get_all_orders, etc.           │  │
+│  └─────────────────────────────────────────────────┘  │
+└────────────────────────────────────────────────────────┘
+```
+
+#### Web集成需要的改造
+
+```
+新增/修改内容:
+───────────────────────────────────────────────────────────
+1. 后端扩展 (FastAPI)
+   ├── GET  /bars/{vt_symbol}     # 获取K线历史数据
+   ├── POST /drawing_order        # 画线下单
+   ├── PUT  /order/{id}/stop_loss # 修改止损
+   ├── PUT  /order/{id}/take_profit # 修改止盈
+   └── WebSocket: EVENT_BAR       # K线实时推送
+
+2. 前端替换
+   ├── 替换 index.html → React SPA
+   ├── 移植 multi-timeframe-webapp 全部组件
+   └── 适配 vnpy 数据格式
+
+3. 数据适配层
+   └── vnpy BarData ↔ ChartKLineData 转换
+```
+
+### 全面对比评估
+
+#### 1. 开发工作量
+
+| 维度 | 方案A: QT移植 | 方案B: Web集成 |
+|------|--------------|---------------|
+| **核心功能重写** | 需要全部重写 (18-20人天) | 可复用80%代码 (5-8人天) |
+| **数据层对接** | 直接调用，较简单 | 需要REST/WS适配层 |
+| **UI开发** | 从零实现，复杂度高 | 已有成熟UI，仅需适配 |
+| **测试工作** | 需要全面测试 | 主要测试集成点 |
+| **总估算** | **18-20 人天** | **12-15 人天** |
+
+#### 2. 技术风险
+
+| 风险点 | 方案A | 方案B |
+|--------|-------|-------|
+| **图表库成熟度** | pyqtgraph 功能较弱，需大量封装 | TradingView Lightweight Charts 金融图表专用，功能完善 |
+| **交互实现难度** | 拖拽、双击需自定义实现 | 已验证可行，代码可复用 |
+| **性能风险** | pyqtgraph 性能优秀 | 浏览器端性能受限于设备 |
+| **跨平台** | 依赖Qt，需编译 | 浏览器原生跨平台 |
+
+#### 3. 用户体验
+
+| 方面 | 方案A | 方案B |
+|------|-------|-------|
+| **启动速度** | ⭐⭐⭐⭐⭐ 毫秒级 | ⭐⭐⭐ 需加载前端资源 |
+| **响应延迟** | ⭐⭐⭐⭐⭐ 进程内直接调用 | ⭐⭐⭐⭐ WebSocket + RPC (10-50ms) |
+| **界面流畅度** | ⭐⭐⭐⭐ 依赖实现质量 | ⭐⭐⭐⭐⭐ 现代Web渲染优化 |
+| **视觉效果** | ⭐⭐⭐ pyqtgraph 较朴素 | ⭐⭐⭐⭐⭐ TradingView Lightweight Charts 专业级 |
+| **多设备访问** | ❌ 仅本机 | ✅ 任意设备浏览器 |
+
+#### 4. 运维与部署
+
+| 方面 | 方案A | 方案B |
+|------|-------|-------|
+| **部署复杂度** | 简单，集成在vnpy主程序 | 中等，需启动Web服务 |
+| **远程访问** | ❌ 不支持 | ✅ 天然支持 |
+| **移动端** | ❌ 不支持 | ✅ 响应式设计可支持 |
+| **多用户** | ❌ 单用户 | ✅ 支持多用户同时访问 |
+| **安全性** | ✅ 本地运行 | ⚠️ 需要认证、HTTPS |
+
+#### 5. 长期维护
+
+| 方面 | 方案A | 方案B |
+|------|-------|-------|
+| **技术栈生态** | Python GUI 生态萎缩 | Web 生态活跃 |
+| **人才招聘** | PyQt 开发者稀缺 | React 开发者充足 |
+| **UI迭代** | 改动成本高 | 前端独立迭代，灵活 |
+| **与vnpy主版本兼容** | ⭐⭐⭐⭐⭐ 高度集成 | ⭐⭐⭐⭐ 接口层隔离 |
+
+### 架构图对比
+
+#### 方案A: QT集成架构
+
+```
+┌────────────────────────────────────────────────────────┐
+│                    vnpy 主程序                          │
+│  ┌──────────────────────────────────────────────────┐ │
+│  │           ChartWizardWidget (改造后)              │ │
+│  │  ┌─────────────────────────────────────────────┐ │ │
+│  │  │  ChartWidget (pyqtgraph)                    │ │ │
+│  │  │  ├── CandleItem (K线)                       │ │ │
+│  │  │  ├── FourHourOverlayItem (4H叠加) [新增]    │ │ │
+│  │  │  ├── PriceLineManager [新增]                │ │ │
+│  │  │  │   ├── DraggablePriceLine                │ │ │
+│  │  │  │   └── (入场/挂单/止损/止盈线)            │ │ │
+│  │  │  └── DrawingOrderController [新增]          │ │ │
+│  │  └─────────────────────────────────────────────┘ │ │
+│  │  ┌─────────────────────────────────────────────┐ │ │
+│  │  │  OrderDialog (下单对话框) [新增]            │ │ │
+│  │  └─────────────────────────────────────────────┘ │ │
+│  └──────────────────────────────────────────────────┘ │
+│                         │ 直接调用                      │
+│                         ▼                              │
+│  ┌──────────────────────────────────────────────────┐ │
+│  │              MainEngine (订单、行情)              │ │
+│  └──────────────────────────────────────────────────┘ │
+└────────────────────────────────────────────────────────┘
+```
+
+#### 方案B: Web集成架构
+
+```
+┌─────────────────────────────────────────────────────────┐
+│              Browser (multi-timeframe-webapp)            │
+│  ┌───────────────────────────────────────────────────┐ │
+│  │  TradingViewChart.tsx                              │ │
+│  │  ├── useDrawingOrder (画线下单)                    │ │
+│  │  ├── usePriceLineDrag (价格线拖拽)                │ │
+│  │  ├── useDualStopLoss (双止损保护)                 │ │
+│  │  └── PriceLineManager (价格线管理)                │ │
+│  └───────────────────────────────────────────────────┘ │
+│  ┌───────────────────────────────────────────────────┐ │
+│  │  dataService.ts [改造]                             │ │
+│  │  └── fetch from FastAPI instead of CSV            │ │
+│  └───────────────────────────────────────────────────┘ │
+│  ┌───────────────────────────────────────────────────┐ │
+│  │  orderService.ts [改造]                            │ │
+│  │  └── POST/DELETE to FastAPI                       │ │
+│  └───────────────────────────────────────────────────┘ │
+└────────────────────────────────┬────────────────────────┘
+           REST API              │    WebSocket
+           ┌─────────────────────┴─────────────────┐
+           ▼                                        ▼
+┌──────────────────────────────────────────────────────────┐
+│                 FastAPI (vnpy_webtrader)                  │
+│  ┌────────────────────────────────────────────────────┐ │
+│  │  新增 API:                                          │ │
+│  │  ├── GET  /bars/{vt_symbol}?interval=1m&limit=1000│ │
+│  │  ├── POST /drawing_order                           │ │
+│  │  ├── PUT  /order/{id}/stop_loss                   │ │
+│  │  └── PUT  /order/{id}/take_profit                 │ │
+│  │  WebSocket 增强:                                    │ │
+│  │  └── EVENT_BAR (K线推送)                           │ │
+│  └────────────────────────────────────────────────────┘ │
+└────────────────────────────┬─────────────────────────────┘
+                             │ RPC
+                             ▼
+┌──────────────────────────────────────────────────────────┐
+│              vnpy MainEngine + WebEngine                  │
+└──────────────────────────────────────────────────────────┘
+```
+
+### 推荐方案
+
+#### 综合评分
+
+| 维度 (权重) | 方案A | 方案B |
+|------------|-------|-------|
+| 开发效率 (25%) | 6 | **9** |
+| 用户体验 (25%) | 7 | **9** |
+| 技术风险 (20%) | 7 | **8** |
+| 运维便利 (15%) | **9** | 7 |
+| 长期维护 (15%) | 6 | **9** |
+| **加权总分** | **6.85** | **8.55** |
+
+#### 推荐结论
+
+**建议采用方案B: Web集成方案**，理由如下：
+
+1. **代码复用率高** - webapp 的核心交互逻辑（约3000行TypeScript）可直接复用，仅需适配数据源
+
+2. **图表效果更专业** - TradingView Lightweight Charts 是 TradingView 官方开源版本，专为金融图表设计，功能完善且性能优秀
+
+3. **开发周期短** - 无需重写复杂的拖拽、双击等交互逻辑
+
+4. **扩展性强** - 未来可轻松增加：
+   - 移动端适配
+   - 多品种同时监控
+   - 策略信号标注
+   - 历史回测可视化
+
+5. **团队协作友好** - 前后端分离，可并行开发
+
+#### 方案B 实施路径
+
+```
+Phase 1: 后端API扩展 (3天)
+├── 添加 /bars 历史K线接口
+├── 添加订单操作接口 (止损/止盈修改)
+└── WebSocket 增加 EVENT_BAR 推送
+
+Phase 2: 前端适配 (5天)
+├── 修改 dataService.ts 对接 vnpy API
+├── 修改 orderService.ts 对接 vnpy 订单系统
+├── 数据格式转换 (vnpy BarData ↔ ChartKLineData)
+└── 认证流程集成 (JWT)
+
+Phase 3: 打包部署 (2天)
+├── Vite 构建生产版本
+├── 静态资源集成到 vnpy_webtrader
+└── 配置与启动脚本
+
+Phase 4: 测试优化 (2天)
+├── 功能测试
+├── 性能测试
+└── 边界情况处理
+```
+
+**总计: 约 12 人天**
+
+### 特殊场景考虑
+
+#### 如果以下条件成立，方案A更合适：
+
+| 条件 | 说明 |
+|------|------|
+| 纯离线交易 | 不需要远程访问，只在本机操作 |
+| 超低延迟要求 | 对 10ms 以内延迟有严格要求 |
+| 与vnpy其他模块深度集成 | 需要与CTA策略、回测模块联动 |
+| 团队熟悉PyQt | 现有团队精通PyQt开发 |
+
+#### 混合方案考虑
+
+也可以考虑**两者并存**：
+- **方案A** 作为轻量级集成方案，提供基础价格线功能
+- **方案B** 作为专业交易界面，提供完整功能
+
+```python
+# vnpy 中可以同时启用
+from vnpy_chartwizard import ChartWizardApp  # 简单图表
+from vnpy_webtrader import WebTraderApp      # 专业Web交易界面
+```
+
+---
+
+## 文档信息
+
+- **创建日期**: 2025-11-27
+- **原始文档**: `.specstory/history/2025-11-27_05-41Z-评估qt实现k线图表功能移植.md`
+- **更新日期**: 2025-01-15
+- **更新说明**: 基于 TradingView Lightweight Charts 实际实现更新文档，移除 ECharts 相关内容
+
+

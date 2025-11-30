@@ -982,8 +982,19 @@ class TradingWidget(QtWidgets.QWidget):
         exchanges: list[Exchange] = self.main_engine.get_all_exchanges()
         self.exchange_combo: QtWidgets.QComboBox = QtWidgets.QComboBox()
         self.exchange_combo.addItems([exchange.value for exchange in exchanges])
+        
+        # 设置默认交易所为HKFE
+        hkfe_index = -1
+        for i, exchange in enumerate(exchanges):
+            if exchange == Exchange.HKFE:
+                hkfe_index = i
+                break
+        if hkfe_index >= 0:
+            self.exchange_combo.setCurrentIndex(hkfe_index)
 
         self.symbol_line: QtWidgets.QLineEdit = QtWidgets.QLineEdit()
+        # 设置默认合约名为MHImain
+        self.symbol_line.setText("MHImain")
         self.symbol_line.returnPressed.connect(self.set_vt_symbol)
 
         self.name_line: QtWidgets.QLineEdit = QtWidgets.QLineEdit()
@@ -997,8 +1008,17 @@ class TradingWidget(QtWidgets.QWidget):
         self.offset_combo.addItems([offset.value for offset in Offset])
 
         self.order_type_combo: QtWidgets.QComboBox = QtWidgets.QComboBox()
-        self.order_type_combo.addItems(
-            [order_type.value for order_type in OrderType])
+        order_types = [order_type.value for order_type in OrderType]
+        self.order_type_combo.addItems(order_types)
+        
+        # 设置默认订单类型为对手价
+        opponent_index = -1
+        for i, order_type in enumerate(OrderType):
+            if order_type == OrderType.OPPONENT:
+                opponent_index = i
+                break
+        if opponent_index >= 0:
+            self.order_type_combo.setCurrentIndex(opponent_index)
 
         double_validator: QtGui.QDoubleValidator = QtGui.QDoubleValidator()
         double_validator.setBottom(0)
@@ -1143,6 +1163,17 @@ class TradingWidget(QtWidgets.QWidget):
         vbox.addLayout(grid)
         vbox.addLayout(form)
         self.setLayout(vbox)
+        
+        # 初始化完成后，设置默认订单类型对应的价格框状态
+        # 由于信号连接在设置默认值之后，需要手动调用一次
+        current_order_type = str(self.order_type_combo.currentText())
+        self.on_order_type_changed(current_order_type)
+        
+        # 如果默认合约已设置，尝试加载合约信息
+        if self.symbol_line.text():
+            # 使用QTimer延迟执行，确保UI完全初始化后再调用
+            # QtCore已在文件顶部导入，直接使用
+            QtCore.QTimer.singleShot(100, self.set_vt_symbol)
 
     def create_label(
         self,
@@ -2079,6 +2110,25 @@ class ChartWindow(QtWidgets.QWidget):
     - 底部滚动条可以快速切换时间范围
     """
     
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
+        """
+        Handle key press events at window level.
+        
+        - ESC: Disable drawing order mode
+        """
+        if event.key() == QtCore.Qt.Key.Key_Escape:
+            # Disable drawing order mode when ESC is pressed
+            if (self.chart and 
+                self.chart.get_drawing_order_controller() and 
+                self.chart.get_drawing_order_controller().is_enabled()):
+                # 禁用画线下单模式
+                self.drawing_mode_button.setChecked(False)
+                self.toggle_drawing_mode()
+                event.accept()
+                return
+        
+        super().keyPressEvent(event)
+    
     # 默认显示的合约
     DEFAULT_SYMBOL: str = "MHImain.HKFE"
     
@@ -2177,6 +2227,12 @@ class ChartWindow(QtWidgets.QWidget):
         self.drawing_mode_button.clicked.connect(self.toggle_drawing_mode)
         self.drawing_mode_button.setToolTip(_("启用画线下单模式：在图表上点击价格位置创建订单"))
         
+        # 模拟成交按钮（用于休市时测试挂单成交）
+        self.simulate_trade_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("模拟成交"))
+        self.simulate_trade_button.clicked.connect(self.simulate_trade_breakthrough)
+        self.simulate_trade_button.setToolTip(_("模拟tick突破挂单线，触发挂单成交（用于休市测试）"))
+        self.simulate_trade_button.setStyleSheet("background-color: #FF9800; color: white; font-weight: bold;")
+        
         # 周期选择下拉框
         self.interval_combo: QtWidgets.QComboBox = QtWidgets.QComboBox()
         for name in self.INTERVAL_MAP.keys():
@@ -2255,6 +2311,7 @@ class ChartWindow(QtWidgets.QWidget):
         hbox1.addWidget(self.csv_path_label)
         hbox1.addWidget(self.switch_button)
         hbox1.addWidget(self.drawing_mode_button)
+        hbox1.addWidget(self.simulate_trade_button)
         
         # 顶部布局 - 第二行：时间范围选择（结束时间默认为最新）
         hbox2: QtWidgets.QHBoxLayout = QtWidgets.QHBoxLayout()
@@ -2283,6 +2340,9 @@ class ChartWindow(QtWidgets.QWidget):
         
         # 设置画线模式点击回调
         self.chart.set_drawing_click_callback(self._on_drawing_click)
+        
+        # 设置画线模式状态变化回调（用于ESC键退出）
+        self.chart.set_drawing_mode_changed_callback(self._on_drawing_mode_changed)
         
         # 时间滚动条（横向）
         self.time_slider: QtWidgets.QSlider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
@@ -4484,10 +4544,28 @@ class ChartWindow(QtWidgets.QWidget):
             controller.enable()
             self.drawing_mode_button.setText(_("画线下单 (已启用)"))
             self.drawing_mode_button.setStyleSheet("background-color: #4CAF50; color: white;")
+            # 让图表获得焦点，以便接收键盘事件（如ESC键）
+            if self.chart:
+                self.chart.setFocus()
         else:
             controller.disable()
             self.drawing_mode_button.setText(_("画线下单"))
             self.drawing_mode_button.setStyleSheet("")
+    
+    def _on_drawing_mode_changed(self, enabled: bool) -> None:
+        """画线下单模式状态变化回调（由ChartWidget调用，例如按下ESC键时）"""
+        # 更新按钮状态以反映实际的状态
+        if self.drawing_mode_button.isChecked() != enabled:
+            # 直接更新按钮状态和UI，不触发toggle_drawing_mode（避免递归）
+            self.drawing_mode_button.blockSignals(True)  # 临时阻止信号，避免触发toggle_drawing_mode
+            self.drawing_mode_button.setChecked(enabled)
+            if enabled:
+                self.drawing_mode_button.setText(_("画线下单 (已启用)"))
+                self.drawing_mode_button.setStyleSheet("background-color: #4CAF50; color: white;")
+            else:
+                self.drawing_mode_button.setText(_("画线下单"))
+                self.drawing_mode_button.setStyleSheet("")
+            self.drawing_mode_button.blockSignals(False)  # 恢复信号
     
     def _on_drawing_click(self, price: float) -> None:
         """处理画线模式下的点击事件（用于画线下单）"""
@@ -4519,33 +4597,91 @@ class ChartWindow(QtWidgets.QWidget):
                     gateway = self.main_engine.get_gateway(gateway_name)
                     if gateway and hasattr(gateway, 'quote_ctx'):
                         try:
-                            from vnpy_futu.vnpy_futu.futu_utils import convert_symbol_vt2futu
-                            from vnpy.trader.constant import Exchange
-                            futu_symbol = convert_symbol_vt2futu(vt_symbol.split('.')[0], Exchange(contract.exchange.value))
-                            ret, data = gateway.quote_ctx.get_future_info(futu_symbol)
-                            if ret == 0 and data is not None and not data.empty:
-                                # 从 FUTU API 获取 price_tick（如果存在）
-                                if 'price_tick' in data.columns:
-                                    futu_pricetick = float(data['price_tick'].iloc[0])
-                                    if futu_pricetick > 0:
-                                        pricetick = futu_pricetick
-                                        self.main_engine.write_log(f"[画线下单] 从FUTU API查询到pricetick: {pricetick}")
-                                
-                                # 根据 pricetick 计算价格精度
-                                # 如果 pricetick >= 1.0，显示整数；否则显示相应的小数位数
-                                if pricetick >= 1.0:
-                                    price_precision = 0  # 整数显示
-                                else:
-                                    # 计算需要的小数位数
-                                    price_precision = len(str(pricetick).split('.')[-1].rstrip('0'))
-                                    if price_precision == 0:
-                                        price_precision = 0  # 整数
+                            # 尝试多种导入方式，确保兼容性
+                            # update_and_run.bat 使用 pip install -e . 安装（可编辑模式）
+                            # 已安装包和开发环境源文件应该是一致的，都指向 vnpy_futu/vnpy_futu/ 目录
+                            # 但 setup.cfg 配置 packages = vnpy_futu，安装后可通过 vnpy_futu.futu_gateway 访问
+                            convert_symbol_vt2futu = None
+                            import_error_msgs = []
+                            
+                            try:
+                                # 方式1：从已安装的包导入（推荐方式，测试文件中使用）
+                                # update_and_run.bat 使用 pip install -e . 安装（可编辑模式）
+                                # 安装后包结构：vnpy_futu/futu_gateway.py（通过setup.cfg配置）
+                                from vnpy_futu.futu_gateway import convert_symbol_vt2futu
+                                self.main_engine.write_log(f"[画线下单] 成功导入convert_symbol_vt2futu: from vnpy_futu.futu_gateway")
+                            except ImportError as e1:
+                                import_error_msgs.append(f"方式1失败: from vnpy_futu.futu_gateway - {str(e1)}")
+                                try:
+                                    # 方式2：从源文件路径导入（开发环境，如果方式1失败）
+                                    # 源文件结构：vnpy_futu/vnpy_futu/futu_gateway.py
+                                    from vnpy_futu.vnpy_futu.futu_gateway import convert_symbol_vt2futu
+                                    self.main_engine.write_log(f"[画线下单] 成功导入convert_symbol_vt2futu: from vnpy_futu.vnpy_futu.futu_gateway")
+                                except ImportError as e2:
+                                    import_error_msgs.append(f"方式2失败: from vnpy_futu.vnpy_futu.futu_gateway - {str(e2)}")
+                                    try:
+                                        # 方式3：从datafeed模块导入（备用）
+                                        from vnpy_futu.datafeed import convert_symbol_vt2futu
+                                        self.main_engine.write_log(f"[画线下单] 成功导入convert_symbol_vt2futu: from vnpy_futu.datafeed")
+                                    except ImportError as e3:
+                                        import_error_msgs.append(f"方式3失败: from vnpy_futu.datafeed - {str(e3)}")
+                                        # 方式4：从gateway对象获取（如果gateway是FutuGateway实例）
+                                        if hasattr(gateway, 'convert_symbol_vt2futu'):
+                                            convert_symbol_vt2futu = gateway.convert_symbol_vt2futu
+                                            self.main_engine.write_log(f"[画线下单] 从gateway对象获取convert_symbol_vt2futu")
+                                        else:
+                                            # 方式5：尝试从模块对象导入
+                                            try:
+                                                import vnpy_futu.futu_gateway as futu_gateway_module
+                                                convert_symbol_vt2futu = futu_gateway_module.convert_symbol_vt2futu
+                                                self.main_engine.write_log(f"[画线下单] 从模块对象获取convert_symbol_vt2futu")
+                                            except Exception as e5:
+                                                import_error_msgs.append(f"方式5失败: 从模块对象导入 - {str(e5)}")
+                            
+                            if convert_symbol_vt2futu:
+                                from vnpy.trader.constant import Exchange
+                                futu_symbol = convert_symbol_vt2futu(vt_symbol.split('.')[0], Exchange(contract.exchange.value))
+                                ret, data = gateway.quote_ctx.get_future_info(futu_symbol)
+                                if ret == 0 and data is not None and not data.empty:
+                                    # 从 FUTU API 获取 price_tick（如果存在）
+                                    if 'price_tick' in data.columns:
+                                        futu_pricetick = float(data['price_tick'].iloc[0])
+                                        if futu_pricetick > 0:
+                                            pricetick = futu_pricetick
+                                            self.main_engine.write_log(f"[画线下单] 从FUTU API查询到pricetick: {pricetick}")
+                                    
+                                    # 根据 pricetick 计算价格精度
+                                    # 如果 pricetick >= 1.0，显示整数；否则显示相应的小数位数
+                                    if pricetick >= 1.0:
+                                        price_precision = 0  # 整数显示
                                     else:
-                                        price_precision = min(price_precision, 4)  # 最多4位小数
-                                
-                                self.main_engine.write_log(f"[画线下单] 价格精度: {price_precision} (pricetick={pricetick})")
+                                        # 计算需要的小数位数
+                                        price_precision = len(str(pricetick).split('.')[-1].rstrip('0'))
+                                        if price_precision == 0:
+                                            price_precision = 0  # 整数
+                                        else:
+                                            price_precision = min(price_precision, 4)  # 最多4位小数
+                                    
+                                    self.main_engine.write_log(f"[画线下单] 价格精度: {price_precision} (pricetick={pricetick})")
+                            else:
+                                # 所有导入方式都失败
+                                error_msg = "\n  ".join(import_error_msgs)
+                                self.main_engine.write_log(
+                                    f"[画线下单] FUTU模块导入失败，所有导入方式均失败:\n  {error_msg}\n"
+                                    f"  请确认vnpy_futu模块已正确安装，使用默认pricetick: {pricetick}"
+                                )
+                        except ImportError as e:
+                            # 如果vnpy_futu模块未安装或导入失败，记录详细错误信息
+                            self.main_engine.write_log(
+                                f"[画线下单] FUTU模块导入失败: {str(e)}\n"
+                                f"  请确认vnpy_futu模块已正确安装，使用默认pricetick: {pricetick}"
+                            )
                         except Exception as e:
-                            self.main_engine.write_log(f"[画线下单] 查询FUTU API失败: {str(e)}")
+                            # 其他错误（如API调用失败）记录详细错误信息
+                            self.main_engine.write_log(
+                                f"[画线下单] 查询FUTU API失败: {str(e)}\n"
+                                f"  使用默认pricetick: {pricetick}"
+                            )
 
         # 显示下单对话框
         dialog = OrderDialog(price=price, direction="long", pricetick=pricetick, size=size, parent=self.chart)
@@ -4579,9 +4715,13 @@ class ChartWindow(QtWidgets.QWidget):
         if not controller:
             return
             
+        # 将Direction枚举转换为"long"或"short"字符串
+        from vnpy.trader.constant import Direction
+        direction_str = "long" if params["direction"] == Direction.LONG else "short"
+        
         line_id = controller.create_pending_order_line(
             price=params["price"],
-            direction=params["direction"].value
+            direction=direction_str
         )
         
         # 存储订单参数到挂单线（用于价格突破时下单）
@@ -4718,6 +4858,7 @@ class ChartWindow(QtWidgets.QWidget):
         from vnpy.chart.price_breakthrough import BreakthroughEvent
         from vnpy.trader.object import OrderRequest
         from vnpy.trader.utility import extract_vt_symbol
+        from vnpy.trader.constant import Direction
         
         if not hasattr(controller, '_pending_order_params'):
             return
@@ -4731,6 +4872,76 @@ class ChartWindow(QtWidgets.QWidget):
         vt_symbol = order_data["vt_symbol"]
         contract = order_data["contract"]
         
+        # ========== 检查是否为平仓操作（类似 Trade UI 的逻辑） ==========
+        # 即使 offset 是 OPEN，如果存在反向持仓，也应该视为平仓
+        is_closing_order = False
+        opposite_direction = Direction.SHORT if params["direction"] == Direction.LONG else Direction.LONG
+        
+        # 1. 优先从 PositionHolding 获取反向持仓（内存操作，极快）
+        if hasattr(self.chart, '_position_holdings') and self.chart._position_holdings:
+            opposite_direction_str = "long" if opposite_direction == Direction.LONG else "short"
+            opposite_holding = self.chart._position_holdings.get(opposite_direction_str)
+            if opposite_holding:
+                opposite_total_volume = opposite_holding.get_total_volume()
+                if opposite_total_volume > 0 and params["volume"] <= opposite_total_volume:
+                    is_closing_order = True
+                    self.main_engine.write_log(
+                        f"[TradingWidget] 画线下单检测到平仓行为: 订单方向={params['direction'].value}, "
+                        f"订单手数={params['volume']}, 反向持仓方向={opposite_direction.value}, "
+                        f"反向持仓手数={opposite_total_volume}, 标记为平仓订单",
+                        "TradingWidget"
+                    )
+        
+        # 2. 如果 PositionHolding 中没有记录，尝试从 main_engine 获取最新持仓信息
+        if not is_closing_order:
+            all_positions = self.main_engine.get_all_positions()
+            for pos in all_positions:
+                # 检查合约是否匹配（考虑主力合约映射）
+                pos_vt_symbol = pos.vt_symbol
+                if pos_vt_symbol == vt_symbol:
+                    # 检查方向是否相反
+                    if pos.direction == opposite_direction and pos.volume > 0:
+                        if params["volume"] <= pos.volume:
+                            is_closing_order = True
+                            self.main_engine.write_log(
+                                f"[TradingWidget] 画线下单检测到平仓行为: 订单方向={params['direction'].value}, "
+                                f"订单手数={params['volume']}, 反向持仓方向={opposite_direction.value}, "
+                                f"反向持仓手数={pos.volume}, 标记为平仓订单",
+                                "TradingWidget"
+                            )
+                            break
+                else:
+                    # 尝试主力合约映射
+                    if hasattr(self.main_engine, 'get_all_gateway_names'):
+                        for gateway_name in self.main_engine.get_all_gateway_names():
+                            gateway = self.main_engine.get_gateway(gateway_name)
+                            if gateway and hasattr(gateway, 'get_main_contract_mapping'):
+                                mapping = gateway.get_main_contract_mapping()
+                                for main_symbol, actual_symbol in mapping.items():
+                                    if actual_symbol == pos.symbol:
+                                        main_vt_symbol = f"{main_symbol}.{pos.exchange.value}"
+                                        if main_vt_symbol == vt_symbol:
+                                            # 检查方向是否相反
+                                            if pos.direction == opposite_direction and pos.volume > 0:
+                                                if params["volume"] <= pos.volume:
+                                                    is_closing_order = True
+                                                    self.main_engine.write_log(
+                                                        f"[TradingWidget] 画线下单检测到平仓行为（主力合约映射）: "
+                                                        f"订单方向={params['direction'].value}, 订单手数={params['volume']}, "
+                                                        f"反向持仓方向={opposite_direction.value}, 反向持仓手数={pos.volume}, "
+                                                        f"标记为平仓订单",
+                                                        "TradingWidget"
+                                                    )
+                                                    break
+                                if is_closing_order:
+                                    break
+                            if is_closing_order:
+                                break
+        
+        # 标记为平仓订单（用于成交后判断是否创建入场线）
+        if is_closing_order:
+            order_data["is_closing"] = True
+        
         # 创建订单请求
         symbol, exchange = extract_vt_symbol(vt_symbol)
         req = OrderRequest(
@@ -4743,7 +4954,7 @@ class ChartWindow(QtWidgets.QWidget):
             offset=params["offset"]
         )
 
-        # 发送订单
+        # 发送订单（下单前不查询活动订单，保证性能）
         vt_orderid = self.main_engine.send_order(req, contract.gateway_name)
         if vt_orderid:
             self.main_engine.write_log(
@@ -4751,14 +4962,330 @@ class ChartWindow(QtWidgets.QWidget):
                 f"{params['volume']}@{params['price']} (订单ID: {vt_orderid})"
             )
             # 关联订单ID和价格线
+            self.main_engine.write_log(
+                f"[TradingWidget] 关联挂单线 {line_id} 到订单 {vt_orderid}",
+                "TradingWidget"
+            )
             controller.link_line_to_order(line_id, vt_orderid)
-            # 移除挂单参数（已下单）
-            del controller._pending_order_params[line_id]
-            # 取消注册价格突破监控（已触发）
-            if self.chart._breakthrough_monitor:
-                self.chart._breakthrough_monitor.unregister_line(line_id)
+            
+            # 验证关联是否成功
+            linked_line_id = controller.get_line_id_for_order(vt_orderid)
+            if linked_line_id == line_id:
+                self.main_engine.write_log(
+                    f"[TradingWidget] 订单关联验证成功: 订单 {vt_orderid} -> 挂单线 {line_id}",
+                    "TradingWidget"
+                )
+            else:
+                self.main_engine.write_log(
+                    f"[TradingWidget] 警告: 订单关联验证失败: 订单 {vt_orderid} -> 挂单线 {linked_line_id} (期望: {line_id})",
+                    "TradingWidget"
+                )
+            
+            # 监听订单成交事件，创建入场线和成交标记
+            # 这将在订单成交后通过update_line_from_order处理
         else:
-            self.main_engine.write_log(f"价格突破触发下单失败: {vt_symbol}")
+            # 委托失败时才查询当前合约的活动订单，用于诊断问题
+            opposite_direction = Direction.SHORT if params["direction"] == Direction.LONG else Direction.LONG
+            all_active_orders = self.main_engine.get_all_active_orders()
+            # 只查询当前合约的活动订单（性能优化）
+            symbol_active_orders = [
+                order for order in all_active_orders
+                if order.vt_symbol == vt_symbol and order.is_active()
+            ]
+            opposite_orders = [
+                order for order in symbol_active_orders
+                if order.direction == opposite_direction
+            ]
+            
+            # 构建错误信息
+            error_msg = f"价格突破触发下单失败: {vt_symbol} {params['direction'].value} "
+            error_msg += f"{params['volume']}@{params['price']}"
+            
+            if opposite_orders:
+                order_info = ", ".join([
+                    f"{order.direction.value} {order.volume}@{order.price} (订单ID: {order.vt_orderid})"
+                    for order in opposite_orders
+                ])
+                error_msg += f"\n  发现相反方向的未成交订单: {order_info}"
+                error_msg += f"\n  建议: 请先撤销相反方向的未成交订单后重试"
+            elif symbol_active_orders:
+                # 虽然没有相反方向的订单，但有其他方向的订单，也记录下来
+                order_info = ", ".join([
+                    f"{order.direction.value} {order.volume}@{order.price} (订单ID: {order.vt_orderid})"
+                    for order in symbol_active_orders
+                ])
+                error_msg += f"\n  当前合约活动订单: {order_info}"
+            else:
+                error_msg += f" (可能因账户限制等原因失败，但突破已触发)"
+            
+            self.main_engine.write_log(error_msg)
+        
+        # 无论下单成功或失败，都移除挂单参数并取消注册价格突破监控
+        # 因为价格已经突破，不应该再次触发
+        if line_id in controller._pending_order_params:
+            del controller._pending_order_params[line_id]
+        # 取消注册价格突破监控（已触发，无论成功或失败）
+        if self.chart._breakthrough_monitor:
+            self.chart._breakthrough_monitor.unregister_line(line_id)
+    
+    def simulate_trade_breakthrough(self) -> None:
+        """
+        模拟tick突破挂单线，触发挂单成交（用于休市测试）
+        
+        功能：
+        1. 获取所有挂单线（PENDING类型）
+        2. 模拟一个tick数据，价格突破挂单线
+        3. 触发价格突破监控，从而触发下单
+        4. 下单后会自动更新持仓和浮动盈亏
+        """
+        if not self.chart:
+            self.main_engine.write_log("图表未初始化，无法模拟成交")
+            return
+        
+        # 获取所有挂单线
+        price_line_manager = self.chart._price_line_manager
+        all_lines = price_line_manager.get_all_lines()
+        
+        # 筛选出挂单线
+        from vnpy.chart.price_line import PriceLineType
+        pending_lines = {
+            line_id: line 
+            for line_id, line in all_lines.items() 
+            if line.get_line_type() == PriceLineType.PENDING
+        }
+        
+        if not pending_lines:
+            self.main_engine.write_log("没有找到挂单线，无法模拟成交")
+            QtWidgets.QMessageBox.information(
+                self,
+                _("提示"),
+                _("当前没有挂单线，请先创建挂单线后再使用模拟成交功能。")
+            )
+            return
+        
+        # 获取当前合约信息
+        vt_symbol = self.current_vt_symbol
+        if not vt_symbol:
+            self.main_engine.write_log("未选择合约，无法模拟成交")
+            QtWidgets.QMessageBox.information(
+                self,
+                _("提示"),
+                _("请先选择合约后再使用模拟成交功能。")
+            )
+            return
+        
+        # 获取合约信息
+        contract = self.main_engine.get_contract(vt_symbol)
+        if not contract:
+            self.main_engine.write_log(f"合约 {vt_symbol} 未找到，无法模拟成交")
+            return
+        
+        # 获取合约的最小变动单位（pricetick）
+        # 按照用户要求，pricetick按照最小1个点设计
+        pricetick = contract.pricetick if contract.pricetick > 0 else 1.0
+        pricetick = max(pricetick, 1.0)  # 确保至少为1.0（最小1个点）
+        
+        # 获取当前tick数据（如果有的话，用于获取其他字段）
+        current_tick = self.main_engine.get_tick(vt_symbol)
+        
+        # 遍历所有挂单线，模拟价格突破
+        from vnpy.trader.object import TickData
+        from vnpy.trader.constant import Exchange
+        from vnpy.trader.utility import extract_vt_symbol
+        
+        symbol, exchange = extract_vt_symbol(vt_symbol)
+        
+        triggered_count = 0
+        for line_id, line in pending_lines.items():
+            line_price = line.get_price()
+            direction_str = line.get_direction()
+            
+            # 将方向字符串转换为标准格式（"long"或"short"）
+            # 处理中文"多"/"空"和英文"long"/"short"两种情况
+            if direction_str in ["多", "long", "LONG"]:
+                direction = "long"
+            elif direction_str in ["空", "short", "SHORT"]:
+                direction = "short"
+            else:
+                self.main_engine.write_log(f"模拟成交跳过: 挂单线 {line_id} 方向未知: {direction_str}")
+                continue
+            
+            # 根据方向模拟突破价格
+            # 做多：需要满足 last_price < line_price <= current_price
+            # 做空：需要满足 last_price > line_price >= current_price
+            # 按照最小1个点设计，使用整数pricetick，所有价格计算使用整数
+            pricetick_int = max(int(pricetick), 1)  # 确保至少为1个整数点
+            
+            # 将挂单价格转换为整数（向下取整，确保计算准确）
+            line_price_int = int(line_price)
+            
+            # 突破幅度：使用多个点（至少3个点），确保突破明显
+            breakthrough_points = max(pricetick_int * 3, 3)  # 至少3个点，确保突破明显
+            
+            # 计算突破价格（使用整数计算）
+            if direction == "long":
+                # 做多：模拟价格从挂单价格下方突破到上方
+                # 需要满足：last_price < line_price <= current_price
+                # 设置last_price明显低于挂单价格，current_price明显高于挂单价格
+                last_price = line_price_int - breakthrough_points  # 明显低于挂单价格（多个点）
+                current_price = line_price_int + breakthrough_points  # 明显高于挂单价格（多个点）
+                
+                # 验证计算
+                if not (last_price < line_price_int <= current_price):
+                    self.main_engine.write_log(
+                        f"模拟成交错误: 做多价格计算错误 - "
+                        f"line_price_int={line_price_int}, breakthrough_points={breakthrough_points}, "
+                        f"last_price={last_price}, current_price={current_price}"
+                    )
+                    continue
+            else:  # short
+                # 做空：模拟价格从挂单价格上方突破到下方
+                # 需要满足：last_price > line_price >= current_price
+                # 设置last_price明显高于挂单价格，current_price明显低于挂单价格
+                last_price = line_price_int + breakthrough_points  # 明显高于挂单价格（多个点）
+                current_price = line_price_int - breakthrough_points  # 明显低于挂单价格（多个点）
+                
+                # 验证计算
+                if not (last_price > line_price_int >= current_price):
+                    self.main_engine.write_log(
+                        f"模拟成交错误: 做空价格计算错误 - "
+                        f"line_price_int={line_price_int}, breakthrough_points={breakthrough_points}, "
+                        f"last_price={last_price}, current_price={current_price}"
+                    )
+                    continue
+            
+            # 验证突破条件（使用整数价格）
+            if direction == "long":
+                if not (last_price < line_price_int <= current_price):
+                    self.main_engine.write_log(
+                        f"模拟成交警告: 做多突破条件不满足 - "
+                        f"last_price={last_price}, line_price_int={line_price_int}, current_price={current_price}"
+                    )
+                    continue
+            else:  # short
+                if not (last_price > line_price_int >= current_price):
+                    self.main_engine.write_log(
+                        f"模拟成交警告: 做空突破条件不满足 - "
+                        f"last_price={last_price}, line_price_int={line_price_int}, current_price={current_price}"
+                    )
+                    continue
+            
+            # 创建模拟tick数据
+            from datetime import datetime
+            simulate_tick = TickData(
+                symbol=symbol,
+                exchange=exchange,
+                datetime=datetime.now(),
+                gateway_name=contract.gateway_name,
+                last_price=current_price,
+                # 如果有当前tick，复制其他字段
+                bid_price_1=current_tick.bid_price_1 if current_tick else current_price - pricetick,
+                ask_price_1=current_tick.ask_price_1 if current_tick else current_price + pricetick,
+                bid_volume_1=current_tick.bid_volume_1 if current_tick else 100,
+                ask_volume_1=current_tick.ask_volume_1 if current_tick else 100,
+                volume=current_tick.volume if current_tick else 0,
+                open_interest=current_tick.open_interest if current_tick else 0,
+            )
+            
+            # 确保挂单线已注册到价格突破监控
+            controller = self.chart.get_drawing_order_controller()
+            if not controller:
+                self.main_engine.write_log(f"模拟成交失败: 无法获取画线订单控制器")
+                continue
+            
+            # 检查挂单线是否有挂单参数（说明是有效的挂单线）
+            if not hasattr(controller, '_pending_order_params'):
+                self.main_engine.write_log(f"模拟成交跳过: 挂单线 {line_id} 没有挂单参数")
+                continue
+            
+            if line_id not in controller._pending_order_params:
+                self.main_engine.write_log(f"模拟成交跳过: 挂单线 {line_id} 不在挂单参数列表中（可能已触发）")
+                continue
+            
+            # 检查挂单线是否已注册到价格突破监控
+            if not self.chart._breakthrough_monitor:
+                self.main_engine.write_log(f"模拟成交失败: 价格突破监控未初始化")
+                continue
+            
+            # 如果还没有注册，先注册
+            # 使用lambda包装，确保回调在主线程中执行
+            if line_id not in self.chart._breakthrough_monitor._callbacks:
+                def safe_callback(event):
+                    """确保回调在主线程中执行"""
+                    from vnpy.trader.ui import QtCore
+                    if QtCore.QThread.currentThread() != self.thread():
+                        # 如果不在主线程，使用QTimer.singleShot调度到主线程
+                        QtCore.QTimer.singleShot(0, lambda: self._on_price_breakthrough(event, controller))
+                    else:
+                        # 在主线程中直接调用
+                        self._on_price_breakthrough(event, controller)
+                
+                self.chart._breakthrough_monitor.register_line(
+                    line_id,
+                    line,
+                    safe_callback
+                )
+                self.main_engine.write_log(
+                    f"模拟成交: 注册挂单线 {line_id} 到价格突破监控"
+                )
+            
+            # 设置last_price，模拟价格从last_price变化到current_price
+            # 重要：必须在调用update_tick之前设置last_price
+            # 注意：register_line会设置初始last_price为line_price，这里需要覆盖它
+            # 确保在注册后再设置，避免被覆盖
+            # 强制设置last_price，无论是否已注册
+            self.chart._breakthrough_monitor._last_prices[line_id] = last_price
+            
+            # 验证设置是否正确
+            actual_last_price = self.chart._breakthrough_monitor._last_prices.get(line_id)
+            if actual_last_price != last_price:
+                self.main_engine.write_log(
+                    f"模拟成交警告: last_price设置失败 - 期望={last_price:.2f}, 实际={actual_last_price:.2f}"
+                )
+                # 如果设置失败，跳过这个挂单线
+                continue
+            
+            # 使用整数价格进行日志输出和突破条件检查
+            # 注意：使用actual_last_price而不是last_price，确保使用实际设置的值
+            breakthrough_condition_met = actual_last_price < line_price_int <= current_price if direction == "long" else actual_last_price > line_price_int >= current_price
+            # 将方向转换为中文用于日志显示
+            direction_display = "多" if direction == "long" else "空"
+            self.main_engine.write_log(
+                f"模拟成交: {vt_symbol} {direction_display} 挂单线 {line_price_int} "
+                f"准备触发突破 (last_price={actual_last_price:.2f}, current_price={current_price:.2f}, "
+                f"突破幅度={breakthrough_points}个点, "
+                f"突破条件: {'last_price < line_price_int <= current_price' if direction == 'long' else 'last_price > line_price_int >= current_price'} = {breakthrough_condition_met})"
+            )
+            
+            # 调用价格突破监控的update_tick方法
+            # 确保在主线程中执行，避免线程问题（QObject::startTimer错误）
+            from vnpy.trader.ui import QtCore
+            # 使用QTimer.singleShot确保在主线程中执行
+            QtCore.QTimer.singleShot(0, lambda: self.chart._breakthrough_monitor.update_tick(simulate_tick, {line_id: line}))
+            
+            # 检查是否真的触发了突破（通过检查挂单参数是否被移除）
+            if line_id not in controller._pending_order_params:
+                triggered_count += 1
+                self.main_engine.write_log(
+                    f"模拟成交成功: {vt_symbol} {direction_display} 挂单线 {line_price:.2f} 已触发突破并下单"
+                )
+            else:
+                self.main_engine.write_log(
+                    f"模拟成交失败: {vt_symbol} {direction_display} 挂单线 {line_price:.2f} 未触发突破 "
+                    f"(挂单参数仍在，说明回调未执行或下单失败)"
+                )
+        
+        if triggered_count > 0:
+            self.main_engine.write_log(
+                f"模拟成交完成: 共触发 {triggered_count} 个挂单线，请查看持仓和浮动盈亏"
+            )
+            QtWidgets.QMessageBox.information(
+                self,
+                _("模拟成交"),
+                _("已模拟触发 {} 个挂单线成交。\n请查看【持仓】和【资金】窗口查看持仓和浮动盈亏。").format(triggered_count)
+            )
+        else:
+            self.main_engine.write_log("模拟成交失败: 未能触发任何挂单线")
     
     def show(self) -> None:
         """显示窗口"""

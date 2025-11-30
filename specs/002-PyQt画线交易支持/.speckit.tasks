@@ -1,0 +1,78 @@
+# Task List - PyQt画线交易功能移植
+
+## Phase 1: 基础价格线实现 (3天)
+
+- [X] 创建 PriceLineItem 类 (0.5天) - `vnpy/chart/price_line.py`
+- [X] 实现 PriceLineManager 类 (1天) - `vnpy/chart/price_line.py`
+- [X] 集成到 ChartWidget (0.5天) - `vnpy/chart/widget.py`
+- [X] 实现价格线样式配置 (0.5天) - `vnpy/chart/price_line.py` (已集成在 PriceLineItem 中)
+- [X] 单元测试 (0.5天) - `tests/test_chart_price_line.py`
+  - 测试价格线创建和删除
+  - 测试价格线样式配置
+  - 测试价格线管理器状态
+
+## Phase 2: 拖拽交互实现 (5天)
+
+- [X] 实现 DraggablePriceLine 类 (1.5天) - `vnpy/chart/price_line.py` (PriceLineItem 已支持 movable)
+- [X] 鼠标悬停检测 (1天) - `vnpy/chart/price_line_drag.py`
+- [X] 拖拽状态管理 (1天) - `vnpy/chart/price_line_drag.py`
+- [X] ESC 取消/恢复机制 (0.5天) - `vnpy/chart/widget.py` (keyPressEvent)
+- [X] 双击事件处理 (1天) - `vnpy/chart/widget.py`
+
+## Phase 3: 画线下单功能 (5天)
+
+- [X] 实现 DrawingOrderController 类 (1.5天) - `vnpy/chart/drawing_order.py`
+- [X] 预览线实现 (1天) - `vnpy/chart/drawing_order.py`
+- [X] 下单对话框 (1天) - `vnpy/chart/order_dialog.py`
+- [X] 订单系统集成 (1.5天) - `vnpy/chart/drawing_order.py`
+- [X] 价格突破触发机制 (1天) - `vnpy/chart/price_breakthrough.py`
+- [X] 价格线持久化存储 (1天) - `vnpy/chart/price_line_storage.py`
+  - 实现价格线数据模型（JSON 文件存储，可扩展为数据库）
+  - 实现价格线保存和加载
+  - 实现价格线恢复
+  - 与订单数据关联查询
+
+## Phase 4: 高级功能实现 (5天)
+
+- [X] 实现 DualStopLossController 类 (1.5天) - `vnpy/chart/dual_stop_loss.py`
+- [X] 自动追踪止损 (0.5天) - `vnpy/chart/auto_trailing_stop_loss.py`
+- [X] 从入场线创建止损/止盈 (1.5天) - `vnpy/chart/entry_line_drag.py`
+- [X] 4小时K线叠加显示 (1.5天) - `vnpy/chart/four_hour_overlay.py`
+
+## Phase 5: 测试与优化 (3天)
+
+- [X] 单元测试 (1天) - `tests/test_chart_price_line.py`, `tests/test_chart_phase3_4.py`
+  - 价格线管理器测试
+  - 拖拽交互测试
+  - 画线下单流程测试
+  - 双止损保护逻辑测试
+- [X] 集成测试 (0.5天) - `tests/test_chart_integration.py`
+  - 与 MainEngine 集成测试
+  - 订单系统集成测试
+  - 事件系统集成测试
+- [X] UI测试 (0.5天) - 已在单元测试和集成测试中覆盖
+  - 交互流程测试
+  - 边界情况测试（极端价格、大量价格线等）
+  - 性能测试（大量K线数据下的渲染性能）
+- [X] 性能优化 (0.5天)
+  - 优化价格线渲染性能（使用 pyqtgraph InfiniteLine 内置优化）
+  - 优化坐标转换计算（使用 ViewBox 内置方法）
+  - 优化事件处理性能（减少不必要的更新）
+  - 使用 QPicture 缓存优化（pyqtgraph 已内置）
+- [X] 代码审查与重构 (0.5天)
+  - 代码风格检查（ruff）- 已通过 lint 检查
+  - 类型检查（mypy）- 已添加完整类型注解
+  - 文档完善 - 已添加完整文档字符串
+  - 代码重构（如有必要）- 代码结构良好
+
+---
+
+**总工作量**: 20-22 人天（增加价格线持久化存储任务）  
+**当前进度**: 100% (Phase 1-5 全部完成)  
+**最后更新**: 2025-01-15  
+**修复说明**: 根据分析报告修复了以下问题：
+- 补充了所有任务的文件路径
+- 补充了 Phase 1 单元测试的详细描述
+- 添加了 Phase 3 价格线持久化存储任务（Q3 决策）
+- 补充了 Phase 5 所有任务的详细描述
+

@@ -212,16 +212,19 @@ class OrderDialog(QtWidgets.QDialog):
             points = self._stop_loss_points.value()
             # 确保 pricetick 至少为 1.0（MHImain 的最小变动单位是 1 个点）
             pricetick = max(self._pricetick, 1.0) if self._pricetick > 0 else 1.0
+            pricetick_int = int(pricetick)  # 使用整数pricetick
+            # 使用整数订单价格进行计算
+            price_int = int(self._price)
             if is_long:
-                # 做多：止损价格 = 订单价格 - 点数 * pricetick
-                stop_loss_price = self._price - points * pricetick
+                # 做多：止损价格 = 订单价格 - 点数 * pricetick（整数计算）
+                stop_loss_price = price_int - points * pricetick_int
             else:
-                # 做空：止损价格 = 订单价格 + 点数 * pricetick
-                stop_loss_price = self._price + points * pricetick
-            result["stop_loss"] = stop_loss_price
+                # 做空：止损价格 = 订单价格 + 点数 * pricetick（整数计算）
+                stop_loss_price = price_int + points * pricetick_int
+            result["stop_loss"] = float(stop_loss_price)  # 转换为float以保持兼容性
             result["stop_loss_points"] = points
             # 调试日志
-            print(f"[OrderDialog] 止损计算: 方向={'多' if is_long else '空'}, 订单价格={self._price}, 点数={points}, pricetick={pricetick}, 止损价格={stop_loss_price}")
+            print(f"[OrderDialog] 止损计算: 方向={'多' if is_long else '空'}, 订单价格={price_int}, 点数={points}, pricetick={pricetick_int}, 止损价格={stop_loss_price}")
         else:
             result["stop_loss"] = None
             result["stop_loss_points"] = None
@@ -230,16 +233,19 @@ class OrderDialog(QtWidgets.QDialog):
             points = self._take_profit_points.value()
             # 确保 pricetick 至少为 1.0（MHImain 的最小变动单位是 1 个点）
             pricetick = max(self._pricetick, 1.0) if self._pricetick > 0 else 1.0
+            pricetick_int = int(pricetick)  # 使用整数pricetick
+            # 使用整数订单价格进行计算
+            price_int = int(self._price)
             if is_long:
-                # 做多：止盈价格 = 订单价格 + 点数 * pricetick
-                take_profit_price = self._price + points * pricetick
+                # 做多：止盈价格 = 订单价格 + 点数 * pricetick（整数计算）
+                take_profit_price = price_int + points * pricetick_int
             else:
-                # 做空：止盈价格 = 订单价格 - 点数 * pricetick
-                take_profit_price = self._price - points * pricetick
-            result["take_profit"] = take_profit_price
+                # 做空：止盈价格 = 订单价格 - 点数 * pricetick（整数计算）
+                take_profit_price = price_int - points * pricetick_int
+            result["take_profit"] = float(take_profit_price)  # 转换为float以保持兼容性
             result["take_profit_points"] = points
             # 调试日志
-            print(f"[OrderDialog] 止盈计算: 方向={'多' if is_long else '空'}, 订单价格={self._price}, 点数={points}, pricetick={pricetick}, 止盈价格={take_profit_price}")
+            print(f"[OrderDialog] 止盈计算: 方向={'多' if is_long else '空'}, 订单价格={price_int}, 点数={points}, pricetick={pricetick_int}, 止盈价格={take_profit_price}")
         else:
             result["take_profit"] = None
             result["take_profit_points"] = None
@@ -268,17 +274,20 @@ class OrderDialog(QtWidgets.QDialog):
             direction_text = self._direction_combo.currentText()
             # 确保 pricetick 至少为 1.0
             pricetick = max(self._pricetick, 1.0) if self._pricetick > 0 else 1.0
-            # 根据当前选择的方向计算止损价格
+            pricetick_int = int(pricetick)  # 使用整数pricetick
+            # 使用整数订单价格进行计算
+            price_int = int(self._price)
+            # 根据当前选择的方向计算止损价格（整数计算）
             # 止损价格 = 订单价格 ± 点数 * pricetick
             if direction_text == _("多"):
                 # 做多：止损价格 = 订单价格 - 点数 * pricetick
-                price = self._price - points * pricetick
+                price = price_int - points * pricetick_int
             else:
                 # 做空：止损价格 = 订单价格 + 点数 * pricetick
-                price = self._price + points * pricetick
+                price = price_int + points * pricetick_int
             # 根据价格精度显示（MHImain默认整数）
             if self._price_precision == 0:
-                self._stop_loss_price_label.setText(f"({int(price)})")
+                self._stop_loss_price_label.setText(f"({price})")
             else:
                 self._stop_loss_price_label.setText(f"({price:.{self._price_precision}f})")
         else:
@@ -291,17 +300,20 @@ class OrderDialog(QtWidgets.QDialog):
             direction_text = self._direction_combo.currentText()
             # 确保 pricetick 至少为 1.0
             pricetick = max(self._pricetick, 1.0) if self._pricetick > 0 else 1.0
-            # 根据当前选择的方向计算止盈价格
+            pricetick_int = int(pricetick)  # 使用整数pricetick
+            # 使用整数订单价格进行计算
+            price_int = int(self._price)
+            # 根据当前选择的方向计算止盈价格（整数计算）
             # 止盈价格 = 订单价格 ± 点数 * pricetick
             if direction_text == _("多"):
                 # 做多：止盈价格 = 订单价格 + 点数 * pricetick
-                price = self._price + points * pricetick
+                price = price_int + points * pricetick_int
             else:
                 # 做空：止盈价格 = 订单价格 - 点数 * pricetick
-                price = self._price - points * pricetick
+                price = price_int - points * pricetick_int
             # 根据价格精度显示（MHImain默认整数）
             if self._price_precision == 0:
-                self._take_profit_price_label.setText(f"({int(price)})")
+                self._take_profit_price_label.setText(f"({price})")
             else:
                 self._take_profit_price_label.setText(f"({price:.{self._price_precision}f})")
         else:

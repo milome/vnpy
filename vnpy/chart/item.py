@@ -208,6 +208,53 @@ class CandleItem(ChartItem):
             )
             painter.drawRect(rect)
 
+        # 绘制成交箭头标记
+        trade_marker = self._manager.get_trade_marker(ix)
+        if trade_marker:
+            direction, volume, trade_price = trade_marker
+            # 箭头大小
+            arrow_size = BAR_WIDTH * 2
+            
+            # 根据方向选择颜色和箭头方向
+            if direction == "long":
+                # 做多：向上箭头，红色
+                arrow_color = UP_COLOR
+                # 箭头位置：在成交价格上方
+                arrow_y = trade_price + arrow_size * 2
+                # 绘制向上箭头（三角形）
+                arrow_points = [
+                    QtCore.QPointF(ix, arrow_y),  # 顶点
+                    QtCore.QPointF(ix - arrow_size, arrow_y - arrow_size * 2),  # 左下
+                    QtCore.QPointF(ix + arrow_size, arrow_y - arrow_size * 2),  # 右下
+                ]
+            else:
+                # 做空：向下箭头，青色
+                arrow_color = DOWN_COLOR
+                # 箭头位置：在成交价格下方
+                arrow_y = trade_price - arrow_size * 2
+                # 绘制向下箭头（三角形）
+                arrow_points = [
+                    QtCore.QPointF(ix, arrow_y),  # 顶点
+                    QtCore.QPointF(ix - arrow_size, arrow_y + arrow_size * 2),  # 左上
+                    QtCore.QPointF(ix + arrow_size, arrow_y + arrow_size * 2),  # 右上
+                ]
+            
+            # 绘制箭头
+            arrow_pen = pg.mkPen(color=arrow_color, width=PEN_WIDTH)
+            arrow_brush = pg.mkBrush(color=arrow_color)
+            painter.setPen(arrow_pen)
+            painter.setBrush(arrow_brush)
+            painter.drawPolygon(arrow_points)
+            
+            # 在箭头旁边显示仓位数量（可选）
+            # 使用小字体显示数量
+            font = QtGui.QFont("Arial", 7)
+            painter.setFont(font)
+            painter.setPen(pg.mkPen(color=arrow_color, width=1))
+            volume_text = f"{int(volume)}"
+            text_y = arrow_y + (arrow_size * 3 if direction == "long" else -arrow_size * 3)
+            painter.drawText(QtCore.QPointF(ix + arrow_size * 1.5, text_y), volume_text)
+
         # Finish
         painter.end()
         return candle_picture

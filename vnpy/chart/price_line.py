@@ -54,11 +54,15 @@ class PriceLineItem(pg.InfiniteLine):
         pen = self._create_pen(line_type, direction)
         
         # Create label text (默认整数显示，MHImain)
-        label = self._create_label(price, line_type, price_precision=0)
+        label = self._create_label(price, line_type, price_precision=0, direction=direction)
         
         # Initialize InfiniteLine (angle=0 for horizontal line)
         # Note: labelOpts doesn't support 'font' parameter directly
         # Font can be set after creation if needed
+        # span参数设置为(0, 1)表示从0%到100%，确保左右无限延伸
+        # 对于入场线，使用较小的position值（0.90），确保label（包括盈亏信息）完整显示
+        # 对于其他类型，使用默认值（0.95），与止损/止盈线保持一致
+        label_position = 0.90 if line_type == PriceLineType.ENTRY else 0.95
         super().__init__(
             angle=0,
             pos=price,
@@ -66,19 +70,25 @@ class PriceLineItem(pg.InfiniteLine):
             movable=movable,
             label=label,
             labelOpts={
-                "position": 0.95,
+                "position": label_position,
                 "color": pen.color()
-            }
+            },
+            span=(0, 1)  # 确保左右无限延伸，与止损/止盈线一致
         )
         
         # Set font for label after creation
+        # 所有价格线使用相同的字体设置，与止损/止盈线保持一致
         if self.label is not None:
             self.label.setFont(NORMAL_FONT)
+            # 不设置ItemIgnoresTransformations，与止损/止盈线原有设置保持一致
         
         self._price: float = price
         self._line_type: PriceLineType = line_type
         self._direction: str = direction
         self._original_price: float = price
+        self._pnl: float = 0.0  # 浮动盈亏
+        self._volume: float = 0.0  # 持仓手数
+        self._vt_orderid: Optional[str] = None  # 关联的订单ID
 
     def _create_pen(
         self,
@@ -103,10 +113,11 @@ class PriceLineItem(pg.InfiniteLine):
 
         # Determine line style and color based on type
         if line_type == PriceLineType.ENTRY:
-            # Entry line: solid
-            style = QtCore.Qt.PenStyle.SolidLine
-            width = PEN_WIDTH + 1
-            color = base_color
+            # Entry line: white dashed, same style as stop loss/take profit
+            # 使用DashLine样式，宽度和止损/止盈线一致
+            style = QtCore.Qt.PenStyle.DashLine
+            width = PEN_WIDTH  # 与止损/止盈线相同的宽度
+            color = (255, 255, 255)  # White color for entry line
         elif line_type == PriceLineType.PENDING:
             # Pending order line: dotted
             style = QtCore.Qt.PenStyle.DotLine
@@ -140,7 +151,8 @@ class PriceLineItem(pg.InfiniteLine):
         self,
         price: float,
         line_type: PriceLineType,
-        price_precision: int = 0
+        price_precision: int = 0,
+        direction: str = "long"
     ) -> str:
         """
         Create label text for price line.
@@ -149,6 +161,7 @@ class PriceLineItem(pg.InfiniteLine):
             price: Price value
             line_type: Type of price line
             price_precision: Number of decimal places (0 for integer, default 0 for MHImain)
+            direction: Trading direction ("long" or "short"), used for entry line
 
         Returns:
             Label text string
@@ -162,6 +175,38 @@ class PriceLineItem(pg.InfiniteLine):
         }
         
         type_name = type_names.get(line_type, "")
+        
+        # 对于入场线，显示方向（多仓/空仓）、持仓手数和浮动盈亏
+        # 格式：价格在前，方向在后，与止损/止盈线格式一致（"止损 25971"）
+        if line_type == PriceLineType.ENTRY:
+            direction_text = "多仓" if direction == "long" else "空仓"
+            # 获取浮动盈亏和持仓手数（从实例属性获取）
+            # 注意：这里必须从实例属性获取，因为 _create_label 是实例方法
+            pnl = getattr(self, '_pnl', 0.0)
+            volume = getattr(self, '_volume', 0.0)
+            if price_precision == 0:
+                price_str = str(int(price))
+            else:
+                price_str = f"{price:.{price_precision}f}"
+            
+            # 构建标签文本：价格 方向 手数 (盈亏: 数值)
+            # 如果有持仓手数，显示手数信息
+            if volume > 0:
+                volume_str = f"{int(volume)}手" if volume == int(volume) else f"{volume:.1f}手"
+                if pnl != 0.0:
+                    pnl_str = f"{pnl:+.0f}" if price_precision == 0 else f"{pnl:+.2f}"
+                    return f"{price_str} {direction_text} {volume_str} (盈亏: {pnl_str})"
+                else:
+                    return f"{price_str} {direction_text} {volume_str}"
+            else:
+                # 没有持仓手数时，只显示方向和盈亏
+                if pnl != 0.0:
+                    pnl_str = f"{pnl:+.0f}" if price_precision == 0 else f"{pnl:+.2f}"
+                    return f"{price_str} {direction_text} (盈亏: {pnl_str})"
+                else:
+                    return f"{price_str} {direction_text}"
+        
+        # 其他类型的价格线，正常显示
         # 根据精度格式化价格（0表示整数，MHImain默认显示整数）
         if price_precision == 0:
             return f"{type_name} {int(price)}"
@@ -184,13 +229,13 @@ class PriceLineItem(pg.InfiniteLine):
         self.setPos(price)
         # Update label
         if self.label is not None:
-            label_text = self._create_label(price, self._line_type, price_precision)
+            label_text = self._create_label(price, self._line_type, price_precision, self._direction)
             self.label.setText(label_text)
     
     def set_price_precision(self, precision: int) -> None:
         """Set price precision and update label."""
         if self.label is not None:
-            label_text = self._create_label(self._price, self._line_type, precision)
+            label_text = self._create_label(self._price, self._line_type, precision, self._direction)
             self.label.setText(label_text)
 
     def get_line_type(self) -> PriceLineType:
@@ -208,6 +253,56 @@ class PriceLineItem(pg.InfiniteLine):
     def set_original_price(self, price: float) -> None:
         """Set original price (for drag cancel)."""
         self._original_price = price
+    
+    def set_pnl(self, pnl: float) -> None:
+        """设置浮动盈亏并更新标签"""
+        self._pnl = pnl
+        # 更新标签显示
+        if self._line_type == PriceLineType.ENTRY:
+            price_precision = 0  # 默认整数显示
+            label_text = self._create_label(self._price, self._line_type, price_precision, self._direction)
+            if self.label is not None:
+                self.label.setText(label_text)
+    
+    def get_pnl(self) -> float:
+        """获取浮动盈亏"""
+        return getattr(self, '_pnl', 0.0)
+    
+    def set_volume(self, volume: float) -> None:
+        """设置持仓手数并更新标签"""
+        self._volume = volume
+        # 更新标签显示
+        if self._line_type == PriceLineType.ENTRY:
+            price_precision = 0  # 默认整数显示
+            label_text = self._create_label(self._price, self._line_type, price_precision, self._direction)
+            if self.label is not None:
+                self.label.setText(label_text)
+    
+    def get_volume(self) -> float:
+        """获取持仓手数"""
+        return getattr(self, '_volume', 0.0)
+    
+    def set_pnl_and_volume(self, pnl: float, volume: float) -> None:
+        """同时设置浮动盈亏和持仓手数并更新标签"""
+        self._pnl = pnl
+        self._volume = volume
+        # 更新标签显示
+        if self._line_type == PriceLineType.ENTRY:
+            price_precision = 0  # 默认整数显示
+            label_text = self._create_label(self._price, self._line_type, price_precision, self._direction)
+            if self.label is not None:
+                self.label.setText(label_text)
+                # 强制更新标签显示
+                if hasattr(self.label, 'update'):
+                    self.label.update()
+    
+    def set_vt_orderid(self, vt_orderid: str) -> None:
+        """设置关联的订单ID"""
+        self._vt_orderid = vt_orderid
+    
+    def get_vt_orderid(self) -> Optional[str]:
+        """获取关联的订单ID"""
+        return getattr(self, '_vt_orderid', None)
 
 
 class PriceLineManager:
@@ -314,11 +409,55 @@ class PriceLineManager:
         if line is None:
             return False
 
-        # Remove from plot if it has a parent
+        # Remove from plot/scene if it has a parent
+        # Try multiple methods to ensure the line is removed from the UI
         if line.scene() is not None:
-            plot = line.getViewBox()
-            if plot is not None:
-                plot.removeItem(line)
+            # Method 1: Try to get parent PlotItem and remove
+            # In pyqtgraph, InfiniteLine is added to PlotItem, so parent should be PlotItem or ViewBox
+            parent = line.parentItem()
+            if parent is not None:
+                try:
+                    # If parent is PlotItem, use removeItem
+                    if hasattr(parent, 'removeItem'):
+                        parent.removeItem(line)
+                    # If parent is ViewBox, also try removeItem
+                    elif hasattr(parent, 'removeItem'):
+                        parent.removeItem(line)
+                except Exception:
+                    pass
+            
+            # Method 2: Try to get ViewBox and remove
+            try:
+                viewbox = line.getViewBox()
+                if viewbox is not None:
+                    viewbox.removeItem(line)
+            except Exception:
+                pass
+            
+            # Method 3: Traverse up the parent chain to find PlotItem
+            try:
+                item = line
+                while item is not None:
+                    parent = item.parentItem()
+                    if parent is not None:
+                        # Check if parent is a PlotItem (has addItem method)
+                        if hasattr(parent, 'addItem') and hasattr(parent, 'removeItem'):
+                            try:
+                                parent.removeItem(line)
+                                break
+                            except Exception:
+                                pass
+                    item = parent
+            except Exception:
+                pass
+            
+            # Method 4: Remove from scene directly (last resort)
+            try:
+                scene = line.scene()
+                if scene is not None:
+                    scene.removeItem(line)
+            except Exception:
+                pass
 
         return True
 
