@@ -1,0 +1,684 @@
+# Implementation Plan: ChartWidget 重构
+
+**Branch**: `refactor/chart-widget-split` | **Date**: 2025-01-15 | **Spec**: [.speckit.specify](.speckit.specify)
+
+## Summary
+
+将 vnpy 的 ChartWidget 类从单个 5058 行的文件拆分为 8 个模块，每个模块 < 1500 行。采用 Mixin 模式组织代码，使用 TDD 红绿灯模式进行开发，确保测试覆盖率 > 95%，保持 100% 向后兼容。
+
+**总工作量估算**: 约 **17 人天**
+
+## Technical Context
+
+**Language/Version**: Python 3.10, 3.11, 3.12, 3.13 (推荐 3.13)  
+**Primary Dependencies**: pyqtgraph, PyQt6/PySide6, pytest, pytest-qt, pytest-cov, coverage  
+**Storage**: SQLite (vnpy 数据库)  
+**Testing**: pytest + pytest-qt + pytest-cov + coverage  
+**Target Platform**: Windows, Linux, macOS  
+**Project Type**: Python 库模块  
+**Performance Goals**: 性能无明显下降（< 5%），方法调用路径保持不变  
+**Constraints**: 所有文件 < 1500 行，测试覆盖率 > 95%，100% 向后兼容  
+**Scale/Scope**: 1 个主类，8 个模块文件，~4370 行代码（不含注释和空行）
+
+## Constitution Check
+
+✅ **代码风格**: 遵循 vnpy 项目标准，使用 ruff 和 mypy  
+✅ **测试要求**: TDD 红绿灯模式，覆盖率 > 95%  
+✅ **架构模式**: Mixin 模式，保持单一类  
+✅ **向后兼容**: 100% 兼容，所有公共 API 不变  
+✅ **性能要求**: 无明显下降（< 5%）
+
+## Project Structure
+
+### Documentation (this feature)
+
+```text
+specs/003-vnpy_chart_widget_refactor/
+├── .speckit.constitution  # 项目宪章
+├── .speckit.specify       # 功能规格说明
+├── .speckit.plan          # 实施计划（本文件）
+└── [其他分析文档]
+```
+
+### Source Code (repository root)
+
+```text
+vnpy/chart/
+├── widget.py              # 主类 + 核心方法 (~600行)
+├── widget_mixin_base.py   # Mixin基类 (~50行)
+├── widget_position.py     # 持仓管理 (~1200行)
+├── widget_order.py        # 订单处理 (~600行)
+├── widget_trigger.py      # 触发下单/平仓 (~700行)
+├── widget_mouse.py        # 鼠标事件 (~900行)
+├── widget_chart.py        # 图表更新 (~500行)
+├── widget_database.py     # 数据库操作 (~200行)
+└── widget_cursor.py       # 光标类 (~270行)
+
+tests/chart/
+├── conftest.py              # pytest fixtures
+├── test_base.py             # 测试基类和工具函数
+├── test_widget.py           # 核心功能测试
+├── test_widget_position.py  # 持仓管理测试
+├── test_widget_order.py     # 订单处理测试
+├── test_widget_trigger.py    # 触发下单/平仓测试
+├── test_widget_mouse.py     # 鼠标事件测试
+├── test_widget_chart.py     # 图表更新测试
+├── test_widget_database.py  # 数据库操作测试
+├── test_widget_cursor.py    # 光标类测试
+└── test_widget_integration.py # 集成测试
+```
+
+**Structure Decision**: 使用 Mixin 模式，将功能模块作为独立的 Mixin 类，ChartWidget 通过多重继承组合所有功能。测试文件与源文件一一对应。
+
+## Complexity Tracking
+
+| Violation | Why Needed | Simpler Alternative Rejected Because |
+|-----------|------------|-------------------------------------|
+| 8 个模块文件 | 单个文件 5058 行难以维护 | 合并模块会导致文件过大，违反 < 1500 行约束 |
+| Mixin 模式 | 需要保持单一类以维持 API 兼容性 | 组合模式需要修改大量方法调用，破坏兼容性 |
+| TDD 模式 | 确保测试覆盖率 > 95% | 后补测试难以达到高覆盖率，且容易遗漏边界情况 |
+
+---
+
+## Phase 0: 测试环境准备 (2天)
+
+### 目标
+建立完整的测试环境，为 TDD 开发做好准备。
+
+### 任务清单
+
+#### 0.1 安装测试工具 (0.5天)
+- [ ] 安装 pytest: `pip install pytest`
+- [ ] 安装 pytest-qt: `pip install pytest-qt`
+- [ ] 安装 pytest-cov: `pip install pytest-cov`
+- [ ] 安装 coverage: `pip install coverage`
+- [ ] 验证安装: `pytest --version`
+
+#### 0.2 配置测试环境 (0.5天)
+- [ ] 创建 `.coveragerc` 配置文件
+- [ ] 创建 `pytest.ini` 配置文件
+- [ ] 配置覆盖率阈值（95%）
+- [ ] 配置测试路径和标记
+
+#### 0.3 创建测试目录结构 (0.5天)
+- [ ] 创建 `tests/chart/` 目录
+- [ ] 创建 `tests/chart/__init__.py`
+- [ ] 创建 `tests/chart/conftest.py` (pytest fixtures)
+- [ ] 创建 `tests/chart/test_base.py` (测试基类)
+- [ ] 创建各模块测试文件框架
+
+#### 0.4 创建测试基类和工具 (0.5天)
+- [ ] 实现 `mock_main_engine` fixture
+- [ ] 实现 `mock_event_engine` fixture
+- [ ] 实现 `chart_widget` fixture
+- [ ] 实现测试辅助函数
+- [ ] 编写测试工具函数文档
+
+#### 0.5 备份和版本控制 (0.5天)
+- [ ] 创建重构分支: `git checkout -b refactor/chart-widget-split`
+- [ ] 备份当前 `widget.py`: `cp widget.py widget.py.backup`
+- [ ] 提交当前状态: `git commit -m "chore: backup before refactoring"`
+- [ ] 创建重构里程碑标记
+
+**交付物**:
+- 完整的测试环境配置
+- 测试目录结构和基类
+- 代码备份
+
+**依赖**: 无
+
+**风险**: 低
+
+---
+
+## Phase 1: 创建 Mixin 基类 (TDD, 1天)
+
+### 目标
+创建 Mixin 基类，提供通用辅助方法。
+
+### 任务清单
+
+#### 1.1 红（Red）- 编写测试用例 (0.3天)
+- [ ] 创建 `tests/chart/test_widget_mixin_base.py`
+- [ ] 测试 `_get_main_engine()` 方法
+- [ ] 测试 `_get_vt_symbol()` 方法
+- [ ] 测试 `_log()` 方法
+- [ ] 运行测试，确认失败（红）
+
+#### 1.2 绿（Green）- 实现基类 (0.4天)
+- [ ] 创建 `widget_mixin_base.py`
+- [ ] 实现 `ChartWidgetMixinBase` 类
+- [ ] 实现 `_get_main_engine()` 方法
+- [ ] 实现 `_get_vt_symbol()` 方法
+- [ ] 实现 `_log()` 方法
+- [ ] 运行测试，确认通过（绿）
+
+#### 1.3 重构（Refactor）- 优化代码 (0.3天)
+- [ ] 代码审查和优化
+- [ ] 添加文档字符串
+- [ ] 运行测试，确保通过
+- [ ] 检查覆盖率，确保 > 95%
+- [ ] 提交代码: `git commit -m "feat: add ChartWidgetMixinBase"`
+
+**交付物**:
+- `vnpy/chart/widget_mixin_base.py` - Mixin 基类
+- `tests/chart/test_widget_mixin_base.py` - 测试文件
+- 测试覆盖率 > 95%
+
+**依赖**: Phase 0
+
+**风险**: 低
+
+---
+
+## Phase 2: 拆分持仓管理模块 (TDD, 3天)
+
+### 目标
+将持仓管理相关功能（~1200行）提取到独立的 Mixin 类。
+
+### 任务清单
+
+#### 2.1 红（Red）- 编写测试用例 (1天)
+- [ ] 创建 `tests/chart/test_widget_position.py`
+- [ ] 测试 `_register_position_events()` - 成功注册
+- [ ] 测试 `_register_position_events()` - 无 event_engine
+- [ ] 测试 `_on_position_update()` - 合约匹配
+- [ ] 测试 `_on_position_update()` - 合约不匹配
+- [ ] 测试 `_on_position_update()` - 主线程调用
+- [ ] 测试 `_on_position_update()` - 非主线程调用
+- [ ] 测试 `_update_entry_line_pnl()` - 持仓为0
+- [ ] 测试 `_update_entry_line_pnl()` - 持仓存在
+- [ ] 测试 `_update_entry_line_pnl()` - 多条入场线
+- [ ] 测试 `_update_entry_line_pnl()` - FIFO平仓
+- [ ] 测试 `_update_entry_line_pnl()` - 合并显示
+- [ ] 测试 `_clear_frozen_position_lines()` - 清除冻结持仓
+- [ ] 测试 `_load_position_holdings()` - 从数据库加载
+- [ ] 运行测试，确认失败（红）
+
+#### 2.2 绿（Green）- 实现模块 (1天)
+- [ ] 创建 `widget_position.py`
+- [ ] 实现 `ChartWidgetPositionMixin` 类
+- [ ] 从 `widget.py` 复制 `_register_position_events()` 方法
+- [ ] 从 `widget.py` 复制 `_on_position_update()` 方法
+- [ ] 从 `widget.py` 复制 `_update_entry_line_pnl()` 方法
+- [ ] 从 `widget.py` 复制 `_clear_frozen_position_lines()` 方法
+- [ ] 从 `widget.py` 复制 `_load_position_holdings()` 方法
+- [ ] 调整导入和依赖
+- [ ] 运行测试，确认通过（绿）
+
+#### 2.3 重构（Refactor）- 优化代码 (0.5天)
+- [ ] 拆分 `_update_entry_line_pnl()` 超大方法
+  - [ ] 提取 `_handle_zero_position()` 方法
+  - [ ] 提取 `_sync_position_holding()` 方法
+  - [ ] 提取 `_update_entry_line_display()` 方法
+  - [ ] 提取 `_handle_multiple_entry_lines()` 方法
+- [ ] 代码审查和优化
+- [ ] 添加文档字符串
+- [ ] 运行测试，确保通过
+- [ ] 检查覆盖率，确保 > 95%
+- [ ] 提交代码: `git commit -m "feat: extract position management to mixin"`
+
+#### 2.4 集成到主类 (0.5天)
+- [ ] 在 `widget.py` 中导入 `ChartWidgetPositionMixin`
+- [ ] 更新 `ChartWidget` 类继承
+- [ ] 从 `widget.py` 删除已移动的方法
+- [ ] 运行集成测试
+- [ ] 验证功能正常
+
+**交付物**:
+- `vnpy/chart/widget_position.py` - 持仓管理 Mixin
+- `tests/chart/test_widget_position.py` - 测试文件
+- 测试覆盖率 > 95%
+- 功能正常工作
+
+**依赖**: Phase 1
+
+**风险**: 中（超大方法拆分复杂）
+
+---
+
+## Phase 3: 拆分订单处理模块 (TDD, 2天)
+
+### 目标
+将订单处理相关功能（~600行）提取到独立的 Mixin 类。
+
+### 任务清单
+
+#### 3.1 红（Red）- 编写测试用例 (0.7天)
+- [ ] 创建 `tests/chart/test_widget_order.py`
+- [ ] 测试 `_on_order_update()` - 订单去重
+- [ ] 测试 `_on_order_update()` - ALLTRADED 状态
+- [ ] 测试 `_on_order_update()` - 合约匹配
+- [ ] 测试 `_on_order_update()` - 合约不匹配
+- [ ] 测试 `_process_order_update()` - 主线程处理
+- [ ] 测试 `_process_order_update()` - 订单去重检查
+- [ ] 测试 `_process_order_update()` - 创建入场线
+- [ ] 测试 `_process_order_update()` - 平仓订单处理
+- [ ] 测试 `_process_order_update()` - 清理孤儿线
+- [ ] 运行测试，确认失败（红）
+
+#### 3.2 绿（Green）- 实现模块 (0.7天)
+- [ ] 创建 `widget_order.py`
+- [ ] 实现 `ChartWidgetOrderMixin` 类
+- [ ] 从 `widget.py` 复制 `_on_order_update()` 方法
+- [ ] 从 `widget.py` 复制 `_process_order_update()` 方法
+- [ ] 调整导入和依赖
+- [ ] 运行测试，确认通过（绿）
+
+#### 3.3 重构（Refactor）- 优化代码 (0.3天)
+- [ ] 拆分 `_process_order_update()` 超大方法
+  - [ ] 提取 `_check_order_duplicate()` 方法
+  - [ ] 提取 `_handle_alltraded_order()` 方法
+  - [ ] 提取 `_cleanup_orphaned_lines()` 方法
+- [ ] 代码审查和优化
+- [ ] 添加文档字符串
+- [ ] 运行测试，确保通过
+- [ ] 检查覆盖率，确保 > 95%
+- [ ] 提交代码: `git commit -m "feat: extract order processing to mixin"`
+
+#### 3.4 集成到主类 (0.3天)
+- [ ] 在 `widget.py` 中导入 `ChartWidgetOrderMixin`
+- [ ] 更新 `ChartWidget` 类继承
+- [ ] 从 `widget.py` 删除已移动的方法
+- [ ] 运行集成测试
+- [ ] 验证功能正常
+
+**交付物**:
+- `vnpy/chart/widget_order.py` - 订单处理 Mixin
+- `tests/chart/test_widget_order.py` - 测试文件
+- 测试覆盖率 > 95%
+- 功能正常工作
+
+**依赖**: Phase 2
+
+**风险**: 中（订单去重逻辑复杂）
+
+---
+
+## Phase 4: 拆分触发模块 (TDD, 2天)
+
+### 目标
+将价格突破触发下单/平仓功能（~700行）提取到独立的 Mixin 类。
+
+### 任务清单
+
+#### 4.1 红（Red）- 编写测试用例 (0.7天)
+- [ ] 创建 `tests/chart/test_widget_trigger.py`
+- [ ] 测试 `_on_price_breakthrough()` - 价格突破事件
+- [ ] 测试 `trigger_pending_order_breakthrough()` - 挂单线突破下单
+- [ ] 测试 `trigger_pending_order_breakthrough()` - 平仓订单判断
+- [ ] 测试 `trigger_pending_order_breakthrough()` - 下单失败处理
+- [ ] 测试 `trigger_stop_loss_close()` - 多仓止损触发
+- [ ] 测试 `trigger_stop_loss_close()` - 空仓止损触发
+- [ ] 测试 `trigger_stop_loss_close()` - 无持仓跳过
+- [ ] 测试 `trigger_take_profit_close()` - 多仓止盈触发
+- [ ] 测试 `trigger_take_profit_close()` - 空仓止盈触发
+- [ ] 测试 `trigger_take_profit_close()` - 无持仓跳过
+- [ ] 运行测试，确认失败（红）
+
+#### 4.2 绿（Green）- 实现模块 (0.7天)
+- [ ] 创建 `widget_trigger.py`
+- [ ] 实现 `ChartWidgetTriggerMixin` 类
+- [ ] 从 `widget.py` 复制 `_on_price_breakthrough()` 方法
+- [ ] 从 `widget.py` 复制 `trigger_pending_order_breakthrough()` 方法
+- [ ] 从 `widget.py` 复制 `trigger_stop_loss_close()` 方法
+- [ ] 从 `widget.py` 复制 `trigger_take_profit_close()` 方法
+- [ ] 调整导入和依赖
+- [ ] 运行测试，确认通过（绿）
+
+#### 4.3 重构（Refactor）- 优化代码 (0.3天)
+- [ ] 拆分 `trigger_pending_order_breakthrough()` 超大方法
+  - [ ] 提取 `_check_closing_order()` 方法
+  - [ ] 提取 `_create_order_request()` 方法
+  - [ ] 提取 `_send_breakthrough_order()` 方法
+- [ ] 代码审查和优化
+- [ ] 添加文档字符串
+- [ ] 运行测试，确保通过
+- [ ] 检查覆盖率，确保 > 95%
+- [ ] 提交代码: `git commit -m "feat: extract trigger logic to mixin"`
+
+#### 4.4 集成到主类 (0.3天)
+- [ ] 在 `widget.py` 中导入 `ChartWidgetTriggerMixin`
+- [ ] 更新 `ChartWidget` 类继承
+- [ ] 从 `widget.py` 删除已移动的方法
+- [ ] 运行集成测试
+- [ ] 验证功能正常
+
+**交付物**:
+- `vnpy/chart/widget_trigger.py` - 触发下单/平仓 Mixin
+- `tests/chart/test_widget_trigger.py` - 测试文件
+- 测试覆盖率 > 95%
+- 功能正常工作
+
+**依赖**: Phase 3
+
+**风险**: 中（价格突破检测逻辑复杂）
+
+---
+
+## Phase 5: 拆分鼠标事件模块 (TDD, 2天)
+
+### 目标
+将鼠标事件处理功能（~900行）提取到独立的 Mixin 类。
+
+### 任务清单
+
+#### 5.1 红（Red）- 编写测试用例 (0.7天)
+- [ ] 创建 `tests/chart/test_widget_mouse.py`
+- [ ] 测试 `mouseMoveEvent()` - 画线下单模式
+- [ ] 测试 `mouseMoveEvent()` - 拖拽价格线
+- [ ] 测试 `mouseMoveEvent()` - 悬停检测
+- [ ] 测试 `mousePressEvent()` - 开始拖拽
+- [ ] 测试 `mousePressEvent()` - 从入场线拖拽
+- [ ] 测试 `mousePressEvent()` - 画线下单点击
+- [ ] 测试 `mouseReleaseEvent()` - 结束拖拽
+- [ ] 测试 `mouseReleaseEvent()` - 创建止损止盈线
+- [ ] 测试 `mouseDoubleClickEvent()` - 挂单线双击
+- [ ] 测试 `mouseDoubleClickEvent()` - 入场线双击平仓
+- [ ] 测试 `mouseDoubleClickEvent()` - 止损止盈线双击删除
+- [ ] 测试 `_update_related_lines_on_drag()` - 拖拽时更新
+- [ ] 测试 `_update_points_on_line_drag()` - 更新点数
+- [ ] 运行测试，确认失败（红）
+
+#### 5.2 绿（Green）- 实现模块 (0.7天)
+- [ ] 创建 `widget_mouse.py`
+- [ ] 实现 `ChartWidgetMouseMixin` 类
+- [ ] 从 `widget.py` 复制所有鼠标事件处理方法
+- [ ] 调整导入和依赖
+- [ ] 运行测试，确认通过（绿）
+
+#### 5.3 重构（Refactor）- 优化代码 (0.3天)
+- [ ] 拆分 `mouseDoubleClickEvent()` 超大方法
+  - [ ] 提取 `_handle_double_click_pending()` 方法
+  - [ ] 提取 `_handle_double_click_entry()` 方法
+  - [ ] 提取 `_handle_double_click_stop_loss_take_profit()` 方法
+- [ ] 代码审查和优化
+- [ ] 添加文档字符串
+- [ ] 运行测试，确保通过
+- [ ] 检查覆盖率，确保 > 90%（鼠标事件允许稍低）
+- [ ] 提交代码: `git commit -m "feat: extract mouse events to mixin"`
+
+#### 5.4 集成到主类 (0.3天)
+- [ ] 在 `widget.py` 中导入 `ChartWidgetMouseMixin`
+- [ ] 更新 `ChartWidget` 类继承
+- [ ] 从 `widget.py` 删除已移动的方法
+- [ ] 运行集成测试
+- [ ] 验证功能正常
+
+**交付物**:
+- `vnpy/chart/widget_mouse.py` - 鼠标事件 Mixin
+- `tests/chart/test_widget_mouse.py` - 测试文件
+- 测试覆盖率 > 90%
+- 功能正常工作
+
+**依赖**: Phase 4
+
+**风险**: 中（鼠标事件交互复杂）
+
+---
+
+## Phase 6: 拆分图表更新模块 (TDD, 1天)
+
+### 目标
+将图表更新和显示功能（~500行）提取到独立的 Mixin 类。
+
+### 任务清单
+
+#### 6.1 红（Red）- 编写测试用例 (0.3天)
+- [ ] 创建 `tests/chart/test_widget_chart.py`
+- [ ] 测试所有图表更新相关方法
+- [ ] 运行测试，确认失败（红）
+
+#### 6.2 绿（Green）- 实现模块 (0.4天)
+- [ ] 创建 `widget_chart.py`
+- [ ] 实现 `ChartWidgetChartMixin` 类
+- [ ] 从 `widget.py` 复制所有图表更新相关方法
+- [ ] 调整导入和依赖
+- [ ] 运行测试，确认通过（绿）
+
+#### 6.3 重构（Refactor）- 优化代码 (0.2天)
+- [ ] 代码审查和优化
+- [ ] 添加文档字符串
+- [ ] 运行测试，确保通过
+- [ ] 检查覆盖率，确保 > 95%
+- [ ] 提交代码: `git commit -m "feat: extract chart update logic to mixin"`
+
+#### 6.4 集成到主类 (0.1天)
+- [ ] 在 `widget.py` 中导入 `ChartWidgetChartMixin`
+- [ ] 更新 `ChartWidget` 类继承
+- [ ] 从 `widget.py` 删除已移动的方法
+- [ ] 运行集成测试
+- [ ] 验证功能正常
+
+**交付物**:
+- `vnpy/chart/widget_chart.py` - 图表更新 Mixin
+- `tests/chart/test_widget_chart.py` - 测试文件
+- 测试覆盖率 > 95%
+- 功能正常工作
+
+**依赖**: Phase 5
+
+**风险**: 低
+
+---
+
+## Phase 7: 拆分数据库模块 (TDD, 1天)
+
+### 目标
+将数据库操作功能（~200行）提取到独立的 Mixin 类。
+
+### 任务清单
+
+#### 7.1 红（Red）- 编写测试用例 (0.3天)
+- [ ] 创建 `tests/chart/test_widget_database.py`
+- [ ] 测试所有数据库操作方法
+- [ ] 运行测试，确认失败（红）
+
+#### 7.2 绿（Green）- 实现模块 (0.4天)
+- [ ] 创建 `widget_database.py`
+- [ ] 实现 `ChartWidgetDatabaseMixin` 类
+- [ ] 从 `widget.py` 复制所有数据库操作方法
+- [ ] 调整导入和依赖
+- [ ] 运行测试，确认通过（绿）
+
+#### 7.3 重构（Refactor）- 优化代码 (0.2天)
+- [ ] 代码审查和优化
+- [ ] 添加文档字符串
+- [ ] 运行测试，确保通过
+- [ ] 检查覆盖率，确保 > 95%
+- [ ] 提交代码: `git commit -m "feat: extract database operations to mixin"`
+
+#### 7.4 集成到主类 (0.1天)
+- [ ] 在 `widget.py` 中导入 `ChartWidgetDatabaseMixin`
+- [ ] 更新 `ChartWidget` 类继承
+- [ ] 从 `widget.py` 删除已移动的方法
+- [ ] 运行集成测试
+- [ ] 验证功能正常
+
+**交付物**:
+- `vnpy/chart/widget_database.py` - 数据库操作 Mixin
+- `tests/chart/test_widget_database.py` - 测试文件
+- 测试覆盖率 > 95%
+- 功能正常工作
+
+**依赖**: Phase 6
+
+**风险**: 低
+
+---
+
+## Phase 8: 移动光标类 (TDD, 1天)
+
+### 目标
+将 ChartCursor 类移动到独立文件。
+
+### 任务清单
+
+#### 8.1 红（Red）- 编写测试用例 (0.3天)
+- [ ] 创建 `tests/chart/test_widget_cursor.py`
+- [ ] 测试 ChartCursor 的所有方法
+- [ ] 运行测试，确认失败（红）
+
+#### 8.2 绿（Green）- 移动类 (0.4天)
+- [ ] 创建 `widget_cursor.py`
+- [ ] 从 `widget.py` 移动 `ChartCursor` 类
+- [ ] 调整导入和依赖
+- [ ] 在 `widget.py` 中导入 `ChartCursor`
+- [ ] 运行测试，确认通过（绿）
+
+#### 8.3 重构（Refactor）- 优化代码 (0.3天)
+- [ ] 代码审查和优化
+- [ ] 添加文档字符串
+- [ ] 运行测试，确保通过
+- [ ] 检查覆盖率，确保 > 95%
+- [ ] 提交代码: `git commit -m "feat: move ChartCursor to separate file"`
+
+**交付物**:
+- `vnpy/chart/widget_cursor.py` - 光标类
+- `tests/chart/test_widget_cursor.py` - 测试文件
+- 测试覆盖率 > 95%
+- 功能正常工作
+
+**依赖**: Phase 7
+
+**风险**: 低
+
+---
+
+## Phase 9: 集成测试和最终验证 (3天)
+
+### 目标
+完成所有集成测试，验证重构成功，确保所有成功标准达成。
+
+### 任务清单
+
+#### 9.1 更新导入和导出 (0.5天)
+- [ ] 更新 `widget.py` 的导入语句
+- [ ] 更新 `__init__.py` 的导出
+- [ ] 验证所有导入正确
+- [ ] 运行代码检查工具（ruff, mypy）
+
+#### 9.2 集成测试 (0.5天)
+- [ ] 创建 `tests/chart/test_widget_integration.py`
+- [ ] 测试所有模块的集成
+- [ ] 测试端到端场景
+- [ ] 测试真实使用场景
+- [ ] 运行所有测试，确保通过
+
+#### 9.3 覆盖率验证 (0.5天)
+- [ ] 运行覆盖率报告: `pytest --cov=vnpy.chart --cov-report=html`
+- [ ] 检查总体覆盖率，确保 > 95%
+- [ ] 检查各模块覆盖率
+- [ ] 修复覆盖率不足的部分
+- [ ] 生成最终覆盖率报告
+
+#### 9.4 性能测试 (0.5天)
+- [ ] 对比重构前后的性能
+- [ ] 测试内存使用情况
+- [ ] 测试启动时间
+- [ ] 测试响应时间
+- [ ] 记录性能指标
+
+#### 9.5 代码质量检查 (0.5天)
+- [ ] 检查所有文件行数，确保 < 1500行
+- [ ] 运行代码格式化工具（ruff）
+- [ ] 运行类型检查工具（mypy）
+- [ ] 代码审查
+- [ ] 修复所有问题
+
+#### 9.6 文档更新 (0.5天)
+- [ ] 更新代码注释
+- [ ] 更新 API 文档
+- [ ] 创建重构说明文档
+- [ ] 更新变更日志
+
+#### 9.7 最终提交 (0.5天)
+- [ ] 运行所有测试: `pytest tests/chart/`
+- [ ] 检查覆盖率: `coverage report`
+- [ ] 代码审查
+- [ ] 提交最终代码: `git commit -m "feat: complete widget refactoring"`
+- [ ] 创建 Pull Request
+
+**交付物**:
+- 完整的集成测试
+- 覆盖率报告（> 95%）
+- 性能测试报告
+- 代码质量检查报告
+- 更新的文档
+- 最终代码提交
+
+**依赖**: Phase 8
+
+**风险**: 低
+
+---
+
+## 里程碑
+
+| 里程碑 | 阶段 | 预计完成时间 | 交付物 |
+|--------|------|------------|--------|
+| M1 | Phase 0-1 完成 | 第3天 | 测试环境和 Mixin 基类 |
+| M2 | Phase 2 完成 | 第6天 | 持仓管理模块 |
+| M3 | Phase 3 完成 | 第8天 | 订单处理模块 |
+| M4 | Phase 4 完成 | 第10天 | 触发模块 |
+| M5 | Phase 5 完成 | 第12天 | 鼠标事件模块 |
+| M6 | Phase 6-7 完成 | 第14天 | 图表更新和数据库模块 |
+| M7 | Phase 8 完成 | 第15天 | 光标类移动 |
+| M8 | Phase 9 完成 | 第17天 | 完整重构交付 |
+
+---
+
+## 风险与应对
+
+### 技术风险
+
+1. **功能回归风险**
+   - **风险**: 重构过程中可能破坏现有功能
+   - **应对**: 每个模块拆分后立即测试，保持完整的测试用例
+
+2. **性能风险**
+   - **风险**: Mixin 模式可能影响性能
+   - **应对**: Mixin 模式性能影响可忽略，保持方法调用路径不变
+
+3. **兼容性风险**
+   - **风险**: 可能破坏外部 API
+   - **应对**: 保持所有公共 API 不变，内部实现可以重构
+
+4. **测试覆盖率风险**
+   - **风险**: 难以达到 > 95% 的覆盖率
+   - **应对**: 使用 TDD 模式，每个模块拆分前先写测试
+
+### 过程风险
+
+1. **时间风险**
+   - **风险**: 重构可能超出预计时间（17天）
+   - **应对**: 分阶段实施，每阶段都有明确的交付物
+
+2. **质量风险**
+   - **风险**: 代码质量可能下降
+   - **应对**: 代码审查，使用代码质量检查工具
+
+---
+
+## 成功标准
+
+重构完成需要满足以下所有条件：
+
+- ✅ 所有文件 < 1500行
+- ✅ 测试代码覆盖率 > 95%
+- ✅ 所有测试用例通过（pytest）
+- ✅ 所有功能正常工作
+- ✅ 性能无明显下降（< 5%）
+- ✅ 外部 API 保持不变
+- ✅ 代码质量检查通过（ruff, mypy）
+- ✅ 遵循 TDD 红绿灯模式
+- ✅ 代码审查通过
+- ✅ 文档更新完成
+
+---
+
+**文档版本**: 1.0  
+**创建日期**: 2025-01-15  
+**最后更新**: 2025-01-15  
+**维护者**: vnpy 开发团队
+

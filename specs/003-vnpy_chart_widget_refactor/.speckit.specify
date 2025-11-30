@@ -1,0 +1,303 @@
+# Feature Specification: ChartWidget 重构
+
+**Feature Branch**: `refactor/chart-widget-split`  
+**Created**: 2025-01-15  
+**Status**: Draft  
+**Input**: 将 5058 行的 widget.py 拆分为多个模块，采用 TDD 红绿灯模式，测试覆盖率 > 95%
+
+## User Scenarios & Testing
+
+### User Story 1 - 代码可维护性提升 (Priority: P1)
+
+作为 vnpy 开发人员，我希望 ChartWidget 的代码被拆分为多个模块，每个模块职责单一，这样我可以更容易地理解、修改和测试代码。
+
+**Why this priority**: 当前 widget.py 文件有 5058 行，包含多个超大方法（如 `_update_entry_line_pnl` 有 ~1100 行），代码难以维护。这是重构的核心目标。
+
+**Independent Test**: 可以通过检查文件行数、代码组织结构、模块职责清晰度来验证。每个模块应该 < 1500 行，职责单一。
+
+**Acceptance Scenarios**:
+
+1. **Given** 重构完成，**When** 查看 `vnpy/chart/` 目录，**Then** 应该看到 8 个模块文件，每个文件 < 1500 行
+2. **Given** 重构完成，**When** 查看代码结构，**Then** 每个模块应该有清晰的职责划分（持仓管理、订单处理、鼠标事件等）
+3. **Given** 重构完成，**When** 需要修改持仓相关功能，**Then** 只需要查看 `widget_position.py` 文件
+
+---
+
+### User Story 2 - 测试覆盖率提升 (Priority: P1)
+
+作为 vnpy 开发人员，我希望重构后的代码有完整的测试覆盖，这样我可以安全地进行修改而不用担心破坏现有功能。
+
+**Why this priority**: 测试覆盖率 > 95% 是重构成功的关键标准，确保代码质量和功能稳定性。
+
+**Independent Test**: 运行 `pytest tests/chart/ --cov=vnpy.chart`，覆盖率应该 > 95%。每个模块都应该有对应的测试文件。
+
+**Acceptance Scenarios**:
+
+1. **Given** 重构完成，**When** 运行测试覆盖率报告，**Then** 总体覆盖率应该 > 95%
+2. **Given** 重构完成，**When** 运行所有测试，**Then** 所有测试用例应该通过
+3. **Given** 重构完成，**When** 查看各模块覆盖率，**Then** 每个模块覆盖率应该 > 95%（鼠标事件模块允许 > 90%）
+
+---
+
+### User Story 3 - 功能完整性保持 (Priority: P1)
+
+作为 vnpy 用户，我希望重构后的 ChartWidget 功能与重构前完全一致，这样我的现有代码不需要修改。
+
+**Why this priority**: 向后兼容性是重构成功的基础，不能破坏现有功能。
+
+**Independent Test**: 运行集成测试和手动测试，验证所有功能正常工作。外部 API 应该保持不变。
+
+**Acceptance Scenarios**:
+
+1. **Given** 重构完成，**When** 使用 ChartWidget 的公共 API，**Then** 所有方法签名和行为应该与重构前一致
+2. **Given** 重构完成，**When** 运行集成测试，**Then** 所有功能应该正常工作（持仓管理、订单处理、价格线拖拽等）
+3. **Given** 重构完成，**When** 性能测试，**Then** 性能应该无明显下降（< 5%）
+
+---
+
+### User Story 4 - 代码质量提升 (Priority: P2)
+
+作为代码审查人员，我希望重构后的代码遵循 TDD 红绿灯模式，代码结构清晰，这样我可以更容易地进行代码审查。
+
+**Why this priority**: TDD 模式确保代码质量和可测试性，清晰的代码结构有助于团队协作。
+
+**Independent Test**: 检查代码提交历史，应该看到先写测试（红）、实现功能（绿）、重构优化（蓝）的模式。
+
+**Acceptance Scenarios**:
+
+1. **Given** 重构完成，**When** 查看代码提交历史，**Then** 应该看到 TDD 红绿灯模式的提交记录
+2. **Given** 重构完成，**When** 查看代码，**Then** 应该看到清晰的模块划分和文档字符串
+3. **Given** 重构完成，**When** 运行代码质量检查工具，**Then** 应该通过所有检查（ruff, mypy）
+
+---
+
+### Edge Cases
+
+- 超大方法拆分：如何处理 `_update_entry_line_pnl` (~1100行) 和 `_process_order_update` (~440行) 等超大方法的拆分？
+- Mixin 继承顺序：Python MRO 如何影响多个 Mixin 的方法解析顺序？
+- 状态共享：Mixin 如何安全地共享 ChartWidget 的状态？
+- 线程安全：如何确保跨线程的 UI 更新正确工作？
+- 性能影响：Mixin 模式是否会影响性能？如何验证？
+
+## Requirements
+
+### Functional Requirements
+
+- **FR-001**: 系统必须将 `widget.py` (5058行) 拆分为 8 个模块，每个模块 < 1500 行
+- **FR-002**: 系统必须保持所有公共 API 不变，确保 100% 向后兼容
+- **FR-003**: 系统必须实现测试覆盖率 > 95%（鼠标事件模块允许 > 90%）
+- **FR-004**: 系统必须遵循 TDD 红绿灯模式进行开发
+- **FR-005**: 系统必须使用 Mixin 模式组织代码，保持单一 ChartWidget 类
+- **FR-006**: 系统必须拆分超大方法（>200行）为更小的方法
+- **FR-007**: 系统必须保持所有功能正常工作，无功能回归
+- **FR-008**: 系统必须保持性能无明显下降（< 5%）
+
+### Key Entities
+
+- **ChartWidget**: 主图表组件类，继承自 `pg.PlotWidget` 和所有 Mixin 类
+- **ChartWidgetMixinBase**: Mixin 基类，提供通用辅助方法
+- **ChartWidgetPositionMixin**: 持仓管理 Mixin，处理持仓更新和入场线盈亏计算
+- **ChartWidgetOrderMixin**: 订单处理 Mixin，处理订单更新和入场线创建
+- **ChartWidgetTriggerMixin**: 触发下单/平仓 Mixin，处理价格突破触发逻辑
+- **ChartWidgetMouseMixin**: 鼠标事件 Mixin，处理所有鼠标交互
+- **ChartWidgetChartMixin**: 图表更新 Mixin，处理图表数据更新和显示
+- **ChartWidgetDatabaseMixin**: 数据库操作 Mixin，处理价格线的保存和加载
+- **ChartCursor**: 图表光标类，独立于主类
+
+## Success Criteria
+
+### Measurable Outcomes
+
+- **SC-001**: 所有文件 < 1500 行（8 个模块文件）
+- **SC-002**: 测试代码覆盖率 > 95%（总体和每个模块）
+- **SC-003**: 所有测试用例通过（pytest）
+- **SC-004**: 所有功能正常工作，无功能回归
+- **SC-005**: 性能无明显下降（< 5%）
+- **SC-006**: 外部 API 保持不变，100% 向后兼容
+- **SC-007**: 代码质量检查通过（ruff, mypy）
+- **SC-008**: 遵循 TDD 红绿灯模式，每个模块都有完整的测试
+
+## Technical Specifications
+
+### Architecture Pattern
+
+**Mixin 模式**: 使用 Python 多重继承，将功能模块作为 Mixin 类，ChartWidget 继承所有 Mixin。
+
+```python
+class ChartWidget(
+    pg.PlotWidget,
+    ChartWidgetPositionMixin,
+    ChartWidgetOrderMixin,
+    ChartWidgetTriggerMixin,
+    ChartWidgetMouseMixin,
+    ChartWidgetChartMixin,
+    ChartWidgetDatabaseMixin
+):
+    """主图表组件类"""
+    pass
+```
+
+### Module Structure
+
+```
+vnpy/chart/
+├── widget.py              # 主类 + 核心方法 (~600行)
+├── widget_mixin_base.py   # Mixin基类 (~50行)
+├── widget_position.py     # 持仓管理 (~1200行)
+├── widget_order.py        # 订单处理 (~600行)
+├── widget_trigger.py      # 触发下单/平仓 (~700行)
+├── widget_mouse.py        # 鼠标事件 (~900行)
+├── widget_chart.py        # 图表更新 (~500行)
+├── widget_database.py     # 数据库操作 (~200行)
+└── widget_cursor.py       # 光标类 (~270行)
+```
+
+### Method Splitting Strategy
+
+超大方法拆分优先级：
+
+1. **`_update_entry_line_pnl`** (~1100行) → 拆分为：
+   - `_handle_zero_position()` - 处理持仓为0的情况
+   - `_sync_position_holding()` - 同步持仓记录
+   - `_update_entry_line_display()` - 更新入场线显示
+   - `_handle_multiple_entry_lines()` - 处理多条入场线
+
+2. **`_process_order_update`** (~440行) → 拆分为：
+   - `_check_order_duplicate()` - 检查订单去重
+   - `_handle_alltraded_order()` - 处理全部成交订单
+   - `_cleanup_orphaned_lines()` - 清理孤儿线
+
+3. **`mouseDoubleClickEvent`** (~310行) → 拆分为：
+   - `_handle_double_click_pending()` - 处理挂单线双击
+   - `_handle_double_click_entry()` - 处理入场线双击
+   - `_handle_double_click_stop_loss_take_profit()` - 处理止损止盈双击
+
+4. **`trigger_pending_order_breakthrough`** (~250行) → 拆分为：
+   - `_check_closing_order()` - 检查是否为平仓订单
+   - `_create_order_request()` - 创建订单请求
+   - `_send_breakthrough_order()` - 发送突破订单
+
+### Testing Strategy
+
+**TDD 红绿灯模式**:
+1. 🔴 **红（Red）**: 先写失败的测试用例
+2. 🟢 **绿（Green）**: 写最少的代码让测试通过
+3. 🔵 **重构（Refactor）**: 优化代码，保持测试通过
+
+**测试文件结构**:
+```
+tests/chart/
+├── conftest.py              # pytest fixtures
+├── test_base.py             # 测试基类和工具函数
+├── test_widget.py           # 核心功能测试
+├── test_widget_position.py # 持仓管理测试
+├── test_widget_order.py     # 订单处理测试
+├── test_widget_trigger.py   # 触发下单/平仓测试
+├── test_widget_mouse.py     # 鼠标事件测试
+├── test_widget_chart.py     # 图表更新测试
+├── test_widget_database.py  # 数据库操作测试
+├── test_widget_cursor.py   # 光标类测试
+└── test_widget_integration.py # 集成测试
+```
+
+### Dependencies
+
+- **Python**: 3.10, 3.11, 3.12, 3.13 (推荐 3.13)
+- **测试框架**: pytest, pytest-qt, pytest-cov, coverage
+- **代码质量**: ruff (linting), mypy (type checking)
+- **UI框架**: PyQt6/PySide6 (via vnpy.trader.ui)
+- **图表库**: pyqtgraph
+- **架构**: Event-driven (vnpy EventEngine)
+
+### Performance Considerations
+
+- **Mixin 开销**: Python 方法解析顺序（MRO）性能影响可忽略
+- **方法调用路径**: 保持与重构前相同，无性能下降
+- **内存管理**: 保持现有的内存管理策略
+- **渲染性能**: 保持现有的 pyqtgraph 优化
+
+### Backward Compatibility
+
+- **公共 API**: 所有公共方法签名保持不变
+- **行为**: 所有功能行为与重构前一致
+- **事件处理**: 事件处理逻辑保持不变
+- **数据格式**: 数据格式和存储方式保持不变
+
+## Acceptance Criteria
+
+- [ ] 所有文件 < 1500 行
+- [ ] 测试代码覆盖率 > 95%
+- [ ] 所有测试用例通过（pytest）
+- [ ] 所有功能正常工作
+- [ ] 性能无明显下降（< 5%）
+- [ ] 外部 API 保持不变
+- [ ] 代码质量检查通过（ruff, mypy）
+- [ ] 遵循 TDD 红绿灯模式
+- [ ] 代码审查通过
+- [ ] 文档更新完成
+
+## Dependencies
+
+### Internal Dependencies
+
+- `vnpy.trader.object`: OrderData, PositionData, BarData 等数据对象
+- `vnpy.trader.event`: EventEngine, 事件类型
+- `vnpy.trader.ui`: Qt 组件和信号
+- `vnpy.chart.manager`: BarManager 数据管理
+- `vnpy.chart.item`: ChartItem 基类
+- `vnpy.chart.price_line`: PriceLineManager（如果已存在）
+
+### External Dependencies
+
+- **pyqtgraph**: 图表渲染库
+- **PyQt6/PySide6**: UI 框架
+- **pytest**: 测试框架
+- **pytest-qt**: Qt 测试支持
+- **pytest-cov**: 覆盖率统计
+- **coverage**: 覆盖率工具
+- **ruff**: 代码检查
+- **mypy**: 类型检查
+
+## Risks and Mitigation
+
+### Technical Risks
+
+1. **功能回归风险**
+   - **风险**: 重构过程中可能破坏现有功能
+   - **缓解**: 每个模块拆分后立即测试，保持完整的测试用例
+
+2. **性能风险**
+   - **风险**: Mixin 模式可能影响性能
+   - **缓解**: Mixin 模式性能影响可忽略，保持方法调用路径不变
+
+3. **兼容性风险**
+   - **风险**: 可能破坏外部 API
+   - **缓解**: 保持所有公共 API 不变，内部实现可以重构
+
+4. **测试覆盖率风险**
+   - **风险**: 难以达到 > 95% 的覆盖率
+   - **缓解**: 使用 TDD 模式，每个模块拆分前先写测试
+
+### Process Risks
+
+1. **时间风险**
+   - **风险**: 重构可能超出预计时间（17天）
+   - **缓解**: 分阶段实施，每阶段都有明确的交付物
+
+2. **质量风险**
+   - **风险**: 代码质量可能下降
+   - **缓解**: 代码审查，使用代码质量检查工具
+
+## Notes
+
+- 重构过程中保持功能分支独立，不影响主分支
+- 每个模块拆分后立即提交，保持提交历史清晰
+- 如果出现问题，可以回滚到备份
+- 保持与团队沟通，及时更新进度
+
+---
+
+**Document Version**: 1.0  
+**Last Updated**: 2025-01-15  
+**Maintainer**: vnpy development team
+

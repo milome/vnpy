@@ -1,0 +1,349 @@
+# Project Constitution
+
+## Project Overview
+
+This is a refactoring project for vnpy's ChartWidget class. The goal is to split the monolithic `widget.py` file (5058 lines) into multiple manageable modules using the Mixin pattern, while maintaining 100% backward compatibility and achieving >95% test coverage through Test-Driven Development (TDD).
+
+The refactoring will improve code maintainability, readability, and testability without changing any public APIs or breaking existing functionality.
+
+## Technology Stack
+
+- **Python Version**: 3.10, 3.11, 3.12, 3.13 (recommend 3.13)
+- **UI Framework**: PyQt6/PySide6 (via `vnpy.trader.ui`)
+- **Charting Library**: pyqtgraph
+- **Testing Framework**: pytest, pytest-qt, pytest-cov, coverage
+- **Architecture**: Event-driven (vnpy EventEngine)
+- **Code Quality Tools**: ruff (linting), mypy (type checking)
+
+## Code Style and Standards
+
+### General Principles
+
+- Follow existing code patterns and conventions in vnpy codebase
+- Write clear, self-documenting code with comprehensive docstrings
+- Maintain consistency with `vnpy/chart/` module architecture
+- Use event-driven design patterns (EventEngine for component communication)
+- **Refactoring principle**: Preserve all existing functionality - no breaking changes
+- **TDD principle**: Red-Green-Refactor cycle for all new code
+- Only add complexity when directly needed for the current task
+
+### Naming Conventions
+
+Following vnpy project standards:
+
+- **Class attributes, methods, parameters, variables**: Use lowercase with underscores
+  - Example: `self._price_line_manager`, `def add_price_line()`, `bar_data: BarData`
+- **Class names**: Use CamelCase
+  - Example: `class ChartWidgetPositionMixin:`, `class ChartWidgetOrderMixin:`
+- **Mixin classes**: Use suffix `Mixin` for all mixin classes
+  - Example: `ChartWidgetPositionMixin`, `ChartWidgetOrderMixin`
+- **Constants**: Use UPPERCASE with underscores
+  - Example: `DEFAULT_STOP_LOSS_OFFSET = 50`, `MAX_FILE_LINES = 1500`
+
+### Code Organization
+
+- **Module structure**: Split `widget.py` into focused modules:
+  - `widget.py`: Core ChartWidget class with initialization and base methods (~600 lines)
+  - `widget_position.py`: Position management mixin (~1200 lines)
+  - `widget_order.py`: Order processing mixin (~600 lines)
+  - `widget_trigger.py`: Price breakthrough trigger mixin (~700 lines)
+  - `widget_mouse.py`: Mouse event handling mixin (~900 lines)
+  - `widget_chart.py`: Chart update and display mixin (~500 lines)
+  - `widget_database.py`: Database operations mixin (~200 lines)
+  - `widget_cursor.py`: ChartCursor class (~270 lines)
+- **File size limit**: Each file must be < 1500 lines
+- **Import ordering**: 
+  1. Standard library imports
+  2. Third-party imports (pyqtgraph, PyQt6)
+  3. vnpy imports (from vnpy.trader.*)
+  4. Local imports (from .base, .manager, etc.)
+- **Type hints**: Required for all function parameters and return types (mypy strict mode)
+
+### Code Format
+
+- **PEP 8 compliance**: Use ruff for formatting
+- **Docstrings**: Required for all classes and functions (triple-quoted strings)
+  - Class docstrings: Brief description of purpose
+  - Method docstrings: Description, parameters, return values
+- **Line length**: Follow project standard (typically 88-100 characters)
+
+## Development Practices
+
+### Test-Driven Development (TDD)
+
+- **Mandatory TDD**: All refactoring must follow Red-Green-Refactor cycle
+- **Test coverage requirement**: **> 95%** for all new/modified code
+- **Test framework**: pytest with pytest-qt for Qt widget testing
+- **Test file location**: `tests/chart/` directory
+- **Test naming**: `test_widget_*.py` matching module names
+- **Test structure**: 
+  - Unit tests for each mixin class
+  - Integration tests for ChartWidget composition
+  - Regression tests to ensure no functionality loss
+
+### Testing Strategy
+
+1. **Before refactoring**: Write tests for existing functionality (if missing)
+2. **During refactoring**: 
+   - Red: Write failing tests for new mixin
+   - Green: Implement mixin to pass tests
+   - Refactor: Optimize while maintaining test coverage
+3. **After refactoring**: Run full test suite, verify coverage > 95%
+
+### Error Handling
+
+- **Error handling patterns**: Use try-except blocks with specific exception types
+- **Logging conventions**: Use `loguru` logger (vnpy standard)
+  ```python
+  from loguru import logger
+  logger.error("Failed to process order update", exc_info=True)
+  ```
+- **Error message formatting**: Clear, actionable error messages in Chinese (primary) or English
+
+### Thread Safety
+
+- **Qt Signal/Slot**: Use Qt signals for thread-safe UI updates
+- **Event Engine**: All trading operations should go through EventEngine
+- **UI updates**: Always use `QtCore.QMetaObject.invokeMethod()` or signals for cross-thread UI updates
+
+### Security
+
+- **Input validation**: Validate all inputs before processing
+- **Data validation**: Validate data structures before operations
+- **No breaking changes**: Maintain all existing public APIs
+
+## Git Workflow
+
+### Branching Strategy
+
+- **Branch naming convention**: `refactor/chart-widget-*`, `refactor/chart-widget-position-mixin`
+- **Main branches**: 
+  - `dev`: Development branch
+  - `master`: Production branch
+- **Workflow**: Create feature branch from `dev`, submit PR to `dev` after tests pass
+
+### Commit Messages
+
+- **Format**: 
+  ```
+  [refactor] Brief description
+  
+  Detailed explanation if needed
+  - Split _update_entry_line_pnl into smaller methods
+  - Added ChartWidgetPositionMixin
+  - Test coverage: 96%
+  ```
+- **Types**: `refactor`, `test`, `fix`, `docs`
+- **Guidelines**: 
+  - Use Chinese for feature descriptions
+  - Be specific about what changed
+  - Include test coverage in commit message
+  - Reference issue numbers if applicable
+
+## AI Assistant Guidelines
+
+### What to do
+
+- Read existing `vnpy/chart/widget.py` code before proposing changes
+- Follow the existing patterns in ChartWidget
+- Maintain 100% backward compatibility - no public API changes
+- Write tests FIRST (TDD approach)
+- Use Mixin pattern for code organization
+- Run `ruff check .` and `mypy vnpy` after making changes
+- Run `pytest tests/chart/` and verify coverage > 95%
+- Preserve existing functionality while refactoring
+- Split large methods (>200 lines) into smaller, focused methods
+- Keep each file under 1500 lines
+
+### What NOT to do
+
+- Don't change public APIs or method signatures
+- Don't add features beyond refactoring scope
+- Don't refactor code that isn't part of the current task
+- Don't skip writing tests (TDD is mandatory)
+- Don't create unnecessary abstractions
+- Don't break existing chart functionality
+- Don't introduce dependencies outside vnpy's standard stack
+- Don't merge code with test coverage < 95%
+
+## Project-Specific Rules
+
+### Refactoring Strategy
+
+- **Mixin Pattern**: Use Python mixin classes to split functionality
+  ```python
+  class ChartWidgetPositionMixin:
+      """Position management mixin for ChartWidget"""
+      def _update_entry_line_pnl(self, ...):
+          ...
+  
+  class ChartWidget(QWidget, ChartWidgetPositionMixin, ...):
+      """Main ChartWidget class"""
+      ...
+  ```
+- **Method Splitting Priority**:
+  1. High: `_update_entry_line_pnl` (~1100 lines) → split into 4-5 methods
+  2. High: `_process_order_update` (~440 lines) → split into 3-4 methods
+  3. High: `mouseDoubleClickEvent` (~310 lines) → split into 3 methods
+  4. Medium: `trigger_pending_order_breakthrough` (~250 lines) → split into 3 methods
+- **Backward Compatibility**: 
+  - All public methods must maintain same signature
+  - All public attributes must remain accessible
+  - Event handling must work identically
+  - No changes to external interfaces
+
+### Architecture Patterns
+
+- **Mixin composition**: ChartWidget inherits from multiple mixins
+- **Event-driven design**: Use EventEngine for order submission and data updates
+- **Component composition**: Extend existing ChartWidget and ChartItem classes
+- **State management**: Use class attributes with Qt signals for reactive updates
+- **Separation of concerns**:
+  - UI layer: ChartWidget, visual elements
+  - Business logic: Position management, order processing, triggers
+  - Data layer: BarManager (existing), database operations
+
+### Integration with vnpy
+
+- **Order submission**: Use `main_engine.send_order()` via EventEngine
+- **Data objects**: Use `vnpy.trader.object` classes (OrderRequest, BarData, etc.)
+- **Event types**: Use existing event types in `vnpy.event`
+- **Configuration**: Use `vnpy.trader.setting.SETTINGS` for user preferences
+
+### Performance Considerations
+
+- **Mixin overhead**: Negligible - Python method resolution is efficient
+- **Method call path**: Keep same as before (no performance degradation)
+- **Rendering optimization**: Maintain existing pyqtgraph optimizations
+- **Memory management**: Clean up properly when removing mixins
+
+### pyqtgraph Specific Guidelines
+
+- **Graphics objects**: Maintain existing pyqtgraph usage patterns
+- **Coordinate systems**: Preserve existing coordinate conversion logic
+- **Mouse events**: Keep existing event handling behavior
+- **Signals**: Maintain existing signal/slot connections
+
+## Dependencies
+
+### Adding New Dependencies
+
+- **Approval process**: Only use dependencies already in vnpy's dependency list
+- **Evaluation criteria**: 
+  - Must be compatible with Python 3.10-3.13
+  - Must have MIT or compatible license
+  - Must not conflict with existing dependencies
+- **Testing dependencies**: pytest, pytest-qt, pytest-cov, coverage (already in dev dependencies)
+
+### Dependency Constraints
+
+- **License requirements**: MIT or compatible (vnpy uses MIT)
+- **Size considerations**: Avoid large dependencies
+- **Current dependencies**: pyqtgraph, PySide6, loguru, pytest (all already in vnpy)
+
+## Documentation
+
+### Code Documentation
+
+- **When to add comments**: 
+  - Complex refactoring logic
+  - Non-obvious method splitting decisions
+  - Mixin composition explanations
+- **Documentation format**: 
+  - Use docstrings for all public methods
+  - Use inline comments for complex refactoring logic
+  - Use type hints for clarity
+  - Document mixin dependencies and order
+
+### API Documentation
+
+- **Public API**: Document that all public APIs remain unchanged
+- **Mixin documentation**: Document each mixin's responsibility
+- **Migration guide**: Not needed (100% backward compatible)
+
+## Refactoring Phases
+
+### Phase 0: Test Environment Setup (1-2 days)
+- Install testing tools: pytest, pytest-qt, pytest-cov, coverage
+- Configure `.coveragerc` and `pytest.ini`
+- Create `tests/chart/` directory structure
+- Create `conftest.py` and test base classes
+- Backup current code
+
+### Phase 1: Create Mixin Base Class (TDD, 1 day)
+- Red: Write tests for `ChartWidgetMixinBase`
+- Green: Implement `ChartWidgetMixinBase`
+- Refactor: Optimize, ensure coverage > 95%
+
+### Phase 2: Core Splitting (TDD, 5-7 days)
+- Position management mixin (2-3 days)
+- Order processing mixin (1-2 days)
+- Mouse event mixin (2 days)
+
+### Phase 3: Auxiliary Modules (TDD, 3-4 days)
+- Trigger mixin (1-2 days)
+- Chart update mixin (1 day)
+- Database mixin (1 day)
+
+### Phase 4: Cleanup and Testing (TDD, 2-3 days)
+- Move ChartCursor class (1 day)
+- Integration tests and coverage verification (1-2 days)
+
+## Success Criteria
+
+- ✅ All files < 1500 lines
+- ✅ All functionality works identically to before
+- ✅ **Test code coverage > 95%**
+- ✅ No performance degradation
+- ✅ Code readability improved
+- ✅ External API unchanged (100% backward compatible)
+- ✅ TDD Red-Green-Refactor cycle followed
+- ✅ All tests pass (pytest)
+- ✅ No linter errors (ruff)
+- ✅ No type errors (mypy)
+
+## Risk Mitigation
+
+1. **Functionality Regression**
+   - Write comprehensive tests before refactoring
+   - Run full test suite after each phase
+   - Manual testing of critical user flows
+
+2. **Performance Impact**
+   - Mixin pattern has negligible overhead
+   - Benchmark critical paths before/after
+   - Maintain same method call paths
+
+3. **Compatibility Issues**
+   - Keep all public APIs unchanged
+   - Test with existing vnpy modules
+   - Verify event handling works identically
+
+## Notes
+
+### Key Implementation Considerations
+
+1. **Mixin Order**: Python MRO (Method Resolution Order) matters - test inheritance order
+2. **State Sharing**: Mixins share ChartWidget's `self` - be careful with attribute names
+3. **Method Overriding**: Ensure mixin methods don't accidentally override base methods
+4. **Testing Strategy**: Test each mixin in isolation, then test composition
+5. **Large Method Splitting**: Break down >200 line methods into focused, testable units
+
+### Reference Files
+
+- **Source**: `vnpy/chart/widget.py` (5058 lines - to be refactored)
+- **Analysis**: `vnpy/chart/widget_refactor_analysis.md`
+- **Test examples**: `tests/chart/` (to be created)
+
+### Migration Notes
+
+- **No migration needed**: 100% backward compatible
+- **Internal changes only**: All changes are internal to ChartWidget
+- **External code**: No changes required in code using ChartWidget
+
+---
+
+**Document Version**: 1.0  
+**Last Updated**: 2025-01-15  
+**Maintainer**: vnpy development team
+
