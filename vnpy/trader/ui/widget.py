@@ -5082,17 +5082,36 @@ class ChartWindow(QtWidgets.QWidget):
                 continue
             
             # 检查挂单线是否有挂单参数（说明是有效的挂单线）
-            # 注意：从数据库加载的挂单线可能没有挂单参数，需要特殊处理
-            has_pending_params = (
+            # 优先检查价格线对象中的挂单参数（从数据库加载的挂单线参数存储在这里）
+            # 如果价格线对象中没有，再检查内存中的_pending_order_params（向后兼容）
+            order_volume = line.get_order_volume()
+            order_offset = line.get_order_offset()
+            
+            has_pending_params_in_line = (order_volume is not None and order_offset is not None)
+            
+            has_pending_params_in_memory = (
                 hasattr(controller, '_pending_order_params') and 
                 line_id in controller._pending_order_params
             )
             
+            has_pending_params = has_pending_params_in_line or has_pending_params_in_memory
+            
             if not has_pending_params:
                 self.main_engine.write_log(
-                    f"模拟成交跳过: 挂单线 {line_id} 没有挂单参数（可能是从数据库加载的挂单线，需要重新创建挂单）"
+                    f"模拟成交跳过: 挂单线 {line_id} 没有挂单参数（价格线对象: volume={order_volume}, offset={order_offset}, "
+                    f"内存参数: {has_pending_params_in_memory}）。请重新创建挂单或确保挂单参数已正确加载。"
                 )
                 continue
+            
+            # 如果价格线对象中有参数，记录日志
+            if has_pending_params_in_line:
+                self.main_engine.write_log(
+                    f"模拟成交: 挂单线 {line_id} 从价格线对象获取挂单参数 (volume={order_volume}, offset={order_offset})"
+                )
+            elif has_pending_params_in_memory:
+                self.main_engine.write_log(
+                    f"模拟成交: 挂单线 {line_id} 从内存获取挂单参数（向后兼容）"
+                )
             
             # 检查挂单线是否已注册到价格突破监控
             if not self.chart._breakthrough_monitor:
