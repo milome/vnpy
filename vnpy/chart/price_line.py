@@ -581,6 +581,46 @@ class PriceLineManager:
 
         self._lines.clear()
     
+    def clear_preview_lines(self, plot: Optional[object] = None) -> int:
+        """
+        清理所有预览线。
+        
+        Args:
+            plot: PlotItem对象，用于从plot中移除预览线（可选）
+            
+        Returns:
+            清理的预览线数量
+        """
+        preview_lines = self.get_lines_by_type(PriceLineType.PREVIEW)
+        count = 0
+        
+        for line in preview_lines:
+            # 找到对应的line_id
+            line_id = None
+            for lid, l in self._lines.items():
+                if l == line:
+                    line_id = lid
+                    break
+            
+            if line_id:
+                # 从plot中移除
+                if plot and line.scene() is not None:
+                    try:
+                        plot.removeItem(line)
+                    except Exception:
+                        pass
+                
+                # 从管理器中删除
+                self._lines.pop(line_id, None)
+                
+                # 从数据库删除（如果启用）
+                if self._database:
+                    self._database.delete_line(line_id)
+                
+                count += 1
+        
+        return count
+    
     def set_database(self, database, vt_symbol: Optional[str] = None) -> None:
         """
         设置数据库和VT符号。

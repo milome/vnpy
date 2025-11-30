@@ -175,17 +175,18 @@ class PriceLineDragHandler:
         # Handle entry line drag
         if self._is_dragging_from_entry:
             final_price = None
+            
             if self._preview_line:
                 final_price = self._preview_line.get_price()
-            
-            # Clear preview line
-            if self._preview_line:
-                # Remove preview line from plot if it exists
+                # 从plot中移除预览线（实际的删除会在widget的mouseReleaseEvent中处理）
                 if self._preview_line.scene() is not None:
                     view_box = self._plot.getViewBox()
                     if view_box:
-                        view_box.removeItem(self._preview_line)
-                self._preview_line = None
+                        try:
+                            view_box.removeItem(self._preview_line)
+                        except Exception:
+                            pass
+                # 注意：这里不设置 self._preview_line = None，因为widget的mouseReleaseEvent需要这个引用来删除预览线
             
             self._is_dragging_from_entry = False
             self._entry_line = None

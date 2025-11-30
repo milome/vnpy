@@ -2971,6 +2971,20 @@ class ChartWidget(pg.PlotWidget):
                     self._on_drawing_mode_changed(False)
                 event.accept()
                 return
+            
+            # 如果正在拖拽，取消拖拽（包括从入场线拖拽）
+            if self._price_line_drag_handler and self._price_line_drag_handler.is_dragging():
+                self._price_line_drag_handler.cancel_drag()
+                # 清理所有预览线（防止残留）
+                if self._price_line_manager and self._first_plot:
+                    count = self._price_line_manager.clear_preview_lines(self._first_plot)
+                    if count > 0 and hasattr(self, '_main_engine') and self._main_engine:
+                        self._main_engine.write_log(
+                            f"[ChartWidget] 按ESC键清理了 {count} 条预览线",
+                            "ChartWidget"
+                        )
+                event.accept()
+                return
         
         super().keyPressEvent(event)
 
@@ -3009,14 +3023,19 @@ class ChartWidget(pg.PlotWidget):
                                 break
                         
                         if preview_line_id:
-                            # 从图表中移除预览线
-                            if preview_line.scene() is not None:
-                                view_box = self._first_plot.getViewBox()
-                                if view_box:
-                                    view_box.removeItem(preview_line)
+                            # 从图表中移除预览线（如果还在plot中）
+                            if preview_line.scene() is not None and self._first_plot:
+                                try:
+                                    self._first_plot.removeItem(preview_line)
+                                except Exception:
+                                    pass
                             
                             # 删除预览线，创建真正的止损/止盈线
                             manager.delete_line(preview_line_id)
+                            
+                            # 清理拖拽处理器的预览线引用
+                            if self._price_line_drag_handler:
+                                self._price_line_drag_handler._preview_line = None
                             
                             # 创建止损/止盈线
                             new_line_id = manager.create_line(
@@ -3181,6 +3200,15 @@ class ChartWidget(pg.PlotWidget):
             
             event.accept()
             return
+        
+        # 清理所有残留的预览线（防止预览线没有被正确清理）
+        if self._price_line_manager and self._first_plot:
+            count = self._price_line_manager.clear_preview_lines(self._first_plot)
+            if count > 0 and hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log(
+                    f"[ChartWidget] mouseReleaseEvent结束时清理了 {count} 条残留的预览线",
+                    "ChartWidget"
+                )
 
         super().mouseReleaseEvent(event)
 

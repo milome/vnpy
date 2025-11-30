@@ -106,6 +106,16 @@ class DrawingOrderController:
         # Remove preview line
         self._hide_preview_line()
         
+        # 清理所有预览线（防止残留）
+        price_line_manager = self._get_price_line_manager()
+        if price_line_manager and self._widget and self._widget._first_plot:
+            count = price_line_manager.clear_preview_lines(self._widget._first_plot)
+            if count > 0 and hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+                self._widget._main_engine.write_log(
+                    f"[DrawingOrderController] 关闭画线下单模式时清理了 {count} 条预览线",
+                    "DrawingOrderController"
+                )
+        
         # Restore cursor
         if self._widget:
             self._widget.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
