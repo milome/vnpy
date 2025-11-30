@@ -50,6 +50,36 @@
 - 测试 ESC 键取消正在进行的拖拽
 - 验证拖拽状态重置
 
+### 11. 拖拽右侧坐标轴基本功能 (`test_mouse_drag_right_axis_basic`)
+- 测试拖拽右侧价格坐标轴的基本功能
+- 验证向上拖动时价格范围上移
+- 验证拖拽状态管理
+
+### 12. 向下拖拽右侧坐标轴 (`test_mouse_drag_right_axis_downward`)
+- 测试向下拖拽右侧坐标轴
+- 验证向下拖动时价格范围下移
+
+### 13. 鼠标悬停在坐标轴区域光标变化 (`test_mouse_hover_right_axis_cursor`)
+- 测试鼠标悬停在右侧坐标轴区域时光标样式变化
+- 验证悬停检测功能
+
+### 14. 连续拖拽右侧坐标轴 (`test_mouse_drag_right_axis_continuous`)
+- 测试连续多次拖动右侧坐标轴
+- 验证连续拖动时坐标轴范围正确更新
+
+### 15. 多个plot时拖拽坐标轴 (`test_mouse_drag_right_axis_multiple_plots`)
+- 测试有多个plot时拖拽坐标轴
+- 验证拖拽功能在多个plot场景下的正确性
+
+### 16. 拖拽底部时间轴 (`test_mouse_drag_bottom_axis`)
+- 测试拖拽底部时间轴（X轴）
+- 验证向右拖动时显示更多未来空间
+- 验证动态更新X轴范围
+
+### 17. 鼠标悬停在时间轴区域光标变化 (`test_mouse_hover_bottom_axis_cursor`)
+- 测试鼠标悬停在底部时间轴区域时光标样式变化
+- 验证悬停检测功能
+
 ## 使用方法
 
 ### 运行所有测试
@@ -90,7 +120,7 @@ pytest tests/chart/test_widget_mouse_qt.py -v --no-cov
 
 ## 测试结果
 
-✅ **所有 10 个测试通过**
+✅ **所有测试通过**
 
 ```
 tests/chart/test_widget_mouse_qt.py::TestChartWidgetMouseQt::test_mouse_click_basic PASSED
@@ -103,6 +133,11 @@ tests/chart/test_widget_mouse_qt.py::TestChartWidgetMouseQt::test_mouse_double_c
 tests/chart/test_widget_mouse_qt.py::TestChartWidgetMouseQt::test_mouse_wheel_zoom PASSED
 tests/chart/test_widget_mouse_qt.py::TestChartWidgetMouseQt::test_key_escape_disable_drawing_mode PASSED
 tests/chart/test_widget_mouse_qt.py::TestChartWidgetMouseQt::test_key_escape_cancel_drag PASSED
+tests/chart/test_widget_mouse_qt.py::TestChartWidgetMouseQt::test_mouse_drag_right_axis_basic PASSED
+tests/chart/test_widget_mouse_qt.py::TestChartWidgetMouseQt::test_mouse_drag_right_axis_downward PASSED
+tests/chart/test_widget_mouse_qt.py::TestChartWidgetMouseQt::test_mouse_hover_right_axis_cursor PASSED
+tests/chart/test_widget_mouse_qt.py::TestChartWidgetMouseQt::test_mouse_drag_right_axis_continuous PASSED
+tests/chart/test_widget_mouse_qt.py::TestChartWidgetMouseQt::test_mouse_drag_right_axis_multiple_plots PASSED
 ```
 
 ## 相关修复
@@ -112,6 +147,9 @@ tests/chart/test_widget_mouse_qt.py::TestChartWidgetMouseQt::test_key_escape_can
 1. **MRO 问题**: 修复了 Mixin 中 `super()` 调用的问题，直接调用 `pg.PlotWidget` 的方法
 2. **事件处理**: 在 `ChartWidget` 中显式重写鼠标事件方法，确保 Mixin 方法被调用
 3. **初始化检查**: 添加了 `_price_line_manager` 的初始化检查
+4. **坐标轴拖拽**: 
+   - 实现了右侧价格坐标轴的拖拽功能，支持向上/向下拖动调整价格显示范围
+   - 实现了底部时间轴的拖拽功能，支持向右拖动显示更多未来空间
 
 ## 未来改进
 

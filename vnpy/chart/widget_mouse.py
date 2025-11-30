@@ -21,10 +21,277 @@ if TYPE_CHECKING:
 class ChartWidgetMouseMixin(ChartWidgetMixinBase):
     """鼠标事件处理相关功能 Mixin"""
     
+    def _init_axis_drag_state(self) -> None:
+        """初始化坐标轴拖拽状态变量"""
+        if not hasattr(self, '_axis_drag_state'):
+            self._axis_drag_state = {
+                'is_dragging': False,
+                'is_dragging_x_axis': False,  # 是否正在拖拽X轴
+                'start_pos': None,
+                'start_y_range': None,
+                'start_x_range': None,  # 开始拖拽时的X轴范围
+                'target_plot': None
+            }
+    
+    def _is_mouse_on_right_axis(self, event: QtGui.QMouseEvent) -> tuple[bool, 'pg.PlotItem | None']:
+        """检测鼠标是否在右侧坐标轴区域
+        
+        Args:
+            event: 鼠标事件
+            
+        Returns:
+            (是否在坐标轴区域, 对应的PlotItem)
+        """
+        import pyqtgraph as pg
+        
+        if not self._plots:
+            return False, None
+        
+        # 获取鼠标位置（widget坐标系）
+        widget_pos = event.pos()
+        widget_width = self.width()
+        
+        # 右侧坐标轴宽度（从 widget.py 中的设置看是60像素）
+        axis_width = 60
+        
+        # 检查鼠标是否在右侧坐标轴区域（基于widget坐标）
+        axis_start_x = widget_width - axis_width
+        
+        # 添加调试日志（仅当鼠标在坐标轴附近时）
+        if widget_pos.x() >= axis_start_x - 10:  # 在坐标轴附近10像素内时记录日志
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log(
+                    f"[ChartWidget] 检查坐标轴区域: 鼠标widget_pos={widget_pos}, "
+                    f"widget_width={widget_width}, axis_start_x={axis_start_x}, "
+                    f"axis_width={axis_width}, 在坐标轴区域={widget_pos.x() >= axis_start_x}",
+                    "ChartWidget"
+                )
+        
+        # 如果鼠标不在坐标轴区域，直接返回
+        if widget_pos.x() < axis_start_x:
+            return False, None
+        
+        # 将widget坐标转换为场景坐标
+        scene_pos = self.mapToScene(widget_pos)
+        
+        # 遍历所有plot，找到鼠标Y坐标所在的plot
+        for plot_name, plot in self._plots.items():
+            view_box = plot.getViewBox()
+            if not view_box:
+                continue
+                
+            # 获取plot的ViewBox在场景中的边界矩形
+            vb_rect = view_box.sceneBoundingRect()
+            if not vb_rect.isValid():
+                continue
+            
+            # 检查鼠标Y坐标是否在plot的范围内
+            if vb_rect.top() <= scene_pos.y() <= vb_rect.bottom():
+                # 尝试获取坐标轴的实际边界矩形
+                right_axis = plot.getAxis("right")
+                if right_axis:
+                    try:
+                        axis_rect = right_axis.sceneBoundingRect()
+                        if axis_rect.isValid() and axis_rect.contains(scene_pos):
+                            return True, plot
+                    except Exception:
+                        pass
+                
+                # 如果无法获取坐标轴矩形，只要鼠标在右侧60像素内且Y坐标在plot范围内，就认为是在坐标轴区域
+                # 这样更可靠，因为坐标轴的精确位置可能因布局而异
+                return True, plot
+        
+        return False, None
+    
+    def _is_mouse_on_bottom_axis(self, event: QtGui.QMouseEvent) -> tuple[bool, 'pg.PlotItem | None']:
+        """检测鼠标是否在底部时间轴区域
+        
+        Args:
+            event: 鼠标事件
+            
+        Returns:
+            (是否在时间轴区域, 对应的PlotItem)
+        """
+        import pyqtgraph as pg
+        
+        if not self._plots:
+            return False, None
+        
+        # 获取鼠标位置（widget坐标系）
+        widget_pos = event.pos()
+        widget_height = self.height()
+        
+        # 底部时间轴高度（大约40-50像素，可根据实际情况调整）
+        axis_height = 50
+        
+        # 检查鼠标是否在底部时间轴区域（基于widget坐标）
+        axis_start_y = widget_height - axis_height
+        
+        # 如果鼠标不在时间轴区域，直接返回
+        if widget_pos.y() < axis_start_y:
+            return False, None
+        
+        # 将widget坐标转换为场景坐标
+        scene_pos = self.mapToScene(widget_pos)
+        
+        # 查找第一个有底部坐标轴的plot（通常是最下方的plot）
+        # 从后往前查找，找到最后一个plot（通常是显示时间轴的plot）
+        plot_list = list(self._plots.items())
+        for plot_name, plot in reversed(plot_list):
+            # 检查这个plot是否显示了底部坐标轴
+            bottom_axis = plot.getAxis("bottom")
+            if bottom_axis:
+                # 获取plot的ViewBox在场景中的边界矩形
+                view_box = plot.getViewBox()
+                if view_box:
+                    vb_rect = view_box.sceneBoundingRect()
+                    if vb_rect.isValid():
+                        # 检查鼠标X坐标是否在plot的范围内
+                        if vb_rect.left() <= scene_pos.x() <= vb_rect.right():
+                            try:
+                                # 尝试获取坐标轴的实际边界矩形
+                                axis_rect = bottom_axis.sceneBoundingRect()
+                                if axis_rect.isValid() and axis_rect.contains(scene_pos):
+                                    return True, plot
+                            except Exception:
+                                pass
+                            
+                            # 如果无法获取坐标轴矩形，只要鼠标在底部50像素内且X坐标在plot范围内，就认为是在时间轴区域
+                            return True, plot
+        
+        return False, None
+    
     def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
         """
         Handle mouse move event for price line hover detection and dragging.
         """
+        # 初始化坐标轴拖拽状态
+        self._init_axis_drag_state()
+        
+        # 处理X轴（时间轴）拖拽
+        if self._axis_drag_state['is_dragging_x_axis']:
+            target_plot = self._axis_drag_state['target_plot']
+            if target_plot:
+                import pyqtgraph as pg
+                view_box = target_plot.getViewBox()
+                if view_box:
+                    # 计算拖动距离（像素）
+                    current_pos = event.pos()
+                    start_pos = self._axis_drag_state['start_pos']
+                    if start_pos:
+                        # 获取plot的ViewBox在场景中的边界矩形
+                        plot_rect = view_box.sceneBoundingRect()
+                        plot_width = plot_rect.width()
+                        
+                        if plot_width > 0:
+                            # 获取初始的X轴范围
+                            start_x_range = self._axis_drag_state['start_x_range']
+                            if start_x_range:
+                                x_min, x_max = start_x_range
+                                x_range = x_max - x_min
+                                
+                                # 计算总拖动距离（像素）
+                                # 向右拖动为正值（增加X坐标）
+                                total_dx_pixels = current_pos.x() - start_pos.x()
+                                
+                                # 计算索引移动量：拖动距离转换为索引范围
+                                # 向右拖动时，增加右侧索引（显示更多未来空间）
+                                index_delta = (total_dx_pixels / plot_width) * x_range
+                                
+                                # 获取当前数据的总数
+                                data_count = self._manager.get_count() if hasattr(self, '_manager') else 0
+                                bar_count = self._bar_count if hasattr(self, '_bar_count') else 100
+                                
+                                # 计算新的右侧索引
+                                start_right_ix = self._axis_drag_state.get('start_right_ix', data_count)
+                                new_right_ix = start_right_ix + index_delta
+                                
+                                # 确保不超出数据范围（但可以超出以显示未来空间）
+                                new_right_ix = max(bar_count, new_right_ix)
+                                
+                                # 更新右侧索引
+                                self._right_ix = int(new_right_ix)
+                                
+                                # 计算新的X轴范围
+                                new_min_ix = self._right_ix - bar_count
+                                new_max_ix = self._right_ix
+                                
+                                # 如果右侧索引超出数据范围，需要增加未来空间
+                                if self._right_ix > data_count:
+                                    future_bars_needed = int(self._right_ix - data_count)
+                                    if hasattr(self, '_future_bars'):
+                                        # 增加未来空间，确保足够大
+                                        self._future_bars = max(self._future_bars, future_bars_needed)
+                                        # 更新plot限制，允许显示更多未来空间
+                                        if hasattr(self, '_update_plot_limits'):
+                                            self._update_plot_limits()
+                                
+                                # 添加调试日志
+                                if hasattr(self, '_main_engine') and self._main_engine:
+                                    self._main_engine.write_log(
+                                        f"[ChartWidget] 拖拽时间轴: dx={total_dx_pixels:.1f}px, "
+                                        f"index_delta={index_delta:.2f}, "
+                                        f"right_ix={self._right_ix}, x_range=[{new_min_ix:.2f}, {new_max_ix:.2f}], "
+                                        f"future_bars={self._future_bars if hasattr(self, '_future_bars') else 0}",
+                                        "ChartWidget"
+                                    )
+                                
+                                # 直接设置所有plot的X轴范围
+                                for plot in self._plots.values():
+                                    plot.setRange(xRange=(new_min_ix, new_max_ix), padding=0)
+            
+            event.accept()
+            return
+        
+        # 处理坐标轴拖拽（Y轴）
+        if self._axis_drag_state['is_dragging']:
+            target_plot = self._axis_drag_state['target_plot']
+            if target_plot:
+                import pyqtgraph as pg
+                view_box = target_plot.getViewBox()
+                if view_box:
+                    # 计算拖动距离（像素）
+                    current_pos = event.pos()
+                    start_pos = self._axis_drag_state['start_pos']
+                    if start_pos:
+                        # 获取plot的ViewBox在场景中的边界矩形
+                        plot_rect = view_box.sceneBoundingRect()
+                        plot_height = plot_rect.height()
+                        
+                        if plot_height > 0:
+                            # 获取初始的Y轴范围
+                            start_y_range = self._axis_drag_state['start_y_range']
+                            if start_y_range:
+                                y_min, y_max = start_y_range
+                                y_range = y_max - y_min
+                                
+                                # 计算总拖动距离（像素）
+                                # 注意：使用widget坐标系的Y坐标差异
+                                total_dy_pixels = start_pos.y() - current_pos.y()  # 向上拖动为正值
+                                
+                                # 计算价格移动量：拖动距离转换为价格范围
+                                # 向上拖动时，价格范围向上移动（最小值增加，最大值增加）
+                                price_delta = (total_dy_pixels / plot_height) * y_range
+                                
+                                # 更新Y轴范围（基于初始范围计算，避免累积误差）
+                                new_y_min = y_min + price_delta
+                                new_y_max = y_max + price_delta
+                                
+                                # 添加调试日志
+                                if hasattr(self, '_main_engine') and self._main_engine:
+                                    self._main_engine.write_log(
+                                        f"[ChartWidget] 拖拽坐标轴: dy={total_dy_pixels:.1f}px, "
+                                        f"price_delta={price_delta:.2f}, "
+                                        f"y_range=[{new_y_min:.2f}, {new_y_max:.2f}]",
+                                        "ChartWidget"
+                                    )
+                                
+                                # 设置新的Y轴范围（仅对当前plot）
+                                view_box.setYRange(new_y_min, new_y_max, padding=0)
+            
+            event.accept()
+            return
+        
         # Check if in drawing mode - show preview line
         if self._drawing_order_controller and self._drawing_order_controller.is_enabled():
             if self._first_plot:
@@ -41,11 +308,21 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                     pg.PlotWidget.mouseMoveEvent(self, event)
                     return
 
-        if not self._price_line_drag_handler or not self._first_plot:
-            # 调用父类方法
-            import pyqtgraph as pg
-            pg.PlotWidget.mouseMoveEvent(self, event)
-            return
+        # 检查鼠标是否在坐标轴区域（即使没有价格线拖拽处理器）
+        # 先检查X轴（时间轴）
+        is_on_x_axis, _ = self._is_mouse_on_bottom_axis(event)
+        if is_on_x_axis:
+            self.setCursor(QtCore.Qt.CursorShape.SizeHorCursor)
+        else:
+            # 再检查Y轴（价格轴）
+            is_on_axis, _ = self._is_mouse_on_right_axis(event)
+            if is_on_axis:
+                self.setCursor(QtCore.Qt.CursorShape.SizeVerCursor)
+            elif not self._price_line_drag_handler or not self._first_plot:
+                # 调用父类方法
+                import pyqtgraph as pg
+                pg.PlotWidget.mouseMoveEvent(self, event)
+                return
 
         # 确保 price_line_manager 已初始化
         if not hasattr(self, '_price_line_manager') or self._price_line_manager is None:
@@ -134,16 +411,25 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                     if dragging_line:
                         self._update_related_lines_on_drag(dragging_line, new_price)
         else:
-            # Check for hover (包括入场线)
-            hovered_line = self._price_line_drag_handler.find_line_near_point(
-                scene_pos, all_lines, include_entry_lines=True
-            )
-            
-            # Change cursor style
-            if hovered_line:
-                self.setCursor(QtCore.Qt.CursorShape.SizeVerCursor)
+            # 检查鼠标是否在坐标轴区域（用于显示光标）
+            is_on_x_axis, _ = self._is_mouse_on_bottom_axis(event)
+            if is_on_x_axis:
+                self.setCursor(QtCore.Qt.CursorShape.SizeHorCursor)
             else:
-                self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+                is_on_axis, _ = self._is_mouse_on_right_axis(event)
+                if is_on_axis:
+                    self.setCursor(QtCore.Qt.CursorShape.SizeVerCursor)
+                else:
+                    # Check for hover (包括入场线)
+                    hovered_line = self._price_line_drag_handler.find_line_near_point(
+                        scene_pos, all_lines, include_entry_lines=True
+                    )
+                    
+                    # Change cursor style
+                    if hovered_line:
+                        self.setCursor(QtCore.Qt.CursorShape.SizeVerCursor)
+                    else:
+                        self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
 
         # 调用父类方法
         import pyqtgraph as pg
@@ -159,6 +445,67 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
             import pyqtgraph as pg
             pg.PlotWidget.mousePressEvent(self, event)
             return
+        
+        # 初始化坐标轴拖拽状态
+        self._init_axis_drag_state()
+        
+        # 检查是否点击了底部时间轴区域（X轴拖拽）
+        is_on_x_axis, target_plot_x = self._is_mouse_on_bottom_axis(event)
+        if is_on_x_axis and target_plot_x:
+            import pyqtgraph as pg
+            view_box = target_plot_x.getViewBox()
+            if view_box:
+                # 开始X轴拖拽
+                self._axis_drag_state['is_dragging_x_axis'] = True
+                self._axis_drag_state['start_pos'] = event.pos()
+                self._axis_drag_state['target_plot'] = target_plot_x
+                view_range = view_box.viewRange()
+                if view_range:
+                    self._axis_drag_state['start_x_range'] = view_range[0]
+                    # 保存开始时的右侧索引
+                    self._axis_drag_state['start_right_ix'] = self._right_ix if hasattr(self, '_right_ix') else 0
+                
+                # 添加调试日志
+                if hasattr(self, '_main_engine') and self._main_engine:
+                    self._main_engine.write_log(
+                        f"[ChartWidget] 开始拖拽时间轴: 位置={event.pos()}, "
+                        f"x_range={self._axis_drag_state['start_x_range']}, "
+                        f"start_right_ix={self._axis_drag_state['start_right_ix']}",
+                        "ChartWidget"
+                    )
+                
+                # 改变鼠标光标
+                self.setCursor(QtCore.Qt.CursorShape.SizeHorCursor)
+                event.accept()
+                return
+        
+        # 检查是否点击了右侧坐标轴区域（Y轴拖拽）
+        is_on_axis, target_plot = self._is_mouse_on_right_axis(event)
+        if is_on_axis and target_plot:
+            import pyqtgraph as pg
+            view_box = target_plot.getViewBox()
+            if view_box:
+                # 开始坐标轴拖拽
+                self._axis_drag_state['is_dragging'] = True
+                self._axis_drag_state['start_pos'] = event.pos()
+                self._axis_drag_state['target_plot'] = target_plot
+                view_range = view_box.viewRange()
+                if view_range:
+                    self._axis_drag_state['start_y_range'] = view_range[1]
+                
+                # 添加调试日志
+                if hasattr(self, '_main_engine') and self._main_engine:
+                    self._main_engine.write_log(
+                        f"[ChartWidget] 开始拖拽坐标轴: 位置={event.pos()}, "
+                        f"widget_width={self.width()}, "
+                        f"y_range={self._axis_drag_state['start_y_range']}",
+                        "ChartWidget"
+                    )
+                
+                # 改变鼠标光标
+                self.setCursor(QtCore.Qt.CursorShape.SizeVerCursor)
+                event.accept()
+                return
 
         # 添加调试日志（仅在开发时启用）
         if hasattr(self, '_main_engine') and self._main_engine:
@@ -274,6 +621,44 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
         """
         Handle mouse release event to end dragging price line.
         """
+        # 初始化坐标轴拖拽状态
+        self._init_axis_drag_state()
+        
+        # 结束X轴拖拽
+        if self._axis_drag_state['is_dragging_x_axis']:
+            self._axis_drag_state['is_dragging_x_axis'] = False
+            self._axis_drag_state['start_pos'] = None
+            self._axis_drag_state['start_x_range'] = None
+            self._axis_drag_state['start_right_ix'] = None
+            self._axis_drag_state['target_plot'] = None
+            
+            # 恢复鼠标光标
+            self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+            
+            # X轴拖拽结束后，可能需要更新未来空间
+            # 计算当前需要的未来空间
+            data_count = self._manager.get_count() if hasattr(self, '_manager') else 0
+            if self._right_ix > data_count:
+                future_bars = int(self._right_ix - data_count)
+                if hasattr(self, '_future_bars'):
+                    self._future_bars = future_bars
+                    if hasattr(self, '_update_plot_limits'):
+                        self._update_plot_limits()
+            
+            # 不直接返回，继续处理其他拖拽
+        
+        # 结束坐标轴拖拽（Y轴）
+        if self._axis_drag_state['is_dragging']:
+            self._axis_drag_state['is_dragging'] = False
+            self._axis_drag_state['start_pos'] = None
+            self._axis_drag_state['start_y_range'] = None
+            self._axis_drag_state['target_plot'] = None
+            
+            # 恢复鼠标光标
+            self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+            
+            # 不直接返回，继续处理其他拖拽（如价格线拖拽）
+        
         from .price_line import PriceLineType
         
         if self._price_line_drag_handler and self._price_line_drag_handler.is_dragging():
