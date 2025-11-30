@@ -153,6 +153,9 @@ class ChartWidget(
         # Price precision (number of decimal places, 0 for integer, default 0 for MHImain)
         self._price_precision: int = 0
         
+        # Callback for drawing mode click events
+        self._on_drawing_click: callable | None = None
+        
         # Callback for drawing mode state changes (e.g., when ESC is pressed)
         self._on_drawing_mode_changed: callable | None = None
 
@@ -715,3 +718,26 @@ class ChartWidget(
                         f"[ChartWidget] 关闭数据库连接失败: {e}",
                         "ChartWidget"
                     )
+
+    # ============================================================================
+    # 鼠标事件方法：显式重写以确保 Mixin 方法被调用
+    # ============================================================================
+    # 注意：由于 MRO 顺序，PlotWidget 的鼠标事件方法会在 ChartWidgetMouseMixin 之前被调用
+    # 因此需要在 ChartWidget 中显式重写这些方法，确保调用 Mixin 的方法
+    
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
+        """重写鼠标按下事件，确保调用 ChartWidgetMouseMixin 的方法"""
+        # 直接调用 Mixin 的方法（通过 super() 会调用 PlotWidget 的方法，这不是我们想要的）
+        ChartWidgetMouseMixin.mousePressEvent(self, event)
+    
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
+        """重写鼠标移动事件，确保调用 ChartWidgetMouseMixin 的方法"""
+        ChartWidgetMouseMixin.mouseMoveEvent(self, event)
+    
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
+        """重写鼠标释放事件，确保调用 ChartWidgetMouseMixin 的方法"""
+        ChartWidgetMouseMixin.mouseReleaseEvent(self, event)
+    
+    def mouseDoubleClickEvent(self, event: QtGui.QMouseEvent) -> None:
+        """重写鼠标双击事件，确保调用 ChartWidgetMouseMixin 的方法"""
+        ChartWidgetMouseMixin.mouseDoubleClickEvent(self, event)

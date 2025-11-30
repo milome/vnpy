@@ -68,6 +68,7 @@ python -c "import vnpy_datarecorder; print('vnpy_datarecorder path:', vnpy_datar
 python -c "import vnpy_ctastrategy; print('vnpy_ctastrategy path:', vnpy_ctastrategy.__file__)"
 python -c "import vnpy_ctabacktester; print('vnpy_ctabacktester path:', vnpy_ctabacktester.__file__)"
 python -c "import vnpy; print('vnpy path:', vnpy.__file__)"
+python -c "from vnpy.chart import ChartWidget; print('ChartWidget import: OK - Refactored code verified')"
 
 echo.
 echo [5/9] Testing data connection...

@@ -17,7 +17,8 @@ class TestBase:
         volume: float = 10.0,
         frozen: float = 0.0,
         price: float = 20000.0,
-        pnl: float = 0.0
+        pnl: float = 0.0,
+        gateway_name: str = "FUTU"
     ) -> PositionData:
         """创建测试用的持仓数据"""
         position = PositionData(
@@ -27,7 +28,8 @@ class TestBase:
             volume=volume,
             frozen=frozen,
             price=price,
-            pnl=pnl
+            pnl=pnl,
+            gateway_name=gateway_name
         )
         return position
     
@@ -41,7 +43,8 @@ class TestBase:
         price: float = 20000.0,
         volume: float = 10.0,
         traded: float = 10.0,
-        status: Status = Status.ALLTRADED
+        status: Status = Status.ALLTRADED,
+        gateway_name: str = "TEST"
     ) -> OrderData:
         """创建测试用的订单数据"""
         order = OrderData(
@@ -53,7 +56,8 @@ class TestBase:
             price=price,
             volume=volume,
             traded=traded,
-            status=status
+            status=status,
+            gateway_name=gateway_name
         )
         return order
     
@@ -67,7 +71,8 @@ class TestBase:
         high_price: float = 20050.0,
         low_price: float = 19950.0,
         close_price: float = 20025.0,
-        volume: float = 1000.0
+        volume: float = 1000.0,
+        gateway_name: str = "TEST"
     ) -> BarData:
         """创建测试用的K线数据"""
         from datetime import datetime as dt
@@ -83,7 +88,8 @@ class TestBase:
             high_price=high_price,
             low_price=low_price,
             close_price=close_price,
-            volume=volume
+            volume=volume,
+            gateway_name=gateway_name
         )
         return bar
     
@@ -95,7 +101,8 @@ class TestBase:
         last_price: float = 20000.0,
         bid_price_1: float = 19999.0,
         ask_price_1: float = 20001.0,
-        volume: float = 1000.0
+        volume: float = 1000.0,
+        gateway_name: str = "TEST"
     ) -> TickData:
         """创建测试用的Tick数据"""
         from datetime import datetime as dt
@@ -109,7 +116,8 @@ class TestBase:
             last_price=last_price,
             bid_price_1=bid_price_1,
             ask_price_1=ask_price_1,
-            volume=volume
+            volume=volume,
+            gateway_name=gateway_name
         )
         return tick
 

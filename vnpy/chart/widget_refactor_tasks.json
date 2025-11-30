@@ -1,0 +1,416 @@
+{
+  "project": "ChartWidget 重构",
+  "version": "1.0.0",
+  "description": "将 5058 行的 widget.py 拆分为多个模块，采用 TDD 红绿灯模式，测试覆盖率 > 95%",
+  "phases": [
+    {
+      "id": "phase-0",
+      "name": "测试环境准备",
+      "estimated_days": 2,
+      "tasks": [
+        {
+          "id": "0.1",
+          "name": "安装测试工具",
+          "description": "安装 pytest, pytest-qt, pytest-cov, coverage",
+          "status": "pending",
+          "priority": "high"
+        },
+        {
+          "id": "0.2",
+          "name": "配置测试环境",
+          "description": "创建 .coveragerc 和 pytest.ini 配置文件",
+          "status": "pending",
+          "priority": "high"
+        },
+        {
+          "id": "0.3",
+          "name": "创建测试目录结构",
+          "description": "创建 tests/chart/ 目录和基础文件",
+          "status": "pending",
+          "priority": "high"
+        },
+        {
+          "id": "0.4",
+          "name": "创建测试基类和工具",
+          "description": "实现 pytest fixtures 和测试辅助函数",
+          "status": "pending",
+          "priority": "high"
+        },
+        {
+          "id": "0.5",
+          "name": "备份和版本控制",
+          "description": "创建重构分支，备份当前代码",
+          "status": "pending",
+          "priority": "high"
+        }
+      ]
+    },
+    {
+      "id": "phase-1",
+      "name": "创建 Mixin 基类（TDD）",
+      "estimated_days": 1,
+      "tasks": [
+        {
+          "id": "1.1",
+          "name": "红（Red）- 编写测试用例",
+          "description": "创建 test_widget_mixin_base.py，编写测试用例",
+          "status": "pending",
+          "priority": "high",
+          "tdd_phase": "red"
+        },
+        {
+          "id": "1.2",
+          "name": "绿（Green）- 实现基类",
+          "description": "创建 widget_mixin_base.py，实现 ChartWidgetMixinBase",
+          "status": "pending",
+          "priority": "high",
+          "tdd_phase": "green"
+        },
+        {
+          "id": "1.3",
+          "name": "重构（Refactor）- 优化代码",
+          "description": "代码审查、优化、确保覆盖率 > 95%",
+          "status": "pending",
+          "priority": "medium",
+          "tdd_phase": "refactor"
+        }
+      ]
+    },
+    {
+      "id": "phase-2",
+      "name": "拆分持仓管理模块（TDD）",
+      "estimated_days": 3,
+      "tasks": [
+        {
+          "id": "2.1",
+          "name": "红（Red）- 编写测试用例",
+          "description": "创建 test_widget_position.py，编写所有测试用例",
+          "status": "pending",
+          "priority": "high",
+          "tdd_phase": "red",
+          "coverage_target": 95
+        },
+        {
+          "id": "2.2",
+          "name": "绿（Green）- 实现模块",
+          "description": "创建 widget_position.py，实现 ChartWidgetPositionMixin",
+          "status": "pending",
+          "priority": "high",
+          "tdd_phase": "green"
+        },
+        {
+          "id": "2.3",
+          "name": "重构（Refactor）- 优化代码",
+          "description": "拆分超大方法，优化代码，确保覆盖率 > 95%",
+          "status": "pending",
+          "priority": "medium",
+          "tdd_phase": "refactor"
+        },
+        {
+          "id": "2.4",
+          "name": "集成到主类",
+          "description": "在 widget.py 中集成，删除已移动的方法",
+          "status": "pending",
+          "priority": "high"
+        }
+      ]
+    },
+    {
+      "id": "phase-3",
+      "name": "拆分订单处理模块（TDD）",
+      "estimated_days": 2,
+      "tasks": [
+        {
+          "id": "3.1",
+          "name": "红（Red）- 编写测试用例",
+          "description": "创建 test_widget_order.py，编写所有测试用例",
+          "status": "pending",
+          "priority": "high",
+          "tdd_phase": "red",
+          "coverage_target": 95
+        },
+        {
+          "id": "3.2",
+          "name": "绿（Green）- 实现模块",
+          "description": "创建 widget_order.py，实现 ChartWidgetOrderMixin",
+          "status": "pending",
+          "priority": "high",
+          "tdd_phase": "green"
+        },
+        {
+          "id": "3.3",
+          "name": "重构（Refactor）- 优化代码",
+          "description": "拆分超大方法，优化代码，确保覆盖率 > 95%",
+          "status": "pending",
+          "priority": "medium",
+          "tdd_phase": "refactor"
+        },
+        {
+          "id": "3.4",
+          "name": "集成到主类",
+          "description": "在 widget.py 中集成，删除已移动的方法",
+          "status": "pending",
+          "priority": "high"
+        }
+      ]
+    },
+    {
+      "id": "phase-4",
+      "name": "拆分触发模块（TDD）",
+      "estimated_days": 2,
+      "tasks": [
+        {
+          "id": "4.1",
+          "name": "红（Red）- 编写测试用例",
+          "description": "创建 test_widget_trigger.py，编写所有测试用例",
+          "status": "pending",
+          "priority": "high",
+          "tdd_phase": "red",
+          "coverage_target": 95
+        },
+        {
+          "id": "4.2",
+          "name": "绿（Green）- 实现模块",
+          "description": "创建 widget_trigger.py，实现 ChartWidgetTriggerMixin",
+          "status": "pending",
+          "priority": "high",
+          "tdd_phase": "green"
+        },
+        {
+          "id": "4.3",
+          "name": "重构（Refactor）- 优化代码",
+          "description": "拆分超大方法，优化代码，确保覆盖率 > 95%",
+          "status": "pending",
+          "priority": "medium",
+          "tdd_phase": "refactor"
+        },
+        {
+          "id": "4.4",
+          "name": "集成到主类",
+          "description": "在 widget.py 中集成，删除已移动的方法",
+          "status": "pending",
+          "priority": "high"
+        }
+      ]
+    },
+    {
+      "id": "phase-5",
+      "name": "拆分鼠标事件模块（TDD）",
+      "estimated_days": 2,
+      "tasks": [
+        {
+          "id": "5.1",
+          "name": "红（Red）- 编写测试用例",
+          "description": "创建 test_widget_mouse.py，编写所有测试用例",
+          "status": "pending",
+          "priority": "high",
+          "tdd_phase": "red",
+          "coverage_target": 90
+        },
+        {
+          "id": "5.2",
+          "name": "绿（Green）- 实现模块",
+          "description": "创建 widget_mouse.py，实现 ChartWidgetMouseMixin",
+          "status": "pending",
+          "priority": "high",
+          "tdd_phase": "green"
+        },
+        {
+          "id": "5.3",
+          "name": "重构（Refactor）- 优化代码",
+          "description": "拆分超大方法，优化代码，确保覆盖率 > 90%",
+          "status": "pending",
+          "priority": "medium",
+          "tdd_phase": "refactor"
+        },
+        {
+          "id": "5.4",
+          "name": "集成到主类",
+          "description": "在 widget.py 中集成，删除已移动的方法",
+          "status": "pending",
+          "priority": "high"
+        }
+      ]
+    },
+    {
+      "id": "phase-6",
+      "name": "拆分图表更新模块（TDD）",
+      "estimated_days": 1,
+      "tasks": [
+        {
+          "id": "6.1",
+          "name": "红（Red）- 编写测试用例",
+          "description": "创建 test_widget_chart.py，编写所有测试用例",
+          "status": "pending",
+          "priority": "high",
+          "tdd_phase": "red",
+          "coverage_target": 95
+        },
+        {
+          "id": "6.2",
+          "name": "绿（Green）- 实现模块",
+          "description": "创建 widget_chart.py，实现 ChartWidgetChartMixin",
+          "status": "pending",
+          "priority": "high",
+          "tdd_phase": "green"
+        },
+        {
+          "id": "6.3",
+          "name": "重构（Refactor）- 优化代码",
+          "description": "优化代码，确保覆盖率 > 95%",
+          "status": "pending",
+          "priority": "medium",
+          "tdd_phase": "refactor"
+        },
+        {
+          "id": "6.4",
+          "name": "集成到主类",
+          "description": "在 widget.py 中集成，删除已移动的方法",
+          "status": "pending",
+          "priority": "high"
+        }
+      ]
+    },
+    {
+      "id": "phase-7",
+      "name": "拆分数据库模块（TDD）",
+      "estimated_days": 1,
+      "tasks": [
+        {
+          "id": "7.1",
+          "name": "红（Red）- 编写测试用例",
+          "description": "创建 test_widget_database.py，编写所有测试用例",
+          "status": "pending",
+          "priority": "high",
+          "tdd_phase": "red",
+          "coverage_target": 95
+        },
+        {
+          "id": "7.2",
+          "name": "绿（Green）- 实现模块",
+          "description": "创建 widget_database.py，实现 ChartWidgetDatabaseMixin",
+          "status": "pending",
+          "priority": "high",
+          "tdd_phase": "green"
+        },
+        {
+          "id": "7.3",
+          "name": "重构（Refactor）- 优化代码",
+          "description": "优化代码，确保覆盖率 > 95%",
+          "status": "pending",
+          "priority": "medium",
+          "tdd_phase": "refactor"
+        },
+        {
+          "id": "7.4",
+          "name": "集成到主类",
+          "description": "在 widget.py 中集成，删除已移动的方法",
+          "status": "pending",
+          "priority": "high"
+        }
+      ]
+    },
+    {
+      "id": "phase-8",
+      "name": "移动光标类（TDD）",
+      "estimated_days": 1,
+      "tasks": [
+        {
+          "id": "8.1",
+          "name": "红（Red）- 编写测试用例",
+          "description": "创建 test_widget_cursor.py，编写所有测试用例",
+          "status": "pending",
+          "priority": "high",
+          "tdd_phase": "red",
+          "coverage_target": 95
+        },
+        {
+          "id": "8.2",
+          "name": "绿（Green）- 移动类",
+          "description": "创建 widget_cursor.py，移动 ChartCursor 类",
+          "status": "pending",
+          "priority": "high",
+          "tdd_phase": "green"
+        },
+        {
+          "id": "8.3",
+          "name": "重构（Refactor）- 优化代码",
+          "description": "优化代码，确保覆盖率 > 95%",
+          "status": "pending",
+          "priority": "medium",
+          "tdd_phase": "refactor"
+        }
+      ]
+    },
+    {
+      "id": "phase-9",
+      "name": "集成测试和最终验证",
+      "estimated_days": 3,
+      "tasks": [
+        {
+          "id": "9.1",
+          "name": "更新导入和导出",
+          "description": "更新 widget.py 和 __init__.py 的导入导出",
+          "status": "pending",
+          "priority": "high"
+        },
+        {
+          "id": "9.2",
+          "name": "集成测试",
+          "description": "创建集成测试，测试所有模块的集成",
+          "status": "pending",
+          "priority": "high"
+        },
+        {
+          "id": "9.3",
+          "name": "覆盖率验证",
+          "description": "运行覆盖率报告，确保 > 95%",
+          "status": "pending",
+          "priority": "high"
+        },
+        {
+          "id": "9.4",
+          "name": "性能测试",
+          "description": "对比重构前后的性能",
+          "status": "pending",
+          "priority": "medium"
+        },
+        {
+          "id": "9.5",
+          "name": "代码质量检查",
+          "description": "检查行数、格式化、类型检查",
+          "status": "pending",
+          "priority": "high"
+        },
+        {
+          "id": "9.6",
+          "name": "文档更新",
+          "description": "更新所有相关文档",
+          "status": "pending",
+          "priority": "medium"
+        },
+        {
+          "id": "9.7",
+          "name": "最终提交",
+          "description": "运行所有测试，代码审查，创建 PR",
+          "status": "pending",
+          "priority": "high"
+        }
+      ]
+    }
+  ],
+  "success_criteria": [
+    "所有文件 < 1500行",
+    "测试代码覆盖率 > 95%",
+    "所有测试用例通过（pytest）",
+    "所有功能正常工作",
+    "性能无明显下降（< 5%）",
+    "外部 API 保持不变",
+    "代码审查通过",
+    "文档更新完成"
+  ],
+  "estimated_total_days": 17,
+  "created_at": "2024-01-01",
+  "updated_at": "2024-01-01"
+}
+

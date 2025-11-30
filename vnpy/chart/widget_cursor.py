@@ -100,6 +100,7 @@ class ChartCursor(QtCore.QObject):
 
     def _init_info(self) -> None:
         """
+        Create info text objects.
         """
         self._infos: dict[str, pg.TextItem] = {}
         for plot_name, plot in self._plots.items():
@@ -119,163 +120,15 @@ class ChartCursor(QtCore.QObject):
         """
         Connect mouse move signal to update function.
         """
-        self._widget.scene().sigMouseMoved.connect(self._mouse_moved)
-
-    def _mouse_moved(self, evt: tuple) -> None:
-        """
-        Callback function when mouse is moved.
-        """
-        if not self._manager.get_count():
-            return
-
-        # First get current mouse point
-        pos: tuple = evt
-
-        for plot_name, view in self._views.items():
-            rect = view.sceneBoundingRect()
-
-            if rect.contains(pos):
-                mouse_point = view.mapSceneToView(pos)
-                self._x = to_int(mouse_point.x())
-                self._y = mouse_point.y()
-                self._plot_name = plot_name
-                break
-
-        # Then update cursor component
-        self._update_line()
-        self._update_label()
-        self.update_info()
-
-    def _update_line(self) -> None:
-        """"""
-        for v_line in self._v_lines.values():
-            v_line.setPos(self._x)
-            v_line.show()
-
-        for plot_name, h_line in self._h_lines.items():
-            if plot_name == self._plot_name:
-                h_line.setPos(self._y)
-                h_line.show()
-            else:
-                h_line.hide()
-
-    def _update_label(self) -> None:
-        """"""
-        bottom_plot: pg.PlotItem = list(self._plots.values())[-1]
-        axis_width = bottom_plot.getAxis("right").width()
-        axis_height = bottom_plot.getAxis("bottom").height()
-        axis_offset: QtCore.QPointF = QtCore.QPointF(axis_width, axis_height)
-
-        bottom_view: pg.ViewBox = list(self._views.values())[-1]
-        bottom_right = bottom_view.mapSceneToView(
-            bottom_view.sceneBoundingRect().bottomRight() - axis_offset
-        )
-
-        for plot_name, label in self._y_labels.items():
-            if plot_name == self._plot_name:
-                label.setText(str(self._y))
-                label.show()
-                label.setPos(bottom_right.x(), self._y)
-            else:
-                label.hide()
-
-        dt: datetime | None = self._manager.get_datetime(self._x)
-        if dt:
-            self._x_label.setText(dt.strftime("%Y-%m-%d %H:%M:%S"))
-            self._x_label.show()
-            self._x_label.setPos(self._x, bottom_right.y())
-            self._x_label.setAnchor((0, 0))
-
-    def update_info(self) -> None:
-        """"""
-        buf: dict = {}
-
-        for item, plot in self._item_plot_map.items():
-            item_info_text: str = item.get_info_text(self._x)
-
-            if plot not in buf:
-                buf[plot] = item_info_text
-            else:
-                if item_info_text:
-                    buf[plot] += ("\n\n" + item_info_text)
-
-        for plot_name, plot in self._plots.items():
-            plot_info_text: str = buf[plot]
-            info: pg.TextItem = self._infos[plot_name]
-            info.setText(plot_info_text)
-            info.show()
-
-            view: pg.ViewBox = self._views[plot_name]
-            top_left = view.mapSceneToView(view.sceneBoundingRect().topLeft())
-            info.setPos(top_left)
-
-    def move_right(self) -> None:
-        """
-        Move cursor index to right by 1.
-        """
-        if self._x == self._manager.get_count() - 1:
-            return
-        self._x += 1
-
-        self._update_after_move()
-
-    def move_left(self) -> None:
-        """
-        Move cursor index to left by 1.
-        """
-        if self._x == 0:
-            return
-        self._x -= 1
-
-        self._update_after_move()
-
-    def _update_after_move(self) -> None:
-        """
-        Update cursor after moved by left/right.
-        """
-        bar: BarData | None = self._manager.get_bar(self._x)
-        if bar is None:
-            return
-
-        self._y = bar.close_price
-
-        self._update_line()
-        self._update_label()
-
-    def clear_all(self) -> None:
-        """
-        Clear all data.
-        """
-        self._x = 0
-        self._y = 0
-        self._plot_name = ""
-
-        for line in list(self._v_lines.values()) + list(self._h_lines.values()):
-            line.hide()
-
-        for label in list(self._y_labels.values()) + [self._x_label]:
-            label.hide()
-        """
-        """
-        self._infos: dict[str, pg.TextItem] = {}
-        for plot_name, plot in self._plots.items():
-            info: pg.TextItem = pg.TextItem(
-                "info",
-                color=CURSOR_COLOR,
-                border=CURSOR_COLOR,
-                fill=BLACK_COLOR
-            )
-            info.hide()
-            info.setZValue(2)
-            info.setFont(NORMAL_FONT)
-            plot.addItem(info)  # , ignoreBounds=True)
-            self._infos[plot_name] = info
-
-    def _connect_signal(self) -> None:
-        """
-        Connect mouse move signal to update function.
-        """
-        self._widget.scene().sigMouseMoved.connect(self._mouse_moved)
+        # 确保 scene 已经准备好
+        scene = self._widget.scene()
+        if scene:
+            scene.sigMouseMoved.connect(self._mouse_moved)
+        else:
+            # 如果 scene 还没有准备好，延迟连接
+            # 这通常发生在 widget 还没有显示时
+            from vnpy.trader.ui import QtCore
+            QtCore.QTimer.singleShot(100, self._connect_signal)
 
     def _mouse_moved(self, evt: tuple) -> None:
         """
@@ -412,3 +265,5 @@ class ChartCursor(QtCore.QObject):
         for label in list(self._y_labels.values()) + [self._x_label]:
             label.hide()
 
+        for info in self._infos.values():
+            info.hide()

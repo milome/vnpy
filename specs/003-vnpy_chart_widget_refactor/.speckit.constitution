@@ -80,6 +80,13 @@ Following vnpy project standards:
   - Unit tests for each mixin class
   - Integration tests for ChartWidget composition
   - Regression tests to ensure no functionality loss
+- **⚠️ MANDATORY: QtTest for UI Interactions**: 
+  - **All mouse events, keyboard events, and drag operations MUST be tested using QtTest and pytest-qt**
+  - **Real event simulation**: Use `qtbot.mouseClick()`, `qtbot.mousePress()`, `qtbot.mouseMove()`, `qtbot.mouseRelease()`, `qtbot.keyClick()` to simulate real user interactions
+  - **No mock-only testing**: UI interaction tests must use real Qt events, not just mocks
+  - **Test file pattern**: Create `test_*_qt.py` files for QtTest-based tests (e.g., `test_widget_mouse_qt.py`)
+  - **Coverage requirement**: All mouse/keyboard/drag functionality must have corresponding QtTest tests
+  - **Example**: See `tests/chart/test_widget_mouse_qt.py` for reference implementation
 
 ### Testing Strategy
 
@@ -89,6 +96,40 @@ Following vnpy project standards:
    - Green: Implement mixin to pass tests
    - Refactor: Optimize while maintaining test coverage
 3. **After refactoring**: Run full test suite, verify coverage > 95%
+
+### UI Interaction Testing (MANDATORY)
+
+**⚠️ CRITICAL REQUIREMENT**: All UI interaction features (mouse events, keyboard events, drag operations) MUST be tested using QtTest and pytest-qt:
+
+1. **Mouse Event Testing**:
+   - Use `qtbot.mouseClick()` for click events
+   - Use `qtbot.mousePress()`, `qtbot.mouseMove()`, `qtbot.mouseRelease()` for drag operations
+   - Use `qtbot.mouseMove()` for hover detection
+   - Test coordinate conversion (widget → scene → view coordinates)
+
+2. **Keyboard Event Testing**:
+   - Use `qtbot.keyClick()` for key press events
+   - Test keyboard shortcuts and navigation
+
+3. **Drag and Drop Testing**:
+   - Test complete drag operations (press → move → release)
+   - Verify state changes during drag
+   - Test drag cancellation (ESC key)
+
+4. **Test File Organization**:
+   - Create separate `test_*_qt.py` files for QtTest-based tests
+   - Keep unit tests (with mocks) in `test_*.py` files
+   - Example: `test_widget_mouse.py` (unit tests) + `test_widget_mouse_qt.py` (QtTest tests)
+
+5. **Reference Implementation**:
+   - See `tests/chart/test_widget_mouse_qt.py` for complete QtTest example
+   - Follow the same patterns for all UI interaction testing
+
+6. **Coverage Requirements**:
+   - All mouse event handlers must have QtTest coverage
+   - All keyboard event handlers must have QtTest coverage
+   - All drag operations must have QtTest coverage
+   - Unit tests (with mocks) are supplementary, not replacements
 
 ### Error Handling
 
@@ -148,6 +189,7 @@ Following vnpy project standards:
 - Follow the existing patterns in ChartWidget
 - Maintain 100% backward compatibility - no public API changes
 - Write tests FIRST (TDD approach)
+- **⚠️ MANDATORY: Write QtTest tests for all UI interactions** (mouse, keyboard, drag)
 - Use Mixin pattern for code organization
 - Run `ruff check .` and `mypy vnpy` after making changes
 - Run `pytest tests/chart/` and verify coverage > 95%
@@ -161,10 +203,12 @@ Following vnpy project standards:
 - Don't add features beyond refactoring scope
 - Don't refactor code that isn't part of the current task
 - Don't skip writing tests (TDD is mandatory)
+- **⚠️ Don't test UI interactions with mocks only - MUST use QtTest**
 - Don't create unnecessary abstractions
 - Don't break existing chart functionality
 - Don't introduce dependencies outside vnpy's standard stack
 - Don't merge code with test coverage < 95%
+- Don't skip QtTest tests for mouse/keyboard/drag functionality
 
 ## Project-Specific Rules
 
@@ -294,6 +338,7 @@ Following vnpy project standards:
 - ✅ All files < 1500 lines
 - ✅ All functionality works identically to before
 - ✅ **Test code coverage > 95%**
+- ✅ **⚠️ All UI interactions tested with QtTest and pytest-qt** (MANDATORY)
 - ✅ No performance degradation
 - ✅ Code readability improved
 - ✅ External API unchanged (100% backward compatible)
@@ -328,12 +373,15 @@ Following vnpy project standards:
 3. **Method Overriding**: Ensure mixin methods don't accidentally override base methods
 4. **Testing Strategy**: Test each mixin in isolation, then test composition
 5. **Large Method Splitting**: Break down >200 line methods into focused, testable units
+6. **⚠️ UI Testing Requirement**: All mouse/keyboard/drag features MUST have QtTest tests - see `tests/chart/test_widget_mouse_qt.py` for reference
 
 ### Reference Files
 
 - **Source**: `vnpy/chart/widget.py` (5058 lines - to be refactored)
 - **Analysis**: `vnpy/chart/widget_refactor_analysis.md`
 - **Test examples**: `tests/chart/` (to be created)
+- **QtTest Reference**: `tests/chart/test_widget_mouse_qt.py` - Complete QtTest implementation example
+- **QtTest Documentation**: `tests/chart/QTTEST_MOUSE_EVENTS_README.md` - QtTest testing guide
 
 ### Migration Notes
 
@@ -343,7 +391,62 @@ Following vnpy project standards:
 
 ---
 
-**Document Version**: 1.0  
-**Last Updated**: 2025-01-15  
-**Maintainer**: vnpy development team
+## Future Development Requirements
+
+### New Feature Development
+
+**⚠️ MANDATORY for all new UI interaction features**:
+
+1. **QtTest Testing Required**: 
+   - All new mouse event handlers MUST have QtTest tests
+   - All new keyboard event handlers MUST have QtTest tests
+   - All new drag/drop operations MUST have QtTest tests
+   - Use `qtbot` from pytest-qt for real event simulation
+
+2. **Test File Naming**:
+   - Create `test_*_qt.py` files for QtTest-based tests
+   - Example: New feature `widget_toolbar.py` → `test_widget_toolbar_qt.py`
+
+3. **Test Coverage**:
+   - QtTest tests are MANDATORY, not optional
+   - Unit tests (with mocks) are supplementary
+   - Both types of tests should be written
+
+4. **Reference Implementation**:
+   - Always refer to `tests/chart/test_widget_mouse_qt.py` as the standard
+   - Follow the same patterns and structure
+
+### Spec Definition Requirements
+
+When creating new `.speckit.specify` or `.speckit.plan` files:
+
+1. **Include QtTest Requirements**: 
+   - Explicitly state QtTest testing requirements for UI features
+   - List all mouse/keyboard/drag operations that need QtTest coverage
+
+2. **Test Strategy Section**: 
+   - Add a "UI Testing Strategy" section
+   - Specify which QtTest methods to use
+   - Reference existing QtTest test files
+
+3. **Success Criteria**: 
+   - Include "All UI interactions tested with QtTest" in success criteria
+   - Specify minimum QtTest coverage requirements
+
+---
+
+**Document Version**: 1.1  
+**Last Updated**: 2025-01-XX  
+**Maintainer**: vnpy development team  
+**Changes in v1.1**: Added mandatory QtTest and pytest-qt requirements for UI interaction testing
+
+## Changelog
+
+### v1.1 (2025-01-XX)
+- ✅ Added mandatory QtTest and pytest-qt requirements for UI interaction testing
+- ✅ Added "UI Interaction Testing (MANDATORY)" section with detailed guidelines
+- ✅ Added "Future Development Requirements" section for new feature development
+- ✅ Updated success criteria to include QtTest coverage requirement
+- ✅ Added reference to `tests/chart/test_widget_mouse_qt.py` as standard implementation
+- ✅ Updated AI Assistant Guidelines to enforce QtTest testing
 

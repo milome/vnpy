@@ -36,12 +36,25 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                     
                     if price > 0:
                         self._drawing_order_controller.update_preview_line(price)
-                    super().mouseMoveEvent(event)
+                    # 调用父类方法
+                    import pyqtgraph as pg
+                    pg.PlotWidget.mouseMoveEvent(self, event)
                     return
 
         if not self._price_line_drag_handler or not self._first_plot:
-            super().mouseMoveEvent(event)
+            # 调用父类方法
+            import pyqtgraph as pg
+            pg.PlotWidget.mouseMoveEvent(self, event)
             return
+
+        # 确保 price_line_manager 已初始化
+        if not hasattr(self, '_price_line_manager') or self._price_line_manager is None:
+            # 使用 get_price_line_manager() 进行延迟初始化
+            if hasattr(self, 'get_price_line_manager'):
+                self._price_line_manager = self.get_price_line_manager()
+            else:
+                super().mouseMoveEvent(event)
+                return
 
         # Get scene position
         scene_pos = self.mapToScene(event.pos())
@@ -132,7 +145,9 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
             else:
                 self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
 
-        super().mouseMoveEvent(event)
+        # 调用父类方法
+        import pyqtgraph as pg
+        pg.PlotWidget.mouseMoveEvent(self, event)
     
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
         """
@@ -140,8 +155,20 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
         """
         # Only handle left button
         if event.button() != QtCore.Qt.MouseButton.LeftButton:
-            super().mousePressEvent(event)
+            # 调用父类方法
+            import pyqtgraph as pg
+            pg.PlotWidget.mousePressEvent(self, event)
             return
+
+        # 添加调试日志（仅在开发时启用）
+        if hasattr(self, '_main_engine') and self._main_engine:
+            self._main_engine.write_log(
+                f"[ChartWidget] mousePressEvent: 位置={event.pos()}, "
+                f"drag_handler={self._price_line_drag_handler is not None}, "
+                f"first_plot={self._first_plot is not None}, "
+                f"price_line_manager={hasattr(self, '_price_line_manager') and self._price_line_manager is not None}",
+                "ChartWidget"
+            )
 
         # 优先检查是否在画线下单模式
         # 在画线下单模式下，任何点击都应该弹出下单对话框，不允许从入场线生成止损/止盈线
@@ -156,19 +183,52 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                     price = view_pos.y()
                     
                     if price > 0:
+                        # 添加调试日志
+                        if hasattr(self, '_main_engine') and self._main_engine:
+                            self._main_engine.write_log(
+                                f"[ChartWidget] 画线下单模式点击: 价格={price:.2f}, "
+                                f"回调存在={hasattr(self, '_on_drawing_click')}, "
+                                f"回调不为None={hasattr(self, '_on_drawing_click') and self._on_drawing_click is not None}",
+                                "ChartWidget"
+                            )
+                        
                         # Show preview line
                         self._drawing_order_controller.show_preview_line(price, "long")
                         
-                        # Emit signal for order dialog (will be handled by parent widget)
-                        # For now, we'll create a callback mechanism
-                        if hasattr(self, '_on_drawing_click'):
+                        # Call callback for order dialog (will be handled by parent widget)
+                        if hasattr(self, '_on_drawing_click') and self._on_drawing_click:
+                            if hasattr(self, '_main_engine') and self._main_engine:
+                                self._main_engine.write_log(
+                                    f"[ChartWidget] 调用画线下单回调: 价格={price:.2f}",
+                                    "ChartWidget"
+                                )
                             self._on_drawing_click(price)
+                        else:
+                            # 如果回调未设置，记录警告
+                            if hasattr(self, '_main_engine') and self._main_engine:
+                                self._main_engine.write_log(
+                                    f"[ChartWidget] 警告: 画线下单模式已启用，但回调未设置。请调用 set_drawing_click_callback() 设置回调。",
+                                    "ChartWidget"
+                                )
                         event.accept()
                         return
 
         if not self._price_line_drag_handler or not self._first_plot:
-            super().mousePressEvent(event)
+            # 调用父类方法
+            import pyqtgraph as pg
+            pg.PlotWidget.mousePressEvent(self, event)
             return
+
+        # 确保 price_line_manager 已初始化
+        if not hasattr(self, '_price_line_manager') or self._price_line_manager is None:
+            # 使用 get_price_line_manager() 进行延迟初始化
+            if hasattr(self, 'get_price_line_manager'):
+                self._price_line_manager = self.get_price_line_manager()
+            else:
+                # 调用父类方法
+                import pyqtgraph as pg
+                pg.PlotWidget.mousePressEvent(self, event)
+                return
 
         # Get scene position
         scene_pos = self.mapToScene(event.pos())
@@ -187,29 +247,28 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
             event.accept()
             return
         
-        # 如果点击的是入场线，开始从入场线拖拽生成止损/止盈线
-        # 注意：只有在画线下单未启用时才允许此操作
-        if clicked_line is None:
+        # 如果第一次查找没有找到线，或者找到的是不可移动的线，尝试查找入场线（包括不可移动的）
+        if clicked_line is None or (clicked_line and not clicked_line.movable):
             # 尝试查找入场线（包括不可移动的）
-            clicked_line = self._price_line_drag_handler.find_line_near_point(
+            entry_line = self._price_line_drag_handler.find_line_near_point(
                 scene_pos, all_lines, include_entry_lines=True
             )
+            # 如果找到的是入场线，使用它
+            if entry_line and entry_line.get_line_type() == PriceLineType.ENTRY:
+                clicked_line = entry_line
         
+        # 如果点击的是入场线，开始从入场线拖拽生成止损/止盈线
+        # 注意：只有在画线下单未启用时才允许此操作
         if clicked_line and clicked_line.get_line_type() == PriceLineType.ENTRY:
             # 从入场线开始拖拽
             self._price_line_drag_handler.start_drag_from_entry(clicked_line)
-            
-            # 创建预览线
-            entry_price = clicked_line.get_price()
-            direction = clicked_line.get_direction()
-            
-            # 获取当前鼠标位置的价格
-            view_box = self._first_plot.getViewBox()
-            if view_box:
-                view_pos = view_box.mapSceneToView(scene_pos)
-                preview_price = view_pos.y()
-                
-                # 根据拖拽方向判断是止损还是止盈
+            event.accept()
+            return
+        
+        # 如果没有找到任何线，调用父类处理
+        # 注意：由于 MRO 问题，不能直接使用 super()，直接调用 PlotWidget 的方法
+        import pyqtgraph as pg
+        pg.PlotWidget.mousePressEvent(self, event)
     
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
         """
@@ -226,7 +285,16 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                 
                 if entry_line and preview_line and final_price is not None:
                     # 获取入场线的ID
-                    manager = self.get_price_line_manager()
+                    # 确保 price_line_manager 已初始化
+                    if not hasattr(self, '_price_line_manager') or self._price_line_manager is None:
+                        if hasattr(self, 'get_price_line_manager'):
+                            self._price_line_manager = self.get_price_line_manager()
+                        else:
+                            # 调用父类方法
+                            import pyqtgraph as pg
+                            pg.PlotWidget.mouseReleaseEvent(self, event)
+                            return
+                    manager = self._price_line_manager
                     entry_line_id = None
                     for lid, line in manager.get_all_lines().items():
                         if line == entry_line:
@@ -422,6 +490,12 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                     self._update_points_on_line_drag(dragging_line, final_price, line_type)
             
             event.accept()
+            return
+        
+        # 如果没有正在拖拽，调用父类处理
+        # 注意：由于 MRO 问题，不能直接使用 super()，直接调用 PlotWidget 的方法
+        import pyqtgraph as pg
+        pg.PlotWidget.mouseReleaseEvent(self, event)
     
     def mouseDoubleClickEvent(self, event: QtGui.QMouseEvent) -> None:
         """
@@ -448,7 +522,14 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
             preview_line = self._price_line_drag_handler.get_preview_line()
             if preview_line:
                 # 查找预览线的ID并删除
-                manager = self.get_price_line_manager()
+                # 确保 price_line_manager 已初始化
+                if not hasattr(self, '_price_line_manager') or self._price_line_manager is None:
+                    if hasattr(self, 'get_price_line_manager'):
+                        self._price_line_manager = self.get_price_line_manager()
+                    else:
+                        super().mouseDoubleClickEvent(event)
+                        return
+                manager = self._price_line_manager
                 for lid, line in manager.get_all_lines().items():
                     if line == preview_line:
                         # 从 plot 中移除
@@ -463,6 +544,14 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
 
         # Get scene position
         scene_pos = self.mapToScene(event.pos())
+        
+        # 确保 price_line_manager 已初始化
+        if not hasattr(self, '_price_line_manager') or self._price_line_manager is None:
+            if hasattr(self, 'get_price_line_manager'):
+                self._price_line_manager = self.get_price_line_manager()
+            else:
+                super().mouseDoubleClickEvent(event)
+                return
         
         # Get all price lines（在取消拖拽后重新获取，确保不包含刚创建的预览线）
         all_lines = list(self._price_line_manager.get_all_lines().values())
@@ -537,6 +626,16 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
             line_id = None
             clicked_price = clicked_line.get_price()
             clicked_direction = clicked_line.get_direction()
+            
+            # 确保 price_line_manager 已初始化（应该已经初始化，但为了安全起见再次检查）
+            if not hasattr(self, '_price_line_manager') or self._price_line_manager is None:
+                if hasattr(self, 'get_price_line_manager'):
+                    self._price_line_manager = self.get_price_line_manager()
+                else:
+                    # 调用父类方法
+                    import pyqtgraph as pg
+                    pg.PlotWidget.mouseDoubleClickEvent(self, event)
+                    return
             
             # 首先尝试对象引用比较
             for lid, line in self._price_line_manager.get_all_lines().items():
