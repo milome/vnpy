@@ -247,6 +247,25 @@ class PriceLineDatabase:
                 ON price_lines(line_type)
             """)
             
+            # 数据库迁移：添加挂单参数字段（如果不存在）
+            # 使用PRAGMA table_info检查字段是否存在，如果不存在则添加
+            cursor.execute("PRAGMA table_info(price_lines)")
+            existing_columns = [row[1] for row in cursor.fetchall()]
+            
+            if 'order_volume' not in existing_columns:
+                try:
+                    cursor.execute("ALTER TABLE price_lines ADD COLUMN order_volume REAL")
+                except sqlite3.OperationalError:
+                    # 字段可能已存在（并发情况），忽略错误
+                    pass
+            
+            if 'order_offset' not in existing_columns:
+                try:
+                    cursor.execute("ALTER TABLE price_lines ADD COLUMN order_offset TEXT")
+                except sqlite3.OperationalError:
+                    # 字段可能已存在（并发情况），忽略错误
+                    pass
+            
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_price_line_relations_entry 
                 ON price_line_relations(entry_line_id)
@@ -270,7 +289,9 @@ class PriceLineDatabase:
         vt_symbol: str,
         movable: bool = False,
         price_precision: int = 0,
-        vt_orderid: Optional[str] = None
+        vt_orderid: Optional[str] = None,
+        order_volume: Optional[float] = None,
+        order_offset: Optional[str] = None
     ) -> bool:
         """
         保存价格线。
@@ -284,6 +305,8 @@ class PriceLineDatabase:
             movable: 是否可拖拽
             price_precision: 价格精度
             vt_orderid: 关联的订单ID（可选）
+            order_volume: 挂单线的订单手数（仅PENDING类型，可选）
+            order_offset: 挂单线的开平类型（仅PENDING类型，"OPEN"或"CLOSE"，可选）
             
         Returns:
             成功返回 True，失败返回 False
@@ -303,22 +326,23 @@ class PriceLineDatabase:
                 cursor.execute("""
                     UPDATE price_lines 
                     SET price = ?, line_type = ?, direction = ?, vt_symbol = ?, 
-                        vt_orderid = ?, movable = ?, price_precision = ?, updated_at = ?
+                        vt_orderid = ?, movable = ?, price_precision = ?, 
+                        order_volume = ?, order_offset = ?, updated_at = ?
                     WHERE line_id = ?
                 """, (
                     price, line_type.value, direction, vt_symbol, vt_orderid,
-                    int(movable), price_precision, now, line_id
+                    int(movable), price_precision, order_volume, order_offset, now, line_id
                 ))
             else:
                 # 插入：使用新的 created_at
                 cursor.execute("""
                     INSERT INTO price_lines 
                     (line_id, price, line_type, direction, vt_symbol, vt_orderid, 
-                     movable, price_precision, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     movable, price_precision, order_volume, order_offset, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     line_id, price, line_type.value, direction, vt_symbol, vt_orderid,
-                    int(movable), price_precision, now, now
+                    int(movable), price_precision, order_volume, order_offset, now, now
                 ))
             
             conn.commit()
@@ -367,6 +391,12 @@ class PriceLineDatabase:
             
             result = []
             for row in rows:
+                # 获取挂单参数（可能为NULL，对于旧数据或非PENDING类型）
+                # sqlite3.Row 不支持 .get() 方法，使用字典访问方式
+                # 如果字段不存在会抛出 KeyError，但我们已经通过数据库迁移确保字段存在
+                order_volume = row["order_volume"] if row["order_volume"] is not None else None
+                order_offset = row["order_offset"] if row["order_offset"] is not None else None
+                
                 result.append({
                     "line_id": row["line_id"],
                     "price": row["price"],
@@ -376,6 +406,8 @@ class PriceLineDatabase:
                     "vt_orderid": row["vt_orderid"],
                     "movable": bool(row["movable"]),
                     "price_precision": row["price_precision"],
+                    "order_volume": order_volume,  # 挂单线的订单手数（可能为NULL）
+                    "order_offset": order_offset,  # 挂单线的开平类型（可能为NULL）
                     "created_at": row["created_at"],
                     "updated_at": row["updated_at"]
                 })

@@ -6,6 +6,53 @@
 
 ---
 
+## 最新功能（2025-12-01）
+
+### 挂单参数持久化
+
+**功能描述：**
+- 在数据库中持久化挂单参数（`order_volume`和`order_offset`），支持从数据库加载的挂单线也能触发模拟成交
+- 重构触发逻辑，从价格线对象获取参数，减少对内存中`_pending_order_params`的依赖
+- 简化触发逻辑，提高可靠性和可维护性
+
+**实现位置：**
+- `vnpy/chart/price_line_database.py`: 数据库迁移，添加`order_volume`和`order_offset`字段
+- `vnpy/chart/price_line.py`: `PriceLineItem`添加挂单参数方法，`PriceLineManager`修改保存/加载逻辑
+- `vnpy/chart/widget.py`: `trigger_pending_order_breakthrough()`重构，从价格线对象获取参数
+- `vnpy/trader/ui/widget.py`: `_create_pending_order_line()`修改，保存挂单参数到价格线对象
+
+**关键改进：**
+- ✅ 数据库持久化：在`price_lines`表中添加`order_volume`和`order_offset`字段
+- ✅ 价格线对象扩展：添加`get_order_volume()`、`set_order_volume()`、`get_order_offset()`、`set_order_offset()`方法
+- ✅ 触发逻辑简化：优先从价格线对象获取参数，减少对内存的依赖
+- ✅ 向后兼容：仍支持内存中的`_pending_order_params`，但优先使用价格线对象中的参数
+- ✅ 程序重启后，从数据库加载的挂单线也能正常触发模拟成交
+
+**详细分析文档：**
+- `docs/pending_order_params_persistence_analysis.md` - 完整的持久化分析文档
+
+---
+
+### 挂单成交逻辑重构
+
+**功能描述：**
+- 将挂单成交逻辑提取到 `ChartWidget`，实现真实tickdata触发和模拟触发共用同一个逻辑
+- 添加 `_pending_order_trigger_lock` RLock保护，避免同一个挂单线短时间内触发多次下单
+- 重构 `simulate_trade_breakthrough()` 方法，简化代码结构
+
+**实现位置：**
+- `vnpy/chart/widget.py`: `trigger_pending_order_breakthrough()`, `_on_price_breakthrough()`
+- `vnpy/trader/ui/widget.py`: `simulate_trade_breakthrough()`, `_on_price_breakthrough()`
+- `vnpy/chart/price_breakthrough.py`: `BreakthroughEvent` 添加 `tick` 字段
+
+**关键改进：**
+- ✅ 真实tickdata触发和模拟触发共用同一个逻辑，确保行为一致
+- ✅ RLock保护确保一次只有一个挂单线触发下单，避免竞态问题
+- ✅ 代码结构更清晰，逻辑更集中，便于维护和测试
+- ✅ `PriceBreakthroughMonitor` 在事件中传递tick数据，便于触发下单时获取价格信息
+
+---
+
 ## 1. 核心功能实现
 
 ### 1.1 从入场线拖拽创建止损/止盈线
@@ -450,4 +497,178 @@
 
 **最新修复（2025-11-30）：**
 - 修复预览线清理问题，确保在画线下单模式关闭、按ESC键、鼠标释放等场景下都能正确清理所有预览线，防止预览线残留。
+
+---
+
+## 11. 模拟止损和模拟止盈功能（2025-12-01）
+
+### 11.1 功能概述
+
+新增模拟止损和模拟止盈功能，用于在休市时测试止损/止盈线的触发逻辑。配合已有的模拟成交功能，提供完整的模拟交易测试能力。
+
+### 11.2 功能特性
+
+**模拟止损功能：**
+- 模拟tick数据触及止损线后，触发平仓事件
+- 平仓手数使用止损线对应的手数（不超过持仓手数）
+- 平仓采用对价平仓+智能追价（OPPONENT_Retry2）
+- 使用RLock避免多条止损线同时触发时的竞态问题
+- 当持仓数为0时，止损线不触发任何操作
+
+**模拟止盈功能：**
+- 模拟tick数据触及止盈线后，触发平仓事件
+- 平仓手数使用止盈线对应的手数（不超过持仓手数）
+- 平仓采用对价平仓+智能追价（OPPONENT_Retry2）
+- 使用RLock避免多条止盈线同时触发时的竞态问题
+- 当持仓数为0时，止盈线不触发任何操作
+
+**按钮状态管理：**
+- 三个模拟功能按钮（模拟成交、模拟止损、模拟止盈）
+- 无tickdata时：三个按钮全部enabled（可用于休市测试）
+- 有tickdata时：三个按钮全部disabled（避免与真实行情冲突）
+
+### 11.3 实现位置
+
+- `vnpy/chart/widget.py`: 
+  - `trigger_stop_loss_close()` - 触发止损线平仓（通用方法，供真实tickdata和模拟触发共用）
+  - `trigger_take_profit_close()` - 触发止盈线平仓（通用方法，供真实tickdata和模拟触发共用）
+  - `_stop_loss_trigger_lock` - 保护止损线触发平仓逻辑的RLock
+  - `_take_profit_trigger_lock` - 保护止盈线触发平仓逻辑的RLock
+
+- `vnpy/trader/ui/widget.py`: 
+  - `simulate_stop_loss()` - 模拟止损功能（创建模拟tick，调用ChartWidget的通用方法）
+  - `simulate_take_profit()` - 模拟止盈功能（创建模拟tick，调用ChartWidget的通用方法）
+  - `_update_simulate_buttons_state()` - 按钮状态管理
+  - `process_tick_event()` - tick事件处理，更新按钮状态
+
+### 11.4 关键实现细节
+
+1. **RLock保护（重构后）**
+   - RLock保护逻辑在 `ChartWidget` 中实现，保护的是"触发止损/止盈平仓"这个逻辑本身
+   - 使用 `_stop_loss_trigger_lock` 保护止损线触发平仓逻辑
+   - 使用 `_take_profit_trigger_lock` 保护止盈线触发平仓逻辑
+   - 确保一次只有一个止损/止盈线触发平仓，避免竞态问题
+   - **重要**：真实tickdata触发和模拟触发共用同一个触发逻辑和RLock保护，确保行为一致
+
+2. **持仓检查**
+   - 检查持仓是否存在且大于0
+   - 检查可平仓手数（持仓手数 - 冻结手数）
+   - 平仓手数取止损/止盈线手数和可平仓手数的最小值
+
+3. **对价平仓+智能追价**
+   - 平多仓：使用买一价（bid_price_1）
+   - 平空仓：使用卖一价（ask_price_1）
+   - 订单reference设置为"OPPONENT_Retry2"，启用智能追价（重试2次）
+
+4. **按钮状态管理**
+   - 在 `register_event()` 中初始化按钮状态
+   - 在 `switch_chart()` 和 `refresh_chart()` 中更新按钮状态
+   - 在 `process_tick_event()` 中根据tick数据更新按钮状态
+
+### 11.5 测试
+
+**测试文件：**
+- `tests/test_simulate_stop_loss_profit.py`: 模拟止损和模拟止盈功能测试
+
+**测试覆盖：**
+- 模拟止损功能（有持仓时触发平仓）
+- 模拟止损功能（无持仓时不触发）
+- 模拟止盈功能（有持仓时触发平仓）
+- 模拟止盈功能（无持仓时不触发）
+- 多条止损/止盈线时的RLock保护
+- 按钮状态管理（无tickdata时enabled，有tickdata时disabled）
+
+---
+
+**最新功能（2025-12-01）：**
+- 新增模拟止损功能，支持在休市时测试止损线触发逻辑
+- 新增模拟止盈功能，支持在休市时测试止盈线触发逻辑
+- 实现按钮状态管理，无tickdata时按钮enabled，有tickdata时按钮disabled
+- **重构**：将止损/止盈触发逻辑统一到ChartWidget中，真实tickdata触发和模拟触发共用同一个逻辑和RLock保护
+- RLock保护逻辑在ChartWidget中实现（`_stop_loss_trigger_lock` 和 `_take_profit_trigger_lock`），确保真实tickdata触发时也有RLock保护
+
+---
+
+## 12. 模拟成交功能重构分析（2025-12-01）
+
+### 12.1 分析结果
+
+经过分析，发现模拟成交功能与真实tickdata触发已经部分共用逻辑，但仍需重构：
+
+**已共用逻辑：**
+- ✅ 都使用 `PriceBreakthroughMonitor.update_tick()` 检测价格突破
+- ✅ 都使用同一个回调函数 `_on_price_breakthrough` 处理突破事件
+
+**需要改进：**
+- ❌ 回调函数 `_on_price_breakthrough` 在 `widget.py` 中，而不是在 `ChartWidget` 中
+- ❌ 缺少RLock保护，可能导致同一个挂单线短时间内触发多次下单
+- ❌ 逻辑分散，不利于维护
+
+### 12.2 竞态问题分析
+
+**潜在竞态场景：**
+1. **真实tickdata快速波动**：价格在挂单线附近快速波动，多个tick连续触发突破检测
+2. **模拟成交与真实tickdata同时触发**：用户点击"模拟成交"按钮，同时收到真实tickdata
+3. **多个挂单线同时触发**：多个挂单线价格相近，一个tick可能同时触发多个挂单线
+
+**现有保护机制：**
+- 在 `_on_price_breakthrough` 中，下单后会移除挂单参数并取消注册
+- 但这只是"事后"保护，不能防止并发触发
+
+### 12.3 重构建议
+
+**建议：**
+1. **提取通用逻辑到ChartWidget**
+   - 创建 `trigger_pending_order_breakthrough()` 方法
+   - 与止损/止盈触发逻辑保持一致的设计模式
+
+2. **添加RLock保护**
+   - 在 `ChartWidget` 中添加 `_pending_order_trigger_lock`
+   - 保护挂单线触发下单逻辑，确保一次只有一个挂单线触发下单
+
+3. **重构模拟成交方法**
+   - 简化 `simulate_trade_breakthrough()` 方法
+   - 只负责创建模拟tick数据，调用ChartWidget的通用方法
+
+4. **重构真实tickdata触发**
+   - 在 `ChartWidget` 中添加处理tick的方法
+   - 与模拟触发共用同一个逻辑
+
+**详细分析文档：**
+- `docs/simulate_trade_breakthrough_refactoring_analysis.md` - 完整的重构分析文档
+
+---
+
+**分析完成（2025-12-01）：**
+- 完成模拟成交功能重构分析，确认需要将挂单成交逻辑提取到ChartWidget
+- 确认需要添加RLock保护，避免同一个挂单线短时间内触发多次下单
+- 详细分析文档已保存到 `docs/simulate_trade_breakthrough_refactoring_analysis.md`
+
+**重构完成（2025-12-01）：**
+- ✅ 在 `ChartWidget` 中添加 `_pending_order_trigger_lock` RLock，保护挂单线触发下单逻辑
+- ✅ 在 `ChartWidget` 中添加 `trigger_pending_order_breakthrough()` 通用方法，封装挂单成交逻辑
+- ✅ 重构 `ChartWidget._on_price_breakthrough()` 方法，调用通用触发方法
+- ✅ 重构 `widget.py` 中的 `_on_price_breakthrough()` 方法，调用 `ChartWidget` 的通用方法
+- ✅ 重构 `simulate_trade_breakthrough()` 方法，直接调用 `ChartWidget.trigger_pending_order_breakthrough()`
+- ✅ 修改 `PriceBreakthroughMonitor`，在 `BreakthroughEvent` 中添加 `tick` 字段，传递tick数据
+- ✅ 确保真实tickdata触发（通过 `process_tick_event`）也使用 `ChartWidget` 的通用方法
+- ✅ 所有挂单成交逻辑（真实tickdata触发和模拟触发）现在共用同一个方法和RLock保护
+
+**重构效果：**
+- 真实tickdata触发和模拟触发现在共用同一个逻辑，确保行为一致
+- RLock保护确保一次只有一个挂单线触发下单，避免竞态问题
+- 代码结构更清晰，逻辑更集中，便于维护和测试
+
+**挂单参数持久化完成（2025-12-01）：**
+- ✅ 数据库迁移：在`price_lines`表中添加`order_volume`和`order_offset`字段
+- ✅ `PriceLineItem`扩展：添加`get_order_volume()`、`set_order_volume()`、`get_order_offset()`、`set_order_offset()`方法
+- ✅ 数据库操作：修改`save_line()`和`load_lines()`方法，保存和加载挂单参数
+- ✅ 触发逻辑重构：`trigger_pending_order_breakthrough()`优先从价格线对象获取参数，减少对内存的依赖
+- ✅ 创建挂单时：同时保存挂单参数到价格线对象和数据库，保持向后兼容（内存中的`_pending_order_params`仍然保留）
+
+**持久化效果：**
+- 从数据库加载的挂单线现在也能正常触发模拟成交
+- 触发逻辑简化，减少对内存中`_pending_order_params`的依赖
+- 程序重启后，挂单线仍然可以正常触发
+- 保持向后兼容，支持旧的内存中的挂单参数
 

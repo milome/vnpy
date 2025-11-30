@@ -6,7 +6,7 @@ price lines (e.g., pending orders).
 """
 
 from typing import Optional, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from vnpy.trader.object import TickData, BarData
 from vnpy.trader.constant import Direction
@@ -24,6 +24,7 @@ class BreakthroughEvent:
     direction: str
     current_price: float
     breakthrough_direction: str  # "up" or "down"
+    tick: Optional[TickData] = None  # Tick数据（可选，用于触发下单时获取价格信息）
 
 
 class PriceBreakthroughMonitor:
@@ -108,7 +109,8 @@ class PriceBreakthroughMonitor:
                     price=line_price,
                     direction=direction,
                     current_price=current_price,
-                    breakthrough_direction=breakthrough
+                    breakthrough_direction=breakthrough,
+                    tick=tick  # 传递tick数据
                 )
 
                 # Call callback
@@ -153,13 +155,31 @@ class PriceBreakthroughMonitor:
             )
 
             if breakthrough:
+                # 对于bar数据，创建基于bar的模拟tick
+                from datetime import datetime
+                
+                bar_tick = TickData(
+                    symbol=bar.symbol,
+                    exchange=bar.exchange,
+                    datetime=bar.datetime,
+                    gateway_name=bar.gateway_name,
+                    last_price=current_price,
+                    bid_price_1=current_price - 1.0,
+                    ask_price_1=current_price + 1.0,
+                    bid_volume_1=100,
+                    ask_volume_1=100,
+                    volume=bar.volume,
+                    open_interest=bar.open_interest,
+                )
+                
                 event = BreakthroughEvent(
                     line_id=line_id,
                     line_type=line.get_line_type(),
                     price=line_price,
                     direction=direction,
                     current_price=current_price,
-                    breakthrough_direction=breakthrough
+                    breakthrough_direction=breakthrough,
+                    tick=bar_tick  # 传递基于bar的tick数据
                 )
 
                 # Call callback

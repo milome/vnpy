@@ -163,6 +163,16 @@ class MainWindow(QtWidgets.QMainWindow):
             self.open_chart_window,
             True
         )
+        
+        # 模拟功能开关（toggle action）
+        self.simulate_functions_action: QtGui.QAction = QtGui.QAction(_("禁用模拟功能"), self)
+        self.simulate_functions_action.setCheckable(True)
+        self.simulate_functions_action.setChecked(True)  # 默认启用（checked=True表示启用）
+        self.simulate_functions_action.triggered.connect(self.toggle_simulate_functions)
+        self.simulate_functions_action.setToolTip(_("统一控制模拟成交、模拟止损、模拟止盈三个按钮的启用/禁用状态（交易时段建议禁用）"))
+        help_menu.addAction(self.simulate_functions_action)
+        # 初始化菜单项文本（根据checked状态）
+        self._update_simulate_functions_menu_text()
 
         self.add_action(
             help_menu,
@@ -440,8 +450,44 @@ class MainWindow(QtWidgets.QMainWindow):
         if not chart_window:
             chart_window = ChartWindow(self.main_engine, self.event_engine)
             self.widgets["chart_window"] = chart_window
+            # 同步模拟功能开关状态
+            if hasattr(self, 'simulate_functions_action'):
+                chart_window.set_simulate_functions_enabled(self.simulate_functions_action.isChecked())
         
         chart_window.show()
+    
+    def _update_simulate_functions_menu_text(self) -> None:
+        """更新模拟功能菜单项的文本"""
+        if hasattr(self, 'simulate_functions_action'):
+            checked = self.simulate_functions_action.isChecked()
+            # checked=True表示启用，显示"禁用模拟功能"（点击后禁用）
+            # checked=False表示禁用，显示"启用模拟功能"（点击后启用）
+            if checked:
+                self.simulate_functions_action.setText(_("禁用模拟功能"))
+            else:
+                self.simulate_functions_action.setText(_("启用模拟功能"))
+    
+    def toggle_simulate_functions(self, checked: bool) -> None:
+        """
+        切换模拟功能的启用/禁用状态。
+        
+        Args:
+            checked: True表示启用，False表示禁用
+        """
+        # 更新菜单项文本
+        self._update_simulate_functions_menu_text()
+        
+        # 更新所有ChartWindow的模拟功能状态
+        chart_window: ChartWindow | None = self.widgets.get("chart_window", None)
+        if chart_window:
+            chart_window.set_simulate_functions_enabled(checked)
+        
+        # 记录日志
+        status_text = _("已启用") if checked else _("已禁用")
+        self.main_engine.write_log(
+            f"[MainWindow] 模拟功能{status_text}：模拟成交、模拟止损、模拟止盈",
+            "MainWindow"
+        )
 
     def edit_global_setting(self) -> None:
         """

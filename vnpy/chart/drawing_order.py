@@ -1001,15 +1001,24 @@ class DrawingOrderController:
                     "DrawingOrderController"
                 )
             
-            # 设置订单ID到入场线
+            # 设置订单ID和手数到入场线
             entry_line = self._price_line_manager.get_line(new_line_id)
             if entry_line:
                 entry_line.set_vt_orderid(order.vt_orderid)
-                if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
-                    self._widget._main_engine.write_log(
-                        f"[DrawingOrderController] 已设置入场线 {new_line_id} 的订单ID: {order.vt_orderid}",
-                        "DrawingOrderController"
-                    )
+                # 设置手数（从订单的traded字段获取）
+                if order.traded > 0:
+                    entry_line.set_volume(order.traded)
+                    if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+                        self._widget._main_engine.write_log(
+                            f"[DrawingOrderController] 已设置入场线 {new_line_id} 的订单ID: {order.vt_orderid}，手数: {order.traded}",
+                            "DrawingOrderController"
+                        )
+                else:
+                    if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+                        self._widget._main_engine.write_log(
+                            f"[DrawingOrderController] 已设置入场线 {new_line_id} 的订单ID: {order.vt_orderid}（手数为0，未设置）",
+                            "DrawingOrderController"
+                        )
             else:
                 if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
                     self._widget._main_engine.write_log(
@@ -1070,6 +1079,19 @@ class DrawingOrderController:
                         
                         # 将止损线关联到入场线
                         self._widget._entry_line_relations[new_line_id]["stop_loss"] = stop_loss_line_id
+                        
+                        # 从入场线获取手数并设置到止损线
+                        entry_line = self._price_line_manager.get_line(new_line_id)
+                        if entry_line:
+                            entry_volume = entry_line.get_volume()
+                            if entry_volume > 0:
+                                stop_loss_line.set_volume(entry_volume)
+                                if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+                                    self._widget._main_engine.write_log(
+                                        f"[DrawingOrderController] 已设置止损线 {stop_loss_line_id} 的手数: {entry_volume}（从入场线 {new_line_id} 获取）",
+                                        "DrawingOrderController"
+                                    )
+                        
                         # 保存关联关系到数据库
                         if hasattr(self._widget, '_price_line_database') and self._widget._price_line_database:
                             success = self._widget._price_line_database.save_relation(
@@ -1108,6 +1130,19 @@ class DrawingOrderController:
                         
                         # 将止盈线关联到入场线
                         self._widget._entry_line_relations[new_line_id]["take_profit"] = take_profit_line_id
+                        
+                        # 从入场线获取手数并设置到止盈线
+                        entry_line = self._price_line_manager.get_line(new_line_id)
+                        if entry_line:
+                            entry_volume = entry_line.get_volume()
+                            if entry_volume > 0:
+                                take_profit_line.set_volume(entry_volume)
+                                if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+                                    self._widget._main_engine.write_log(
+                                        f"[DrawingOrderController] 已设置止盈线 {take_profit_line_id} 的手数: {entry_volume}（从入场线 {new_line_id} 获取）",
+                                        "DrawingOrderController"
+                                    )
+                        
                         # 保存关联关系到数据库
                         if hasattr(self._widget, '_price_line_database') and self._widget._price_line_database:
                             success = self._widget._price_line_database.save_relation(

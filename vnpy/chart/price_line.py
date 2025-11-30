@@ -87,8 +87,10 @@ class PriceLineItem(pg.InfiniteLine):
         self._direction: str = direction
         self._original_price: float = price
         self._pnl: float = 0.0  # 浮动盈亏
-        self._volume: float = 0.0  # 持仓手数
+        self._volume: float = 0.0  # 持仓手数（用于入场线）
         self._vt_orderid: Optional[str] = None  # 关联的订单ID
+        self._order_volume: Optional[float] = None  # 挂单线的订单手数（仅PENDING类型）
+        self._order_offset: Optional[str] = None  # 挂单线的开平类型（"OPEN"/"CLOSE"，仅PENDING类型）
 
     def _create_pen(
         self,
@@ -294,8 +296,24 @@ class PriceLineItem(pg.InfiniteLine):
                 self.label.setText(label_text)
     
     def get_volume(self) -> float:
-        """获取持仓手数"""
+        """获取持仓手数（用于入场线）"""
         return getattr(self, '_volume', 0.0)
+    
+    def get_order_volume(self) -> Optional[float]:
+        """获取挂单线的订单手数（仅PENDING类型）"""
+        return getattr(self, '_order_volume', None)
+    
+    def set_order_volume(self, volume: float) -> None:
+        """设置挂单线的订单手数（仅PENDING类型）"""
+        self._order_volume = volume
+    
+    def get_order_offset(self) -> Optional[str]:
+        """获取挂单线的开平类型（仅PENDING类型，返回"OPEN"或"CLOSE"）"""
+        return getattr(self, '_order_offset', None)
+    
+    def set_order_offset(self, offset: str) -> None:
+        """设置挂单线的开平类型（仅PENDING类型，应为"OPEN"或"CLOSE"）"""
+        self._order_offset = offset
     
     def set_pnl_and_volume(self, pnl: float, volume: float) -> None:
         """同时设置浮动盈亏和持仓手数并更新标签"""
@@ -463,6 +481,18 @@ class PriceLineManager:
         
         # 更新数据库（如果启用）
         if self._database and self._vt_symbol:
+            # 获取挂单参数（如果是PENDING类型）
+            order_volume = None
+            order_offset = None
+            if line.get_line_type() == PriceLineType.PENDING:
+                order_volume = line.get_order_volume()
+                order_offset = line.get_order_offset()
+            
+            # 获取价格精度（从价格线对象获取，如果不可用则使用默认值0）
+            price_precision = 0
+            if hasattr(line, '_price_precision'):
+                price_precision = getattr(line, '_price_precision', 0)
+            
             self._database.save_line(
                 line_id=line_id,
                 price=price,
@@ -470,8 +500,10 @@ class PriceLineManager:
                 direction=line.get_direction(),
                 vt_symbol=self._vt_symbol,
                 movable=line.movable,
-                price_precision=0,  # 可以从 line 获取，这里简化处理
-                vt_orderid=line.get_vt_orderid()
+                price_precision=price_precision,
+                vt_orderid=line.get_vt_orderid(),
+                order_volume=order_volume,
+                order_offset=order_offset
             )
         
         return True
@@ -646,6 +678,14 @@ class PriceLineManager:
             return 0
         
         lines_data = self._database.load_lines(vt_symbol=self._vt_symbol)
+        
+        # 调试日志：记录加载的价格线数量
+        import sys
+        if 'vnpy.trader.engine' in sys.modules:
+            from vnpy.trader.engine import MainEngine
+            # 尝试获取 main_engine 来记录日志
+            # 这里我们暂时不记录，因为可能没有 main_engine
+        
         count = 0
         max_counter = 0
         
@@ -678,6 +718,16 @@ class PriceLineManager:
             line.set_price_precision(line_data["price_precision"])
             if line_data["vt_orderid"]:
                 line.set_vt_orderid(line_data["vt_orderid"])
+            
+            # 加载挂单参数（如果存在，仅PENDING类型）
+            if line_data["line_type"] == PriceLineType.PENDING:
+                # line_data 是字典，使用 .get() 方法安全获取
+                order_volume = line_data.get("order_volume")
+                order_offset = line_data.get("order_offset")
+                if order_volume is not None:
+                    line.set_order_volume(order_volume)
+                if order_offset is not None:
+                    line.set_order_offset(order_offset)
             
             self._lines[line_id] = line
             

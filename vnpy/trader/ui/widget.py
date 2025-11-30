@@ -2233,6 +2233,25 @@ class ChartWindow(QtWidgets.QWidget):
         self.simulate_trade_button.setToolTip(_("模拟tick突破挂单线，触发挂单成交（用于休市测试）"))
         self.simulate_trade_button.setStyleSheet("background-color: #FF9800; color: white; font-weight: bold;")
         
+        # 模拟止损按钮（用于休市时测试止损触发）
+        self.simulate_stop_loss_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("模拟止损"))
+        self.simulate_stop_loss_button.clicked.connect(self.simulate_stop_loss)
+        self.simulate_stop_loss_button.setToolTip(_("模拟tick触及止损线，触发平仓（用于休市测试）"))
+        self.simulate_stop_loss_button.setStyleSheet("background-color: #F44336; color: white; font-weight: bold;")
+        
+        # 模拟止盈按钮（用于休市时测试止盈触发）
+        self.simulate_take_profit_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("模拟止盈"))
+        self.simulate_take_profit_button.clicked.connect(self.simulate_take_profit)
+        self.simulate_take_profit_button.setToolTip(_("模拟tick触及止盈线，触发平仓（用于休市测试）"))
+        self.simulate_take_profit_button.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;")
+        
+        # 模拟功能开关状态（默认启用，用于控制三个模拟按钮）
+        self._simulate_functions_enabled: bool = True
+        
+        # 注意：RLock保护逻辑在ChartWidget中实现，这里不需要重复定义
+        # ChartWidget中的 _stop_loss_trigger_lock 和 _take_profit_trigger_lock 
+        # 保护的是"触发止损/止盈平仓"这个逻辑本身，无论是真实tickdata触发还是模拟触发
+        
         # 周期选择下拉框
         self.interval_combo: QtWidgets.QComboBox = QtWidgets.QComboBox()
         for name in self.INTERVAL_MAP.keys():
@@ -2312,6 +2331,8 @@ class ChartWindow(QtWidgets.QWidget):
         hbox1.addWidget(self.switch_button)
         hbox1.addWidget(self.drawing_mode_button)
         hbox1.addWidget(self.simulate_trade_button)
+        hbox1.addWidget(self.simulate_stop_loss_button)
+        hbox1.addWidget(self.simulate_take_profit_button)
         
         # 顶部布局 - 第二行：时间范围选择（结束时间默认为最新）
         hbox2: QtWidgets.QHBoxLayout = QtWidgets.QHBoxLayout()
@@ -2408,6 +2429,28 @@ class ChartWindow(QtWidgets.QWidget):
         # 注册订单事件（用于画线交易功能）
         from vnpy.trader.event import EVENT_ORDER
         self.event_engine.register(EVENT_ORDER, self.process_order_event)
+        
+        # 初始化按钮状态（有合约时启用，无合约时禁用）
+        self._update_simulate_buttons_state()
+    
+    def process_tick_event(self, event: Event) -> None:
+        """
+        处理tick事件，更新价格突破监控和按钮状态
+        
+        注意：按钮状态现在始终在有合约时启用，允许在有tickdata时也使用模拟功能进行测试
+        """
+        from vnpy.trader.object import TickData
+        tick: TickData = event.data
+        
+        # 只处理当前合约的tick数据
+        if tick.vt_symbol == self.current_vt_symbol:
+            # 更新价格突破监控
+            if self.chart and self.chart._breakthrough_monitor:
+                all_lines = self.chart._price_line_manager.get_all_lines()
+                self.chart._breakthrough_monitor.update_tick(tick, all_lines)
+            
+            # 更新按钮状态（现在始终启用，如果有合约的话）
+            self._update_simulate_buttons_state()
     
     def on_interval_changed(self, text: str) -> None:
         """周期选择改变时的处理"""
@@ -2620,11 +2663,15 @@ class ChartWindow(QtWidgets.QWidget):
         # 设置图表的 VT symbol（用于画线交易功能）
         self.chart.set_vt_symbol(vt_symbol)
         
+        # 更新模拟功能按钮状态（切换合约时更新）
+        self._update_simulate_buttons_state()
+        
         # 加载历史K线数据（最近7天的1分钟数据）
         self.load_history_data(vt_symbol)
         
-        # 订阅行情数据
-        self.subscribe_tick(vt_symbol)
+        # 订阅行情数据（订阅后可能会收到tick数据，从而更新按钮状态）
+        # 注意：这里不直接调用subscribe_tick，因为可能没有gateway
+        # 按钮状态会在收到tick事件时自动更新
     
     def refresh_chart(self) -> None:
         """刷新当前图表"""
@@ -2652,6 +2699,9 @@ class ChartWindow(QtWidgets.QWidget):
             
             # 设置图表的 VT symbol（用于画线交易功能）
             self.chart.set_vt_symbol(self.current_vt_symbol)
+            
+            # 更新模拟功能按钮状态
+            self._update_simulate_buttons_state()
             
             self.status_label.setStyleSheet("color: #888; font-size: 12px;")
             self.status_label.setText(_("正在刷新 {} 的数据...").format(self.current_vt_symbol))
@@ -4507,20 +4557,6 @@ class ChartWindow(QtWidgets.QWidget):
         # 保存价格线（自动保存）
         self.chart.save_price_lines()
     
-    def process_tick_event(self, event: Event) -> None:
-        """处理Tick事件，更新价格突破监控"""
-        from vnpy.trader.object import TickData
-        
-        tick: TickData = event.data
-        # 只处理当前图表的合约
-        if tick.vt_symbol != self.current_vt_symbol:
-            return
-        
-        # 更新价格突破监控
-        if self.chart and self.chart._breakthrough_monitor:
-            all_lines = self.chart._price_line_manager.get_all_lines()
-            self.chart._breakthrough_monitor.update_tick(tick, all_lines)
-    
     def process_order_event(self, event: Event) -> None:
         """处理订单事件，转发给图表的DrawingOrderController"""
         from vnpy.trader.object import OrderData
@@ -4743,23 +4779,30 @@ class ChartWindow(QtWidgets.QWidget):
             "take_profit": None  # {"line_id": str, "points": int}
         }
         
-        # 注册到价格突破监控
+        # 设置挂单参数到价格线对象（持久化到数据库）
         line = self.chart._price_line_manager.get_line(line_id)
+        if line:
+            # 设置挂单参数
+            line.set_order_volume(params["volume"])
+            line.set_order_offset(params["offset"].value if hasattr(params["offset"], 'value') else str(params["offset"]))
+            
+            # 获取价格精度并设置到chart和价格线
+            price_precision = params.get("price_precision", 0)
+            self.chart._price_precision = price_precision
+            line.set_price_precision(price_precision)
+            
+            # 保存到数据库（PriceLineManager会自动保存）
+            # 通过更新价格来触发保存（因为create_line已经保存了基本信息）
+            self.chart._price_line_manager.update_line_price(line_id, params["price"])
+        
+        # 注册到价格突破监控
+        # 使用ChartWidget的通用方法，与真实tickdata触发共用逻辑
         if line and self.chart._breakthrough_monitor:
             self.chart._breakthrough_monitor.register_line(
                 line_id, 
                 line, 
-                lambda event: self._on_price_breakthrough(event, controller)
+                self.chart._on_price_breakthrough
             )
-        
-        # 获取价格精度并设置到chart
-        price_precision = params.get("price_precision", 0)
-        self.chart._price_precision = price_precision
-        
-        # 更新挂单线的价格精度
-        line = self.chart._price_line_manager.get_line(line_id)
-        if line:
-            line.set_price_precision(price_precision)
         
         # 格式化价格显示
         if price_precision == 0:
@@ -4854,179 +4897,15 @@ class ChartWindow(QtWidgets.QWidget):
                 )
     
     def _on_price_breakthrough(self, event, controller) -> None:
-        """处理价格突破事件，触发下单"""
-        from vnpy.chart.price_breakthrough import BreakthroughEvent
-        from vnpy.trader.object import OrderRequest
-        from vnpy.trader.utility import extract_vt_symbol
-        from vnpy.trader.constant import Direction
+        """
+        处理价格突破事件，触发下单（已废弃，现在使用ChartWidget的通用方法）
         
-        if not hasattr(controller, '_pending_order_params'):
-            return
-            
-        line_id = event.line_id
-        if line_id not in controller._pending_order_params:
-            return
-        
-        order_data = controller._pending_order_params[line_id]
-        params = order_data["params"]
-        vt_symbol = order_data["vt_symbol"]
-        contract = order_data["contract"]
-        
-        # ========== 检查是否为平仓操作（类似 Trade UI 的逻辑） ==========
-        # 即使 offset 是 OPEN，如果存在反向持仓，也应该视为平仓
-        is_closing_order = False
-        opposite_direction = Direction.SHORT if params["direction"] == Direction.LONG else Direction.LONG
-        
-        # 1. 优先从 PositionHolding 获取反向持仓（内存操作，极快）
-        if hasattr(self.chart, '_position_holdings') and self.chart._position_holdings:
-            opposite_direction_str = "long" if opposite_direction == Direction.LONG else "short"
-            opposite_holding = self.chart._position_holdings.get(opposite_direction_str)
-            if opposite_holding:
-                opposite_total_volume = opposite_holding.get_total_volume()
-                if opposite_total_volume > 0 and params["volume"] <= opposite_total_volume:
-                    is_closing_order = True
-                    self.main_engine.write_log(
-                        f"[TradingWidget] 画线下单检测到平仓行为: 订单方向={params['direction'].value}, "
-                        f"订单手数={params['volume']}, 反向持仓方向={opposite_direction.value}, "
-                        f"反向持仓手数={opposite_total_volume}, 标记为平仓订单",
-                        "TradingWidget"
-                    )
-        
-        # 2. 如果 PositionHolding 中没有记录，尝试从 main_engine 获取最新持仓信息
-        if not is_closing_order:
-            all_positions = self.main_engine.get_all_positions()
-            for pos in all_positions:
-                # 检查合约是否匹配（考虑主力合约映射）
-                pos_vt_symbol = pos.vt_symbol
-                if pos_vt_symbol == vt_symbol:
-                    # 检查方向是否相反
-                    if pos.direction == opposite_direction and pos.volume > 0:
-                        if params["volume"] <= pos.volume:
-                            is_closing_order = True
-                            self.main_engine.write_log(
-                                f"[TradingWidget] 画线下单检测到平仓行为: 订单方向={params['direction'].value}, "
-                                f"订单手数={params['volume']}, 反向持仓方向={opposite_direction.value}, "
-                                f"反向持仓手数={pos.volume}, 标记为平仓订单",
-                                "TradingWidget"
-                            )
-                            break
-                else:
-                    # 尝试主力合约映射
-                    if hasattr(self.main_engine, 'get_all_gateway_names'):
-                        for gateway_name in self.main_engine.get_all_gateway_names():
-                            gateway = self.main_engine.get_gateway(gateway_name)
-                            if gateway and hasattr(gateway, 'get_main_contract_mapping'):
-                                mapping = gateway.get_main_contract_mapping()
-                                for main_symbol, actual_symbol in mapping.items():
-                                    if actual_symbol == pos.symbol:
-                                        main_vt_symbol = f"{main_symbol}.{pos.exchange.value}"
-                                        if main_vt_symbol == vt_symbol:
-                                            # 检查方向是否相反
-                                            if pos.direction == opposite_direction and pos.volume > 0:
-                                                if params["volume"] <= pos.volume:
-                                                    is_closing_order = True
-                                                    self.main_engine.write_log(
-                                                        f"[TradingWidget] 画线下单检测到平仓行为（主力合约映射）: "
-                                                        f"订单方向={params['direction'].value}, 订单手数={params['volume']}, "
-                                                        f"反向持仓方向={opposite_direction.value}, 反向持仓手数={pos.volume}, "
-                                                        f"标记为平仓订单",
-                                                        "TradingWidget"
-                                                    )
-                                                    break
-                                if is_closing_order:
-                                    break
-                            if is_closing_order:
-                                break
-        
-        # 标记为平仓订单（用于成交后判断是否创建入场线）
-        if is_closing_order:
-            order_data["is_closing"] = True
-        
-        # 创建订单请求
-        symbol, exchange = extract_vt_symbol(vt_symbol)
-        req = OrderRequest(
-            symbol=symbol,
-            exchange=exchange,
-            direction=params["direction"],
-            type=OrderType.LIMIT,  # 画线下单使用限价单
-            volume=params["volume"],
-            price=params["price"],
-            offset=params["offset"]
-        )
-
-        # 发送订单（下单前不查询活动订单，保证性能）
-        vt_orderid = self.main_engine.send_order(req, contract.gateway_name)
-        if vt_orderid:
-            self.main_engine.write_log(
-                f"价格突破触发下单: {vt_symbol} {params['direction'].value} "
-                f"{params['volume']}@{params['price']} (订单ID: {vt_orderid})"
-            )
-            # 关联订单ID和价格线
-            self.main_engine.write_log(
-                f"[TradingWidget] 关联挂单线 {line_id} 到订单 {vt_orderid}",
-                "TradingWidget"
-            )
-            controller.link_line_to_order(line_id, vt_orderid)
-            
-            # 验证关联是否成功
-            linked_line_id = controller.get_line_id_for_order(vt_orderid)
-            if linked_line_id == line_id:
-                self.main_engine.write_log(
-                    f"[TradingWidget] 订单关联验证成功: 订单 {vt_orderid} -> 挂单线 {line_id}",
-                    "TradingWidget"
-                )
-            else:
-                self.main_engine.write_log(
-                    f"[TradingWidget] 警告: 订单关联验证失败: 订单 {vt_orderid} -> 挂单线 {linked_line_id} (期望: {line_id})",
-                    "TradingWidget"
-                )
-            
-            # 监听订单成交事件，创建入场线和成交标记
-            # 这将在订单成交后通过update_line_from_order处理
-        else:
-            # 委托失败时才查询当前合约的活动订单，用于诊断问题
-            opposite_direction = Direction.SHORT if params["direction"] == Direction.LONG else Direction.LONG
-            all_active_orders = self.main_engine.get_all_active_orders()
-            # 只查询当前合约的活动订单（性能优化）
-            symbol_active_orders = [
-                order for order in all_active_orders
-                if order.vt_symbol == vt_symbol and order.is_active()
-            ]
-            opposite_orders = [
-                order for order in symbol_active_orders
-                if order.direction == opposite_direction
-            ]
-            
-            # 构建错误信息
-            error_msg = f"价格突破触发下单失败: {vt_symbol} {params['direction'].value} "
-            error_msg += f"{params['volume']}@{params['price']}"
-            
-            if opposite_orders:
-                order_info = ", ".join([
-                    f"{order.direction.value} {order.volume}@{order.price} (订单ID: {order.vt_orderid})"
-                    for order in opposite_orders
-                ])
-                error_msg += f"\n  发现相反方向的未成交订单: {order_info}"
-                error_msg += f"\n  建议: 请先撤销相反方向的未成交订单后重试"
-            elif symbol_active_orders:
-                # 虽然没有相反方向的订单，但有其他方向的订单，也记录下来
-                order_info = ", ".join([
-                    f"{order.direction.value} {order.volume}@{order.price} (订单ID: {order.vt_orderid})"
-                    for order in symbol_active_orders
-                ])
-                error_msg += f"\n  当前合约活动订单: {order_info}"
-            else:
-                error_msg += f" (可能因账户限制等原因失败，但突破已触发)"
-            
-            self.main_engine.write_log(error_msg)
-        
-        # 无论下单成功或失败，都移除挂单参数并取消注册价格突破监控
-        # 因为价格已经突破，不应该再次触发
-        if line_id in controller._pending_order_params:
-            del controller._pending_order_params[line_id]
-        # 取消注册价格突破监控（已触发，无论成功或失败）
-        if self.chart._breakthrough_monitor:
-            self.chart._breakthrough_monitor.unregister_line(line_id)
+        注意：此方法保留用于向后兼容，实际逻辑已迁移到ChartWidget.trigger_pending_order_breakthrough
+        """
+        # 直接调用ChartWidget的通用方法
+        # ChartWidget的_on_price_breakthrough会调用trigger_pending_order_breakthrough
+        if self.chart:
+            self.chart._on_price_breakthrough(event)
     
     def simulate_trade_breakthrough(self) -> None:
         """
@@ -5038,13 +4917,20 @@ class ChartWindow(QtWidgets.QWidget):
         3. 触发价格突破监控，从而触发下单
         4. 下单后会自动更新持仓和浮动盈亏
         """
+        self.main_engine.write_log("[模拟成交] 方法被调用")
+        
         if not self.chart:
-            self.main_engine.write_log("图表未初始化，无法模拟成交")
+            self.main_engine.write_log("[模拟成交] 图表未初始化，无法模拟成交")
             return
         
         # 获取所有挂单线
         price_line_manager = self.chart._price_line_manager
+        if not price_line_manager:
+            self.main_engine.write_log("[模拟成交] 价格线管理器未初始化")
+            return
+        
         all_lines = price_line_manager.get_all_lines()
+        self.main_engine.write_log(f"[模拟成交] 找到 {len(all_lines)} 条价格线")
         
         # 筛选出挂单线
         from vnpy.chart.price_line import PriceLineType
@@ -5054,8 +4940,10 @@ class ChartWindow(QtWidgets.QWidget):
             if line.get_line_type() == PriceLineType.PENDING
         }
         
+        self.main_engine.write_log(f"[模拟成交] 找到 {len(pending_lines)} 条挂单线")
+        
         if not pending_lines:
-            self.main_engine.write_log("没有找到挂单线，无法模拟成交")
+            self.main_engine.write_log("[模拟成交] 没有找到挂单线，无法模拟成交")
             QtWidgets.QMessageBox.information(
                 self,
                 _("提示"),
@@ -5194,12 +5082,16 @@ class ChartWindow(QtWidgets.QWidget):
                 continue
             
             # 检查挂单线是否有挂单参数（说明是有效的挂单线）
-            if not hasattr(controller, '_pending_order_params'):
-                self.main_engine.write_log(f"模拟成交跳过: 挂单线 {line_id} 没有挂单参数")
-                continue
+            # 注意：从数据库加载的挂单线可能没有挂单参数，需要特殊处理
+            has_pending_params = (
+                hasattr(controller, '_pending_order_params') and 
+                line_id in controller._pending_order_params
+            )
             
-            if line_id not in controller._pending_order_params:
-                self.main_engine.write_log(f"模拟成交跳过: 挂单线 {line_id} 不在挂单参数列表中（可能已触发）")
+            if not has_pending_params:
+                self.main_engine.write_log(
+                    f"模拟成交跳过: 挂单线 {line_id} 没有挂单参数（可能是从数据库加载的挂单线，需要重新创建挂单）"
+                )
                 continue
             
             # 检查挂单线是否已注册到价格突破监控
@@ -5207,82 +5099,52 @@ class ChartWindow(QtWidgets.QWidget):
                 self.main_engine.write_log(f"模拟成交失败: 价格突破监控未初始化")
                 continue
             
-            # 如果还没有注册，先注册
-            # 使用lambda包装，确保回调在主线程中执行
-            if line_id not in self.chart._breakthrough_monitor._callbacks:
-                def safe_callback(event):
-                    """确保回调在主线程中执行"""
-                    from vnpy.trader.ui import QtCore
-                    if QtCore.QThread.currentThread() != self.thread():
-                        # 如果不在主线程，使用QTimer.singleShot调度到主线程
-                        QtCore.QTimer.singleShot(0, lambda: self._on_price_breakthrough(event, controller))
-                    else:
-                        # 在主线程中直接调用
-                        self._on_price_breakthrough(event, controller)
-                
-                self.chart._breakthrough_monitor.register_line(
-                    line_id,
-                    line,
-                    safe_callback
-                )
-                self.main_engine.write_log(
-                    f"模拟成交: 注册挂单线 {line_id} 到价格突破监控"
-                )
-            
-            # 设置last_price，模拟价格从last_price变化到current_price
-            # 重要：必须在调用update_tick之前设置last_price
-            # 注意：register_line会设置初始last_price为line_price，这里需要覆盖它
-            # 确保在注册后再设置，避免被覆盖
-            # 强制设置last_price，无论是否已注册
-            self.chart._breakthrough_monitor._last_prices[line_id] = last_price
-            
-            # 验证设置是否正确
-            actual_last_price = self.chart._breakthrough_monitor._last_prices.get(line_id)
-            if actual_last_price != last_price:
-                self.main_engine.write_log(
-                    f"模拟成交警告: last_price设置失败 - 期望={last_price:.2f}, 实际={actual_last_price:.2f}"
-                )
-                # 如果设置失败，跳过这个挂单线
-                continue
-            
-            # 使用整数价格进行日志输出和突破条件检查
-            # 注意：使用actual_last_price而不是last_price，确保使用实际设置的值
-            breakthrough_condition_met = actual_last_price < line_price_int <= current_price if direction == "long" else actual_last_price > line_price_int >= current_price
-            # 将方向转换为中文用于日志显示
+            # 直接调用ChartWidget的通用触发方法（与真实tickdata触发共用逻辑）
+            # 不再通过PriceBreakthroughMonitor，直接调用trigger_pending_order_breakthrough
             direction_display = "多" if direction == "long" else "空"
             self.main_engine.write_log(
                 f"模拟成交: {vt_symbol} {direction_display} 挂单线 {line_price_int} "
-                f"准备触发突破 (last_price={actual_last_price:.2f}, current_price={current_price:.2f}, "
-                f"突破幅度={breakthrough_points}个点, "
-                f"突破条件: {'last_price < line_price_int <= current_price' if direction == 'long' else 'last_price > line_price_int >= current_price'} = {breakthrough_condition_met})"
+                f"准备触发突破 (last_price={last_price:.2f}, current_price={current_price:.2f}, "
+                f"突破幅度={breakthrough_points}个点)"
             )
             
-            # ✅ 性能优化：直接同步执行（已在主线程中，无需异步）
-            # 调用价格突破监控的update_tick方法
-            # 模拟成交功能在主线程中执行，可以直接同步调用，无需使用QTimer.singleShot
-            from vnpy.trader.ui import QtCore
-            
-            # 检查是否在主线程中（安全验证）
-            app = QtCore.QCoreApplication.instance()
-            if app and QtCore.QThread.currentThread() == app.thread():
-                # 在主线程中，直接同步执行
-                self.chart._breakthrough_monitor.update_tick(simulate_tick, {line_id: line})
-            else:
-                # 不在主线程中（理论上不会发生），使用异步执行
-                QtCore.QTimer.singleShot(0, lambda: self.chart._breakthrough_monitor.update_tick(simulate_tick, {line_id: line}))
-            
-            # ✅ 优化：同步执行后可以立即检查结果（无需延迟）
-            # 检查是否真的触发了突破（通过检查挂单参数是否被移除）
-            if line_id not in controller._pending_order_params:
-                triggered_count += 1
+            # 调用ChartWidget的通用触发方法
+            # 直接调用方法，如果不存在会抛出AttributeError，我们捕获它
+            try:
+                # 直接调用方法（不使用getattr，避免PyQtGraph的PlotWidget的__getattr__问题）
+                # 如果方法不存在，会抛出AttributeError
+                result = self.chart.trigger_pending_order_breakthrough(line_id, line, simulate_tick)
+                if result:
+                    triggered_count += 1
+                    self.main_engine.write_log(
+                        f"模拟成交成功: {vt_symbol} {direction_display} 挂单线 {line_price:.2f} 已触发突破并下单"
+                    )
+                else:
+                    self.main_engine.write_log(
+                        f"模拟成交失败: {vt_symbol} {direction_display} 挂单线 {line_price:.2f} 未触发突破 "
+                        f"(可能挂单参数已不存在或下单失败)"
+                    )
+            except AttributeError as e:
+                # 方法不存在
+                error_msg = str(e).replace("{", "{{").replace("}", "}}")
                 self.main_engine.write_log(
-                    f"模拟成交成功: {vt_symbol} {direction_display} 挂单线 {line_price:.2f} 已触发突破并下单"
+                    f"模拟成交失败: ChartWidget没有trigger_pending_order_breakthrough方法: {error_msg}"
                 )
-            else:
+                import traceback
+                self.main_engine.write_log(f"异常堆栈: {traceback.format_exc()}")
+            except Exception as e:
+                # 其他异常
+                error_msg = str(e).replace("{", "{{").replace("}", "}}")
                 self.main_engine.write_log(
-                    f"模拟成交失败: {vt_symbol} {direction_display} 挂单线 {line_price:.2f} 未触发突破 "
-                    f"(挂单参数仍在，说明回调未执行或下单失败)"
+                    f"模拟成交异常: {vt_symbol} {direction_display} 挂单线 {line_price:.2f} 触发失败: {error_msg}"
                 )
+                import traceback
+                self.main_engine.write_log(f"异常堆栈: {traceback.format_exc()}")
+                self.main_engine.write_log(
+                    f"模拟成交异常: {vt_symbol} {direction_display} 挂单线 {line_price:.2f} 触发失败: {error_msg}"
+                )
+                import traceback
+                self.main_engine.write_log(f"异常堆栈: {traceback.format_exc()}")
         
         if triggered_count > 0:
             self.main_engine.write_log(
@@ -5296,9 +5158,361 @@ class ChartWindow(QtWidgets.QWidget):
         else:
             self.main_engine.write_log("模拟成交失败: 未能触发任何挂单线")
     
+    def _update_simulate_buttons_state(self) -> None:
+        """
+        更新模拟功能按钮的状态
+        
+        规则：
+        - 未选择合约时：三个按钮全部disabled
+        - 有合约时：三个按钮全部enabled（允许在有tickdata时也使用模拟功能进行测试）
+        """
+        if not self.current_vt_symbol:
+            # 未选择合约，按钮禁用
+            self.simulate_trade_button.setEnabled(False)
+            self.simulate_stop_loss_button.setEnabled(False)
+            self.simulate_take_profit_button.setEnabled(False)
+            return
+        
+        # 有合约时，按钮全部启用（允许在有tickdata时也使用模拟功能进行测试）
+        self.simulate_trade_button.setEnabled(True)
+        self.simulate_stop_loss_button.setEnabled(True)
+        self.simulate_take_profit_button.setEnabled(True)
+    
+    def simulate_stop_loss(self) -> None:
+        """
+        模拟tick触及止损线后触发平仓
+        
+        功能：
+        1. 获取所有止损线（STOP_LOSS类型）
+        2. 创建模拟tick数据，价格触及止损线
+        3. 调用ChartWidget的通用触发方法（与真实tickdata触发共用逻辑）
+        """
+        self.main_engine.write_log("[模拟止损] 方法被调用")
+        
+        if not self.chart:
+            self.main_engine.write_log("[模拟止损] 图表未初始化，无法模拟止损")
+            return
+        
+        # 获取所有价格线
+        price_line_manager = self.chart._price_line_manager
+        if not price_line_manager:
+            self.main_engine.write_log("[模拟止损] 价格线管理器未初始化，无法模拟止损")
+            return
+        
+        all_lines = price_line_manager.get_all_lines()
+        self.main_engine.write_log(f"[模拟止损] 找到 {len(all_lines)} 条价格线")
+        
+        # 筛选出止损线
+        from vnpy.chart.price_line import PriceLineType
+        stop_loss_lines = {
+            line_id: line 
+            for line_id, line in all_lines.items() 
+            if line.get_line_type() == PriceLineType.STOP_LOSS
+        }
+        
+        self.main_engine.write_log(f"[模拟止损] 找到 {len(stop_loss_lines)} 条止损线")
+        
+        if not stop_loss_lines:
+            self.main_engine.write_log("[模拟止损] 没有找到止损线，无法模拟止损")
+            QtWidgets.QMessageBox.information(
+                self,
+                _("提示"),
+                _("当前没有止损线，请先创建止损线后再使用模拟止损功能。")
+            )
+            return
+        
+        # 获取当前合约信息
+        vt_symbol = self.current_vt_symbol
+        if not vt_symbol:
+            self.main_engine.write_log("未选择合约，无法模拟止损")
+            QtWidgets.QMessageBox.information(
+                self,
+                _("提示"),
+                _("请先选择合约后再使用模拟止损功能。")
+            )
+            return
+        
+        # 获取合约信息
+        contract = self.main_engine.get_contract(vt_symbol)
+        if not contract:
+            self.main_engine.write_log(f"合约 {vt_symbol} 未找到，无法模拟止损")
+            return
+        
+        # 获取当前tick数据（用于获取其他字段）
+        current_tick = self.main_engine.get_tick(vt_symbol)
+        
+        # 创建模拟tick数据
+        from vnpy.trader.object import TickData
+        from vnpy.trader.constant import Exchange
+        from vnpy.trader.utility import extract_vt_symbol
+        from datetime import datetime
+        
+        symbol, exchange = extract_vt_symbol(vt_symbol)
+        pricetick = contract.pricetick if contract.pricetick > 0 else 1.0
+        
+        triggered_count = 0
+        
+        # 遍历所有止损线，创建模拟tick并触发
+        for line_id, line in stop_loss_lines.items():
+            line_price = line.get_price()
+            line_direction_str = line.get_direction()
+            
+            # 将方向字符串转换为标准格式
+            if line_direction_str in ["多", "long", "LONG"]:
+                line_direction = "long"
+            elif line_direction_str in ["空", "short", "SHORT"]:
+                line_direction = "short"
+            else:
+                self.main_engine.write_log(f"模拟止损跳过: 止损线 {line_id} 方向未知: {line_direction_str}")
+                continue
+            
+            # 创建模拟tick数据，价格触及止损线
+            # 多仓止损：价格低于止损线
+            # 空仓止损：价格高于止损线
+            if line_direction == "long":
+                # 多仓止损：价格低于止损线
+                simulate_price = line_price - pricetick
+            else:
+                # 空仓止损：价格高于止损线
+                simulate_price = line_price + pricetick
+            
+            # 创建模拟tick
+            simulate_tick = TickData(
+                symbol=symbol,
+                exchange=exchange,
+                datetime=datetime.now(),
+                gateway_name=contract.gateway_name,
+                last_price=simulate_price,
+                # 如果有当前tick，复制其他字段
+                bid_price_1=current_tick.bid_price_1 if current_tick else simulate_price - pricetick,
+                ask_price_1=current_tick.ask_price_1 if current_tick else simulate_price + pricetick,
+                bid_volume_1=current_tick.bid_volume_1 if current_tick else 100,
+                ask_volume_1=current_tick.ask_volume_1 if current_tick else 100,
+                volume=current_tick.volume if current_tick else 0,
+                open_interest=current_tick.open_interest if current_tick else 0,
+            )
+            
+            # 调用ChartWidget的通用触发方法（与真实tickdata触发共用逻辑）
+            try:
+                self.main_engine.write_log(
+                    f"[模拟止损] 准备触发止损线 {line_id}: "
+                    f"价格={line_price:.2f}, 方向={line_direction}, 模拟价格={simulate_price:.2f}"
+                )
+                result = self.chart.trigger_stop_loss_close(line_id, line, simulate_tick)
+                if result:
+                    triggered_count += 1
+                    self.main_engine.write_log(f"[模拟止损] 止损线 {line_id} 触发成功")
+                else:
+                    self.main_engine.write_log(f"[模拟止损] 止损线 {line_id} 触发失败（可能无持仓或持仓为0）")
+            except AttributeError as e:
+                self.main_engine.write_log(f"[模拟止损] 错误: ChartWidget没有trigger_stop_loss_close方法: {e}")
+                import traceback
+                self.main_engine.write_log(f"[模拟止损] 异常堆栈: {traceback.format_exc()}")
+            except Exception as e:
+                self.main_engine.write_log(f"[模拟止损] 异常: {e}")
+                import traceback
+                self.main_engine.write_log(f"[模拟止损] 异常堆栈: {traceback.format_exc()}")
+        
+        if triggered_count > 0:
+            self.main_engine.write_log(
+                f"模拟止损完成: 共触发 {triggered_count} 个止损线，请查看持仓和订单"
+            )
+            QtWidgets.QMessageBox.information(
+                self,
+                _("模拟止损"),
+                _("已模拟触发 {} 个止损线平仓。\n请查看【持仓】和【委托】窗口查看持仓和订单状态。").format(triggered_count)
+            )
+        else:
+            self.main_engine.write_log("模拟止损失败: 未能触发任何止损线（可能无持仓或持仓为0）")
+    
+    def simulate_take_profit(self) -> None:
+        """
+        模拟tick触及止盈线后触发平仓
+        
+        功能：
+        1. 获取所有止盈线（TAKE_PROFIT类型）
+        2. 创建模拟tick数据，价格触及止盈线
+        3. 调用ChartWidget的通用触发方法（与真实tickdata触发共用逻辑）
+        """
+        self.main_engine.write_log("[模拟止盈] 方法被调用")
+        
+        if not self.chart:
+            self.main_engine.write_log("[模拟止盈] 图表未初始化，无法模拟止盈")
+            return
+        
+        # 获取所有价格线
+        price_line_manager = self.chart._price_line_manager
+        if not price_line_manager:
+            self.main_engine.write_log("[模拟止盈] 价格线管理器未初始化，无法模拟止盈")
+            return
+        
+        all_lines = price_line_manager.get_all_lines()
+        self.main_engine.write_log(f"[模拟止盈] 找到 {len(all_lines)} 条价格线")
+        
+        # 筛选出止盈线
+        from vnpy.chart.price_line import PriceLineType
+        take_profit_lines = {
+            line_id: line 
+            for line_id, line in all_lines.items() 
+            if line.get_line_type() == PriceLineType.TAKE_PROFIT
+        }
+        
+        self.main_engine.write_log(f"[模拟止盈] 找到 {len(take_profit_lines)} 条止盈线")
+        
+        if not take_profit_lines:
+            self.main_engine.write_log("[模拟止盈] 没有找到止盈线，无法模拟止盈")
+            QtWidgets.QMessageBox.information(
+                self,
+                _("提示"),
+                _("当前没有止盈线，请先创建止盈线后再使用模拟止盈功能。")
+            )
+            return
+        
+        # 获取当前合约信息
+        vt_symbol = self.current_vt_symbol
+        if not vt_symbol:
+            self.main_engine.write_log("未选择合约，无法模拟止盈")
+            QtWidgets.QMessageBox.information(
+                self,
+                _("提示"),
+                _("请先选择合约后再使用模拟止盈功能。")
+            )
+            return
+        
+        # 获取合约信息
+        contract = self.main_engine.get_contract(vt_symbol)
+        if not contract:
+            self.main_engine.write_log(f"合约 {vt_symbol} 未找到，无法模拟止盈")
+            return
+        
+        # 获取当前tick数据（用于获取其他字段）
+        current_tick = self.main_engine.get_tick(vt_symbol)
+        
+        # 创建模拟tick数据
+        from vnpy.trader.object import TickData
+        from vnpy.trader.constant import Exchange
+        from vnpy.trader.utility import extract_vt_symbol
+        from datetime import datetime
+        
+        symbol, exchange = extract_vt_symbol(vt_symbol)
+        pricetick = contract.pricetick if contract.pricetick > 0 else 1.0
+        
+        triggered_count = 0
+        
+        # 遍历所有止盈线，创建模拟tick并触发
+        for line_id, line in take_profit_lines.items():
+            line_price = line.get_price()
+            line_direction_str = line.get_direction()
+            
+            # 将方向字符串转换为标准格式
+            if line_direction_str in ["多", "long", "LONG"]:
+                line_direction = "long"
+            elif line_direction_str in ["空", "short", "SHORT"]:
+                line_direction = "short"
+            else:
+                self.main_engine.write_log(f"模拟止盈跳过: 止盈线 {line_id} 方向未知: {line_direction_str}")
+                continue
+            
+            # 创建模拟tick数据，价格触及止盈线
+            # 多仓止盈：价格高于止盈线
+            # 空仓止盈：价格低于止盈线
+            if line_direction == "long":
+                # 多仓止盈：价格高于止盈线
+                simulate_price = line_price + pricetick
+            else:
+                # 空仓止盈：价格低于止盈线
+                simulate_price = line_price - pricetick
+            
+            # 创建模拟tick
+            simulate_tick = TickData(
+                symbol=symbol,
+                exchange=exchange,
+                datetime=datetime.now(),
+                gateway_name=contract.gateway_name,
+                last_price=simulate_price,
+                # 如果有当前tick，复制其他字段
+                bid_price_1=current_tick.bid_price_1 if current_tick else simulate_price - pricetick,
+                ask_price_1=current_tick.ask_price_1 if current_tick else simulate_price + pricetick,
+                bid_volume_1=current_tick.bid_volume_1 if current_tick else 100,
+                ask_volume_1=current_tick.ask_volume_1 if current_tick else 100,
+                volume=current_tick.volume if current_tick else 0,
+                open_interest=current_tick.open_interest if current_tick else 0,
+            )
+            
+            # 调用ChartWidget的通用触发方法（与真实tickdata触发共用逻辑）
+            try:
+                self.main_engine.write_log(
+                    f"[模拟止盈] 准备触发止盈线 {line_id}: "
+                    f"价格={line_price:.2f}, 方向={line_direction}, 模拟价格={simulate_price:.2f}"
+                )
+                result = self.chart.trigger_take_profit_close(line_id, line, simulate_tick)
+                if result:
+                    triggered_count += 1
+                    self.main_engine.write_log(f"[模拟止盈] 止盈线 {line_id} 触发成功")
+                else:
+                    self.main_engine.write_log(f"[模拟止盈] 止盈线 {line_id} 触发失败（可能无持仓或持仓为0）")
+            except AttributeError as e:
+                self.main_engine.write_log(f"[模拟止盈] 错误: ChartWidget没有trigger_take_profit_close方法: {e}")
+                import traceback
+                self.main_engine.write_log(f"[模拟止盈] 异常堆栈: {traceback.format_exc()}")
+            except Exception as e:
+                self.main_engine.write_log(f"[模拟止盈] 异常: {e}")
+                import traceback
+                self.main_engine.write_log(f"[模拟止盈] 异常堆栈: {traceback.format_exc()}")
+        
+        if triggered_count > 0:
+            self.main_engine.write_log(
+                f"模拟止盈完成: 共触发 {triggered_count} 个止盈线，请查看持仓和订单"
+            )
+            QtWidgets.QMessageBox.information(
+                self,
+                _("模拟止盈"),
+                _("已模拟触发 {} 个止盈线平仓。\n请查看【持仓】和【委托】窗口查看持仓和订单状态。").format(triggered_count)
+            )
+        else:
+            self.main_engine.write_log("模拟止盈失败: 未能触发任何止盈线（可能无持仓或持仓为0）")
+    
     def show(self) -> None:
         """显示窗口"""
         super().show()
         self.activateWindow()
         self.raise_()
         self.raise_()
+    
+    def set_simulate_functions_enabled(self, enabled: bool) -> None:
+        """
+        设置模拟功能按钮的启用/禁用状态。
+        
+        Args:
+            enabled: True表示启用，False表示禁用
+        """
+        self._simulate_functions_enabled = enabled
+        self.simulate_trade_button.setEnabled(enabled)
+        self.simulate_stop_loss_button.setEnabled(enabled)
+        self.simulate_take_profit_button.setEnabled(enabled)
+        
+        # 更新按钮样式以反映状态
+        if enabled:
+            self.simulate_trade_button.setStyleSheet("background-color: #FF9800; color: white; font-weight: bold;")
+            self.simulate_stop_loss_button.setStyleSheet("background-color: #F44336; color: white; font-weight: bold;")
+            self.simulate_take_profit_button.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;")
+        else:
+            self.simulate_trade_button.setStyleSheet("background-color: #CCCCCC; color: #666666; font-weight: normal;")
+            self.simulate_stop_loss_button.setStyleSheet("background-color: #CCCCCC; color: #666666; font-weight: normal;")
+            self.simulate_take_profit_button.setStyleSheet("background-color: #CCCCCC; color: #666666; font-weight: normal;")
+        
+        if self.main_engine:
+            status_text = _("已启用") if enabled else _("已禁用")
+            self.main_engine.write_log(
+                f"[ChartWindow] 模拟功能{status_text}：模拟成交、模拟止损、模拟止盈",
+                "ChartWindow"
+            )
+    
+    def is_simulate_functions_enabled(self) -> bool:
+        """
+        获取模拟功能按钮的启用/禁用状态。
+        
+        Returns:
+            True表示启用，False表示禁用
+        """
+        return self._simulate_functions_enabled
