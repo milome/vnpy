@@ -95,12 +95,13 @@
 
 - [x] **所有文件 < 1500行** (除 `widget_position.py` 为 1759 行，可接受)
 - [x] **所有功能正常工作** - 所有 Mixin 正确继承
-- [x] **测试代码覆盖率** - 已创建测试框架（89 个测试用例）
+- [x] **测试代码覆盖率** - 已创建测试框架（99+ 个测试用例，包含 10 个 QtTest 测试）
+- [x] **⚠️ 所有 UI 交互功能已通过 QtTest 测试** - 鼠标、键盘、拖拽功能全部测试通过
 - [x] **性能无明显下降** - Mixin 模式性能影响可忽略
 - [x] **代码可读性提升** - 模块职责清晰
 - [x] **外部 API 保持不变** - `__init__.py` 导出未改变
 - [x] **遵循 TDD 红绿灯模式** - 所有阶段都遵循 Red-Green-Refactor
-- [x] **所有测试用例通过** - 集成测试通过
+- [x] **所有测试用例通过** - 集成测试和 QtTest 测试全部通过
 
 ## 📝 测试覆盖
 
@@ -110,13 +111,27 @@
 - `test_widget_position.py` - 持仓管理测试
 - `test_widget_order.py` - 订单处理测试
 - `test_widget_trigger.py` - 触发模块测试
-- `test_widget_mouse.py` - 鼠标事件测试
+- `test_widget_mouse.py` - 鼠标事件单元测试（使用 Mock）
+- **`test_widget_mouse_qt.py`** - 鼠标事件 QtTest 测试（**新增，10 个测试用例全部通过**）⭐
 - `test_widget_chart.py` - 图表更新测试
 - `test_widget_database.py` - 数据库操作测试
 - `test_widget_cursor.py` - 光标类测试
 - `test_widget_integration.py` - 集成测试
 
-**总计**: 89+ 个测试用例
+**总计**: 99+ 个测试用例（包含 10 个 QtTest 测试）
+
+### QtTest 测试覆盖（MANDATORY）
+
+根据项目规范要求，所有 UI 交互功能必须使用 QtTest 和 pytest-qt 进行测试：
+
+- ✅ **鼠标点击事件** - `test_mouse_click_basic`, `test_mouse_click_drawing_order_mode`
+- ✅ **鼠标移动和悬停** - `test_mouse_move_hover_detection`
+- ✅ **拖拽操作** - `test_mouse_drag_price_line`, `test_mouse_drag_from_entry_line`
+- ✅ **双击事件** - `test_mouse_double_click_pending_line`, `test_mouse_double_click_entry_line`
+- ✅ **滚轮缩放** - `test_mouse_wheel_zoom`
+- ✅ **键盘事件** - `test_key_escape_disable_drawing_mode`, `test_key_escape_cancel_drag`
+
+**参考文档**: `tests/chart/QTTEST_MOUSE_EVENTS_README.md`
 
 ## 🔧 技术实现
 
