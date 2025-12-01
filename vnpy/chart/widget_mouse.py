@@ -57,15 +57,15 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
         # 检查鼠标是否在右侧坐标轴区域（基于widget坐标）
         axis_start_x = widget_width - axis_width
         
-        # 添加调试日志（仅当鼠标在坐标轴附近时）
-        if widget_pos.x() >= axis_start_x - 10:  # 在坐标轴附近10像素内时记录日志
-            if hasattr(self, '_main_engine') and self._main_engine:
-                self._main_engine.write_log(
-                    f"[ChartWidget] 检查坐标轴区域: 鼠标widget_pos={widget_pos}, "
-                    f"widget_width={widget_width}, axis_start_x={axis_start_x}, "
-                    f"axis_width={axis_width}, 在坐标轴区域={widget_pos.x() >= axis_start_x}",
-                    "ChartWidget"
-                )
+        # 添加调试日志（仅当需要排查问题时启用）
+        # if widget_pos.x() >= axis_start_x - 10:  # 在坐标轴附近10像素内时记录日志
+        #     if hasattr(self, '_main_engine') and self._main_engine:
+        #         self._main_engine.write_log(
+        #             f"[ChartWidget] 检查坐标轴区域: 鼠标widget_pos={widget_pos}, "
+        #             f"widget_width={widget_width}, axis_start_x={axis_start_x}, "
+        #             f"axis_width={axis_width}, 在坐标轴区域={widget_pos.x() >= axis_start_x}",
+        #             "ChartWidget"
+        #         )
         
         # 如果鼠标不在坐标轴区域，直接返回
         if widget_pos.x() < axis_start_x:
@@ -226,15 +226,15 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                                         if hasattr(self, '_update_plot_limits'):
                                             self._update_plot_limits()
                                 
-                                # 添加调试日志
-                                if hasattr(self, '_main_engine') and self._main_engine:
-                                    self._main_engine.write_log(
-                                        f"[ChartWidget] 拖拽时间轴: dx={total_dx_pixels:.1f}px, "
-                                        f"index_delta={index_delta:.2f}, "
-                                        f"right_ix={self._right_ix}, x_range=[{new_min_ix:.2f}, {new_max_ix:.2f}], "
-                                        f"future_bars={self._future_bars if hasattr(self, '_future_bars') else 0}",
-                                        "ChartWidget"
-                                    )
+                                # 添加调试日志（已注释：减少日志干扰）
+                                # if hasattr(self, '_main_engine') and self._main_engine:
+                                #     self._main_engine.write_log(
+                                #         f"[ChartWidget] 拖拽时间轴: dx={total_dx_pixels:.1f}px, "
+                                #         f"index_delta={index_delta:.2f}, "
+                                #         f"right_ix={self._right_ix}, x_range=[{new_min_ix:.2f}, {new_max_ix:.2f}], "
+                                #         f"future_bars={self._future_bars if hasattr(self, '_future_bars') else 0}",
+                                #         "ChartWidget"
+                                #     )
                                 
                                 # 直接设置所有plot的X轴范围
                                 for plot in self._plots.values():
@@ -278,13 +278,13 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                                 new_y_max = y_max + price_delta
                                 
                                 # 添加调试日志
-                                if hasattr(self, '_main_engine') and self._main_engine:
-                                    self._main_engine.write_log(
-                                        f"[ChartWidget] 拖拽坐标轴: dy={total_dy_pixels:.1f}px, "
-                                        f"price_delta={price_delta:.2f}, "
-                                        f"y_range=[{new_y_min:.2f}, {new_y_max:.2f}]",
-                                        "ChartWidget"
-                                    )
+                                # if hasattr(self, '_main_engine') and self._main_engine:
+                                #     self._main_engine.write_log(
+                                #         f"[ChartWidget] 拖拽坐标轴: dy={total_dy_pixels:.1f}px, "
+                                #         f"price_delta={price_delta:.2f}, "
+                                #         f"y_range=[{new_y_min:.2f}, {new_y_max:.2f}]",
+                                #         "ChartWidget"
+                                #     )
                                 
                                 # 设置新的Y轴范围（仅对当前plot）
                                 view_box.setYRange(new_y_min, new_y_max, padding=0)
@@ -357,6 +357,18 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                         else:
                             # 空仓：价格高于入场价是止损，低于入场价是止盈
                             line_type = PriceLineType.STOP_LOSS if new_price > entry_price else PriceLineType.TAKE_PROFIT
+                        
+                        # 添加调试日志，帮助排查类型判断问题
+                        if hasattr(self, '_main_engine') and self._main_engine:
+                            line_type_name = "止损" if line_type == PriceLineType.STOP_LOSS else "止盈"
+                            price_diff = new_price - entry_price
+                            position_desc = "上方" if price_diff > 0 else "下方"
+                            self._main_engine.write_log(
+                                f"[ChartWidget] 拖拽预览线类型判断: 入场价={entry_price:.2f}, "
+                                f"拖拽价格={new_price:.2f} ({position_desc}, 价差={price_diff:+.2f}), "
+                                f"方向={direction}, 判断为={line_type_name}",
+                                "ChartWidget"
+                            )
                         
                         preview_line = self._price_line_drag_handler.get_preview_line()
                         if preview_line:
@@ -691,6 +703,27 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                         line_type = preview_line.get_line_type()
                         direction = preview_line.get_direction()
                         
+                        # ✅ 重新验证类型判断（基于最终价格，确保类型正确）
+                        entry_price = entry_line.get_price()
+                        if direction == "long":
+                            # 多仓：价格低于入场价是止损，高于入场价是止盈
+                            expected_line_type = PriceLineType.STOP_LOSS if final_price < entry_price else PriceLineType.TAKE_PROFIT
+                        else:
+                            # 空仓：价格高于入场价是止损，低于入场价是止盈
+                            expected_line_type = PriceLineType.STOP_LOSS if final_price > entry_price else PriceLineType.TAKE_PROFIT
+                        
+                        # 如果预览线类型与预期不符，使用预期类型（防止类型判断错误）
+                        if line_type != expected_line_type:
+                            if hasattr(self, '_main_engine') and self._main_engine:
+                                old_type_name = "止损" if line_type == PriceLineType.STOP_LOSS else "止盈"
+                                new_type_name = "止损" if expected_line_type == PriceLineType.STOP_LOSS else "止盈"
+                                self._main_engine.write_log(
+                                    f"[ChartWidget] 预览线类型修正: 入场价={entry_price:.2f}, 最终价格={final_price:.2f}, "
+                                    f"方向={direction}, 预览线类型={old_type_name} -> 修正为={new_type_name}",
+                                    "ChartWidget"
+                                )
+                            line_type = expected_line_type
+                        
                         # 删除预览线
                         preview_line_id = None
                         for lid, line in manager.get_all_lines().items():
@@ -723,6 +756,9 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                             )
                             
                             new_line = manager.get_line(new_line_id)
+                            # 设置创建时间（用于防止创建后立即触发）
+                            if new_line:
+                                new_line.set_creation_time()
                             if new_line and self._first_plot:
                                 self._first_plot.addItem(new_line)
                                 
@@ -873,6 +909,9 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                 elif line_type in (PriceLineType.STOP_LOSS, PriceLineType.TAKE_PROFIT):
                     # 如果拖拽的是止损/止盈线，更新保存的点数
                     self._update_points_on_line_drag(dragging_line, final_price, line_type)
+                    # ✅ 拖拽结束后，更新创建时间（用于防止拖拽后立即触发）
+                    if dragging_line:
+                        dragging_line.set_creation_time()
             
             event.accept()
             return
@@ -1083,11 +1122,15 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                                     # 删除止损线
                                     stop_loss_info = relations.get("stop_loss")
                                     if stop_loss_info and stop_loss_info.get("line_id"):
-                                        self._price_line_manager.delete_line(stop_loss_info["line_id"])
+                                        stop_loss_line_id = stop_loss_info["line_id"]
+                                        # 使用统一的价格线删除接口，确保同时从突破监控中注销
+                                        self.remove_price_line(stop_loss_line_id)
                                     # 删除止盈线
                                     take_profit_info = relations.get("take_profit")
                                     if take_profit_info and take_profit_info.get("line_id"):
-                                        self._price_line_manager.delete_line(take_profit_info["line_id"])
+                                        take_profit_line_id = take_profit_info["line_id"]
+                                        # 使用统一的价格线删除接口，确保同时从突破监控中注销
+                                        self.remove_price_line(take_profit_line_id)
                                 # 清理关联关系
                                 self._drawing_order_controller._pending_line_relations.pop(line_id, None)
                             
@@ -1120,9 +1163,11 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                             # Remove line from controller (this will also remove mappings)
                             if vt_orderid:
                                 self._drawing_order_controller.remove_order_line(vt_orderid)
+                                # 确保挂单线本身也通过统一接口删除（包括突破监控反注册）
+                                self.remove_price_line(line_id)
                             else:
                                 # If no order linked, just remove the line
-                                self.get_price_line_manager().delete_line(line_id)
+                                self.remove_price_line(line_id)
                         else:
                             # No controller, just remove the line
                             self.get_price_line_manager().delete_line(line_id)
@@ -1368,21 +1413,8 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                             "ChartWidget"
                         )
                     
-                    # 从 plot 中移除
-                    if self._first_plot:
-                        try:
-                            clicked_line_item = self._price_line_manager.get_line(line_id)
-                            if clicked_line_item:
-                                self._first_plot.removeItem(clicked_line_item)
-                        except Exception as e:
-                            if hasattr(self, '_main_engine') and self._main_engine:
-                                self._main_engine.write_log(
-                                    f"[ChartWidget] 从plot移除{line_type.value}线失败: {str(e)}",
-                                    "ChartWidget"
-                                )
-                    
-                    # 从管理器中删除
-                    delete_result = self._price_line_manager.delete_line(line_id)
+                    # 使用统一的价格线删除接口，确保同时从突破监控中注销
+                    delete_result = self.remove_price_line(line_id)
                     if hasattr(self, '_main_engine') and self._main_engine:
                         self._main_engine.write_log(
                             f"[ChartWidget] 双击{line_type.value}线，删除结果: line_id={line_id}, 成功={delete_result}",
@@ -1392,7 +1424,17 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
             event.accept()
             return
 
-        super().mouseDoubleClickEvent(event)
+        # 调用父类的 mouseDoubleClickEvent（如果存在）
+        # 在 Mixin 模式中，ChartWidgetMixinBase 没有这个方法，
+        # 但最终的 ChartWidget 继承自 pg.PlotWidget，所以直接调用 pg.PlotWidget 的方法
+        import pyqtgraph as pg
+        if isinstance(self, pg.PlotWidget):
+            pg.PlotWidget.mouseDoubleClickEvent(self, event)
+        else:
+            # 如果不是 PlotWidget，尝试调用 QWidget 的方法
+            from vnpy.trader.ui import QtWidgets
+            if isinstance(self, QtWidgets.QWidget):
+                QtWidgets.QWidget.mouseDoubleClickEvent(self, event)
     
     def _update_related_lines_on_drag(self, dragging_line, new_price: float) -> None:
         """

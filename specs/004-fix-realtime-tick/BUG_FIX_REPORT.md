@@ -217,9 +217,15 @@
 3. ✅ 完成修复3（止损/止盈触发时使用对手价）
 4. ✅ 完成修复4（防止止损/止盈重复下单）
 5. ✅ 完成修复5（订单重试后挂单线无法关联）
-6. ✅ 完成功能增强（ChartWindow添加更新数据按钮）
-7. 🔧 添加测试用例验证修复（待用户测试验证）
-8. 🔧 更新文档（待用户测试验证后）
+6. ✅ 完成修复6（挂单止损/止盈线激活机制）
+7. ✅ 完成修复7（订单类型改为OPPONENT）
+8. ✅ 完成修复8（日志优化）
+9. ✅ 完成修复9（防重复下单支持主力合约映射）
+10. ✅ 完成修复10（止损触发close订单关联pending线问题）
+11. ✅ 完成功能增强（ChartWindow添加更新数据按钮）
+12. ✅ 完成功能增强（1分钟实时K线开盘价纠正机制）
+13. ✅ 完成功能增强（自动补齐数据并聚合大周期K线）
+14. 🔧 添加测试用例验证修复（待用户测试验证）
 
 ---
 
@@ -240,7 +246,154 @@
 
 **文件**：`vnpy/trader/ui/widget.py`
 
-**详细说明**：请参见 `specs/004-fix-realtime-tick/DATA_UPDATE_FEATURE.md`
+**详细说明**：请参见 `specs/004-fix-realtime-tick/DATA_UPDATE_FEATURE.md` 和 `specs/004-fix-realtime-tick/DATA_UPDATE_FIX.md`
+
+---
+
+### ✅ 修复6：挂单止损/止盈线激活机制
+
+**问题**：挂单线关联的止损止盈线，在挂单成交之前不应该注册到事件监听里，也不应该触发委托下单。即使用了防误触发，但逻辑上是错误的，只有挂单成交了，止损止盈才有平仓的可能。
+
+**根本原因**：
+- 挂单线的止损/止盈线创建后立即激活，可以触发平仓
+- 但此时挂单还未成交，没有持仓，止损/止盈不应该触发
+
+**修复方案**：
+实现激活机制：
+1. **创建时设置为非激活状态**：
+   - 为挂单线创建止损/止盈线时，设置 `_creation_time = None`（非激活状态）
+   - 在label中显示"挂单止损"/"挂单止盈"，便于区分
+
+2. **触发时检查激活状态**：
+   - 在 `trigger_stop_loss_close` 和 `trigger_take_profit_close` 中，检查 `line.get_creation_time()`
+   - 如果为 `None`，跳过触发（非激活状态）
+
+3. **挂单成交后激活**：
+   - 在 `update_line_from_order` 中，当挂单成交后，找到关联的止损/止盈线
+   - 设置 `set_creation_time(time.time())`（激活状态）
+   - 更新label显示为"止损"/"止盈"
+
+**文件**：
+- `vnpy/chart/price_line.py`：添加 `_creation_time` 属性和相关方法
+- `vnpy/chart/widget_trigger.py`：添加激活状态检查
+- `vnpy/chart/drawing_order.py`：挂单成交后激活止损/止盈线
+
+**详细说明**：挂单的止损/止盈线在挂单成交前不会触发，确保逻辑正确性
+
+---
+
+### ✅ 修复7：订单类型改为 `OrderType.OPPONENT`
+
+**问题**：挂单显示的委托订单类型还是限价，止损/止盈触发时也显示为限价单，但实际使用的是对手价。
+
+**根本原因**：
+- `OrderRequest` 的 `type` 字段设置为 `OrderType.LIMIT`
+- 虽然 `price` 是对手价，但类型标记为限价单，导致日志显示不准确
+
+**修复方案**：
+将订单类型改为 `OrderType.OPPONENT`：
+- **止损触发**：`type=OrderType.OPPONENT`
+- **止盈触发**：`type=OrderType.OPPONENT`
+- **挂单触发**：`type=OrderType.OPPONENT`
+
+**文件**：`vnpy/chart/widget_trigger.py`
+
+**修改位置**：
+- `trigger_stop_loss_close` 方法
+- `trigger_take_profit_close` 方法
+- `trigger_pending_order_breakthrough` 方法
+
+**效果**：
+- ✅ 日志将正确显示"对手价订单"而不是"限价单处理"
+- ✅ 语义更准确，代码更清晰
+
+**详细说明**：请参见 `specs/004-fix-realtime-tick/ORDER_TYPE_ANALYSIS.md` 和 `specs/004-fix-realtime-tick/LOG_OPTIMIZATION.md`
+
+---
+
+### ✅ 修复8：日志优化
+
+**问题**：目前的log干扰太多，很难一下子看清楚触发下单，委托下单，追价执行，成交这个调用链。
+
+**修复方案**：
+
+1. **注释掉拖拽时间轴日志**：
+   - 注释掉 `widget_mouse.py` 中详细的"拖拽时间轴"日志
+   - 减少日志干扰
+
+2. **优化日志格式**：
+   - 使用统一前缀 `[触发下单]` 便于过滤
+   - 使用箭头 `→` 表示流程
+   - 简化日志内容，突出关键信息（订单ID、价格、手数）
+
+**修改位置**：
+- `vnpy/chart/widget_mouse.py`：注释拖拽时间轴日志
+- `vnpy/chart/widget_trigger.py`：优化触发日志格式
+
+**效果**：
+- ✅ 日志调用链更清晰：`[触发下单]` → `[委托下单]` → `[对手价订单]` → `[追价执行]` → `[成交]`
+- ✅ 减少干扰日志
+- ✅ 更容易跟踪交易流程
+
+**详细说明**：请参见 `specs/004-fix-realtime-tick/LOG_OPTIMIZATION.md`
+
+---
+
+### ✅ 修复9：防重复下单支持主力合约映射
+
+**问题**：止损线触发后，在执行过程中多下了一手买多，导致空仓平完后，反而成了持仓一手多。
+
+**根本原因**：
+- 检查未成交订单时，只检查 `order.vt_symbol == vt_symbol`
+- 但 `vt_symbol` 是主力合约（如 `MHImain.HKFE`），订单的 `order.vt_symbol` 是实际合约（如 `MHI2512.HKFE`）
+- 检查不到已存在的未成交订单，导致重复下单
+
+**修复方案**：
+增强订单检查逻辑，支持主力合约映射匹配：
+- 检查未成交订单时，不仅检查直接匹配，还检查主力合约映射
+- 复用现有的 `_get_main_contract_mapping` 方法（使用gateway的缓存）
+- 如果图表合约是主力合约，订单是实际合约，也能识别为同一合约的订单
+
+**文件**：`vnpy/chart/widget_trigger.py`
+
+**修改位置**：
+- `trigger_stop_loss_close` 方法（行443-505）
+- `trigger_take_profit_close` 方法（行780-844）
+
+**效果**：
+- ✅ 能正确识别主力合约和实际合约的订单
+- ✅ 防止重复下单
+- ✅ 提高订单管理准确性
+
+**详细说明**：请参见 `specs/004-fix-realtime-tick/DUPLICATE_ORDER_FIX.md`
+
+---
+
+### ✅ 修复10：止损触发close订单关联pending线问题
+
+**问题**：止损/止盈触发的平仓订单被错误地关联到挂单线，导致挂单线无法正常删除。
+
+**根本原因**：
+- `DrawingOrderController.update_line_from_order` 方法在处理订单更新时，会尝试找到关联的挂单线
+- 对于平仓订单（`offset == Offset.CLOSE`），不应该关联到挂单线
+- 但代码逻辑可能错误地将平仓订单关联到挂单线
+
+**修复方案**：
+在 `update_line_from_order` 方法中，明确检查：
+- 如果订单是平仓订单（`offset == Offset.CLOSE`）
+- 且该订单没有关联到任何挂单线（`get_line_id_for_order` 返回 `None`）
+- 则跳过挂单线关联处理，避免平仓订单被错误关联
+
+**文件**：`vnpy/chart/drawing_order.py`
+
+**修改位置**：`update_line_from_order` 方法
+
+**效果**：
+- ✅ 平仓订单不会被错误关联到挂单线
+- ✅ 挂单线能正常删除
+- ✅ 止损/止盈线能正常迁移
+
+---
 
 ---
 

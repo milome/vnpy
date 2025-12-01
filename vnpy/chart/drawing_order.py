@@ -424,12 +424,49 @@ class DrawingOrderController:
             
             # 检查是否已经关联到订单
             if line_id in self._line_order_map:
-                if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
-                    self._widget._main_engine.write_log(
-                        f"[DrawingOrderController] 挂单线 {line_id} 已关联到订单 {self._line_order_map.get(line_id)}，跳过",
-                        "DrawingOrderController"
-                    )
-                continue  # 已关联，跳过
+                linked_order_id = self._line_order_map.get(line_id)
+                
+                # ✅ 检查关联的订单是否已被撤销/取消
+                # 如果订单已撤销/取消，应该清理映射关系，将此挂单线视为未关联
+                is_order_cancelled = False
+                if linked_order_id and hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+                    # 尝试从main_engine获取订单状态
+                    all_orders = self._widget._main_engine.get_all_orders()
+                    for o in all_orders:
+                        if o.vt_orderid == linked_order_id:
+                            from vnpy.trader.constant import Status
+                            if o.status in [Status.CANCELLED, Status.REJECTED]:
+                                is_order_cancelled = True
+                                # 清理映射关系
+                                self._line_order_map.pop(line_id, None)
+                                self._order_line_map.pop(linked_order_id, None)
+                                if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+                                    self._widget._main_engine.write_log(
+                                        f"[DrawingOrderController] 挂单线 {line_id} 关联的订单 {linked_order_id} 已被撤销/取消，已清理映射关系，将此挂单线视为未关联",
+                                        "DrawingOrderController"
+                                    )
+                                break
+                            # 如果订单已全部成交，也应该清理映射（订单已成交，挂单线应该已被删除或转换）
+                            elif o.status == Status.ALLTRADED:
+                                is_order_cancelled = True
+                                # 清理映射关系
+                                self._line_order_map.pop(line_id, None)
+                                self._order_line_map.pop(linked_order_id, None)
+                                if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+                                    self._widget._main_engine.write_log(
+                                        f"[DrawingOrderController] 挂单线 {line_id} 关联的订单 {linked_order_id} 已全部成交，已清理映射关系，将此挂单线视为未关联",
+                                        "DrawingOrderController"
+                                    )
+                                break
+                
+                # 如果订单已被撤销/取消/成交，继续处理此挂单线（视为未关联）
+                if not is_order_cancelled:
+                    if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+                        self._widget._main_engine.write_log(
+                            f"[DrawingOrderController] 挂单线 {line_id} 已关联到订单 {linked_order_id}，跳过",
+                            "DrawingOrderController"
+                        )
+                    continue  # 已关联且订单仍然有效，跳过
             
             unlinked_pending_lines_count += 1
             
@@ -559,6 +596,22 @@ class DrawingOrderController:
                 "DrawingOrderController"
             )
         if line_id is None:
+            # ✅ 如果订单是平仓订单（offset=CLOSE），且没有关联挂单线，直接跳过
+            # 平仓订单（如止损/止盈线触发的平仓订单）不应该关联挂单线
+            if order.offset == Offset.CLOSE:
+                if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+                    self._widget._main_engine.write_log(
+                        f"[DrawingOrderController] 订单 {order.vt_orderid} 是平仓订单且未关联挂单线，跳过处理（可能是止损/止盈线触发的平仓订单）",
+                        "DrawingOrderController"
+                    )
+                # 如果是全部成交的平仓订单，添加成交标记到K线
+                if order.status == StatusEnum.ALLTRADED and hasattr(self._widget, '_manager') and order.datetime:
+                    direction_str = "long" if order.direction == Direction.LONG else "short"
+                    self._add_trade_marker_to_chart(
+                        order.datetime, direction_str, order.traded, order.price
+                    )
+                return True
+            
             # 订单未关联到挂单线，尝试查找未关联的挂单线（用于处理订单重委托场景）
             if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
                 self._widget._main_engine.write_log(
@@ -680,7 +733,7 @@ class DrawingOrderController:
                         "DrawingOrderController"
                     )
             else:
-                # 如果仍然没找到，尝试查找所有未关联的挂单线，如果只有一个，直接删除
+                # 如果仍然没找到，尝试查找所有未关联的挂单线，如果只有一个且方向匹配，则使用它
                 price_line_manager = self._get_price_line_manager()
                 if price_line_manager:
                     all_lines = price_line_manager.get_all_lines()
@@ -690,44 +743,56 @@ class DrawingOrderController:
                     for lid, line in all_lines.items():
                         if line.get_line_type() == PriceLineType.PENDING:
                             # 检查是否已关联
+                            is_unlinked = False
                             if lid not in self._line_order_map:
+                                is_unlinked = True
+                            else:
+                                # ✅ 检查关联的订单是否已被撤销/取消
+                                linked_order_id = self._line_order_map.get(lid)
+                                if linked_order_id and hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+                                    # 尝试从main_engine获取订单状态
+                                    all_orders = self._widget._main_engine.get_all_orders()
+                                    for o in all_orders:
+                                        if o.vt_orderid == linked_order_id:
+                                            from vnpy.trader.constant import Status
+                                            if o.status in [Status.CANCELLED, Status.REJECTED, Status.ALLTRADED]:
+                                                # 订单已被撤销/取消/成交，清理映射关系
+                                                self._line_order_map.pop(lid, None)
+                                                self._order_line_map.pop(linked_order_id, None)
+                                                is_unlinked = True
+                                                if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+                                                    self._widget._main_engine.write_log(
+                                                        f"[DrawingOrderController] 挂单线 {lid} 关联的订单 {linked_order_id} 状态为{o.status.value}，已清理映射关系，视为未关联",
+                                                        "DrawingOrderController"
+                                                    )
+                                                break
+                            
+                            if is_unlinked:
                                 # 检查方向是否匹配
                                 line_direction = line.get_direction()
                                 if line_direction == order_direction:
                                     unlinked_pending_lines.append((lid, line))
                     
-                    # 如果只有一个未关联的挂单线，且方向匹配，直接删除它
+                    # 如果只有一个未关联的挂单线，且方向匹配，使用它并继续执行后续逻辑（创建入场线、迁移止损/止盈线）
                     if len(unlinked_pending_lines) == 1:
                         line_id, line = unlinked_pending_lines[0]
+                        # 建立关联关系，以便后续逻辑能正确处理
+                        self.link_line_to_order(line_id, order.vt_orderid)
                         if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
                             self._widget._main_engine.write_log(
-                                f"[DrawingOrderController] 强制删除：找到唯一的未关联挂单线 {line_id}，方向匹配，直接删除",
+                                f"[DrawingOrderController] 强制查找：找到唯一的未关联挂单线 {line_id}，方向匹配，已建立关联关系，将继续执行创建入场线和迁移止损/止盈线的逻辑",
                                 "DrawingOrderController"
                             )
-                        # 先从 plot 中移除
-                        if line and hasattr(self._widget, '_first_plot') and self._widget._first_plot:
-                            try:
-                                self._widget._first_plot.removeItem(line)
-                            except Exception:
-                                pass
-                        # 从管理器中删除
-                        price_line_manager.delete_line(line_id)
-                        # 清理关联关系（如果存在）
-                        if hasattr(self, '_pending_line_relations') and line_id in self._pending_line_relations:
-                            self._pending_line_relations.pop(line_id, None)
-                        # 清理挂单参数（如果存在）
-                        if hasattr(self, '_pending_order_params') and line_id in self._pending_order_params:
-                            self._pending_order_params.pop(line_id, None)
-                        # 取消注册价格突破监控
-                        if hasattr(self._widget, '_breakthrough_monitor') and self._widget._breakthrough_monitor:
-                            self._widget._breakthrough_monitor.unregister_line(line_id)
-                        return True
+                        # 注意：这里不直接删除挂单线，而是继续执行后续逻辑（删除挂单线、创建入场线、迁移止损/止盈线）
+                        # 后续逻辑会在删除挂单线之前，先保存挂单线关联的止损/止盈线信息
                     elif len(unlinked_pending_lines) > 1:
                         if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
                             self._widget._main_engine.write_log(
-                                f"[DrawingOrderController] 强制删除：找到多个未关联挂单线（{len(unlinked_pending_lines)}个），无法确定删除哪一个，跳过",
+                                f"[DrawingOrderController] 强制查找：找到多个未关联挂单线（{len(unlinked_pending_lines)}个），无法确定使用哪一个，跳过",
                                 "DrawingOrderController"
                             )
+                        # 如果找到多个未关联挂单线，无法确定使用哪一个，设置为None，后续逻辑会跳过
+                        line_id = None
         
         line = self._price_line_manager.get_line(line_id) if line_id else None
         if line is None:
@@ -768,6 +833,29 @@ class DrawingOrderController:
                 if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
                     self._widget._main_engine.write_log(
                         f"[DrawingOrderController] 挂单线 {line_id} 有关联的止损/止盈线，将在创建入场线后迁移",
+                        "DrawingOrderController"
+                    )
+            
+            # 在删除挂单线之前，先清理挂单线和订单的映射关系（避免映射关系混乱）
+            # 注意：这里只清理旧的映射关系，新的映射关系将在创建入场线后建立
+            old_line_id_in_order_map = self._order_line_map.pop(order.vt_orderid, None)
+            if old_line_id_in_order_map and old_line_id_in_order_map != line_id:
+                if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+                    self._widget._main_engine.write_log(
+                        f"[DrawingOrderController] 警告：订单 {order.vt_orderid} 在映射表中关联的挂单线 {old_line_id_in_order_map} 与当前挂单线 {line_id} 不一致，已清理旧映射",
+                        "DrawingOrderController"
+                    )
+            if line_id:
+                old_order_id_in_line_map = self._line_order_map.pop(line_id, None)
+                if old_order_id_in_line_map and old_order_id_in_line_map != order.vt_orderid:
+                    if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+                        self._widget._main_engine.write_log(
+                            f"[DrawingOrderController] 警告：挂单线 {line_id} 在映射表中关联的订单 {old_order_id_in_line_map} 与当前订单 {order.vt_orderid} 不一致，已清理旧映射",
+                            "DrawingOrderController"
+                        )
+                if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+                    self._widget._main_engine.write_log(
+                        f"[DrawingOrderController] 已清理挂单线 {line_id} 和订单 {order.vt_orderid} 的映射关系（准备删除挂单线）",
                         "DrawingOrderController"
                     )
             
@@ -1080,6 +1168,21 @@ class DrawingOrderController:
                         # 将止损线关联到入场线
                         self._widget._entry_line_relations[new_line_id]["stop_loss"] = stop_loss_line_id
                         
+                        # ✅ 激活止损线：设置创建时间，使其可以被触发检查
+                        # 挂单成交后，关联的止损线才被激活
+                        from time import time
+                        stop_loss_line.set_creation_time(time())
+                        # 更新label（从"挂单止损"变为"止损"）
+                        price_precision = getattr(stop_loss_line, '_price_precision', 0) if hasattr(stop_loss_line, '_price_precision') else 0
+                        label_text = stop_loss_line._create_label(stop_loss_line.get_price(), stop_loss_line.get_line_type(), price_precision, stop_loss_line.get_direction())
+                        if stop_loss_line.label is not None:
+                            stop_loss_line.label.setText(label_text)
+                        if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+                            self._widget._main_engine.write_log(
+                                f"[DrawingOrderController] 已激活止损线 {stop_loss_line_id}（挂单成交后激活）",
+                                "DrawingOrderController"
+                            )
+                        
                         # 从入场线获取手数并设置到止损线
                         entry_line = self._price_line_manager.get_line(new_line_id)
                         if entry_line:
@@ -1142,6 +1245,21 @@ class DrawingOrderController:
                         
                         # 将止盈线关联到入场线
                         self._widget._entry_line_relations[new_line_id]["take_profit"] = take_profit_line_id
+                        
+                        # ✅ 激活止盈线：设置创建时间，使其可以被触发检查
+                        # 挂单成交后，关联的止盈线才被激活
+                        from time import time
+                        take_profit_line.set_creation_time(time())
+                        # 更新label（从"挂单止盈"变为"止盈"）
+                        price_precision = getattr(take_profit_line, '_price_precision', 0) if hasattr(take_profit_line, '_price_precision') else 0
+                        label_text = take_profit_line._create_label(take_profit_line.get_price(), take_profit_line.get_line_type(), price_precision, take_profit_line.get_direction())
+                        if take_profit_line.label is not None:
+                            take_profit_line.label.setText(label_text)
+                        if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+                            self._widget._main_engine.write_log(
+                                f"[DrawingOrderController] 已激活止盈线 {take_profit_line_id}（挂单成交后激活）",
+                                "DrawingOrderController"
+                            )
                         
                         # 从入场线获取手数并设置到止盈线
                         entry_line = self._price_line_manager.get_line(new_line_id)

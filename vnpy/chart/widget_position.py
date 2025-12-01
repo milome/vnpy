@@ -262,28 +262,44 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
         2. FIFO平仓逻辑（先进先出）
         3. 保留所有原始入场信息
         """
-        # 添加日志确认回调执行，包含冻结状态
-        if hasattr(self, '_main_engine') and self._main_engine:
-            available_volume = position.volume - position.frozen
-            self._main_engine.write_log(
-                f"[ChartWidget] _update_entry_line_pnl 回调开始执行: {position.vt_symbol} {position.direction.value} "
-                f"volume={position.volume} frozen={position.frozen} available={available_volume} pnl={position.pnl}",
-                "ChartWidget"
-            )
+        # 初始化缓存字典（如果不存在）
+        if not hasattr(self, '_position_update_cache'):
+            self._position_update_cache = {}
+        
+        # 添加日志确认回调执行，包含冻结状态（事件驱动回调，保留但只在变化时输出）
+        cache_key_callback = f"callback_{position.vt_symbol}_{position.direction.value}"
+        current_callback = (position.volume, position.frozen, position.pnl)
+        last_callback = self._position_update_cache.get(cache_key_callback)
+        
+        if last_callback != current_callback:
+            if hasattr(self, '_main_engine') and self._main_engine:
+                available_volume = position.volume - position.frozen
+                self._main_engine.write_log(
+                    f"[ChartWidget] _update_entry_line_pnl 回调开始执行: {position.vt_symbol} {position.direction.value} "
+                    f"volume={position.volume} frozen={position.frozen} available={available_volume} pnl={position.pnl}",
+                    "ChartWidget"
+                )
+            self._position_update_cache[cache_key_callback] = current_callback
         
         position_direction = "long" if position.direction.value == "多" else "short"
         all_lines = self._price_line_manager.get_all_lines()
         
-        # 添加日志，包含冻结状态
-        if hasattr(self, '_main_engine') and self._main_engine:
-            entry_line_count = len([l for l in all_lines.values() if l.get_line_type() == PriceLineType.ENTRY])
-            available_volume = position.volume - position.frozen
-            self._main_engine.write_log(
-                f"[ChartWidget] 更新入场线盈亏: 持仓方向={position_direction}, 持仓数量={position.volume}, "
-                f"冻结={position.frozen}, 可用={available_volume}, 盈亏={position.pnl}, "
-                f"入场线数量={entry_line_count}, 总价格线数量={len(all_lines)}",
-                "ChartWidget"
-            )
+        # 添加日志，包含冻结状态（只在数据变化时输出）
+        entry_line_count = len([l for l in all_lines.values() if l.get_line_type() == PriceLineType.ENTRY])
+        available_volume = position.volume - position.frozen
+        cache_key_summary = f"{position_direction}_summary"
+        current_summary = (position.volume, position.frozen, available_volume, position.pnl, entry_line_count, len(all_lines))
+        last_summary = self._position_update_cache.get(cache_key_summary)
+        
+        if last_summary != current_summary:
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log(
+                    f"[ChartWidget] 更新入场线盈亏: 持仓方向={position_direction}, 持仓数量={position.volume}, "
+                    f"冻结={position.frozen}, 可用={available_volume}, 盈亏={position.pnl}, "
+                    f"入场线数量={entry_line_count}, 总价格线数量={len(all_lines)}",
+                    "ChartWidget"
+                )
+            self._position_update_cache[cache_key_summary] = current_summary
         
         # 获取该方向的持仓管理对象
         holding = self._position_holdings.get(position_direction)
@@ -350,6 +366,9 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                                         self._first_plot.removeItem(stop_loss_line)
                                     except Exception:
                                         pass
+                                # 从数据库中删除（在从管理器删除之前，确保数据库中也删除）
+                                if self._price_line_database:
+                                    self._price_line_database.delete_line(stop_loss_line_id)
                                 # 从管理器中删除
                                 if self._price_line_manager.delete_line(stop_loss_line_id):
                                     deleted_count += 1
@@ -370,6 +389,9 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                                         self._first_plot.removeItem(take_profit_line)
                                     except Exception:
                                         pass
+                                # 从数据库中删除（在从管理器删除之前，确保数据库中也删除）
+                                if self._price_line_database:
+                                    self._price_line_database.delete_line(take_profit_line_id)
                                 # 从管理器中删除
                                 if self._price_line_manager.delete_line(take_profit_line_id):
                                     deleted_count += 1
@@ -592,13 +614,19 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
         # 从 PositionHolding 的 entries 计算总手数（用于 FIFO 平仓判断）
         holding_total_volume = sum(e.volume for e in holding.get_all_entries())
         
-        # 添加详细日志，帮助调试
-        if hasattr(self, '_main_engine') and self._main_engine:
-            self._main_engine.write_log(
-                f"[ChartWidget] 持仓变化检查: 持仓记录总手数={holding_total_volume}, 实际持仓手数={position.volume}, "
-                f"持仓记录数量={len(holding.get_all_entries())}",
-                "ChartWidget"
-            )
+        # 添加详细日志，帮助调试（只在持仓变化时输出）
+        cache_key_check = f"{position_direction}_holding_check"
+        current_check = (holding_total_volume, position.volume, len(holding.get_all_entries()))
+        last_check = self._position_update_cache.get(cache_key_check)
+        
+        if last_check != current_check:
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log(
+                    f"[ChartWidget] 持仓变化检查: 持仓记录总手数={holding_total_volume}, 实际持仓手数={position.volume}, "
+                    f"持仓记录数量={len(holding.get_all_entries())}",
+                    "ChartWidget"
+                )
+            self._position_update_cache[cache_key_check] = current_check
         
         # 只有当实际持仓手数明显小于持仓记录总手数时，才认为是平仓
         # 使用 0.01 的容差，避免浮点数精度问题
@@ -647,12 +675,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                             self._drawing_order_controller._line_order_map.pop(line_id, None)
                             self._drawing_order_controller._order_line_map.pop(order_id, None)
         elif abs(position.volume - holding_total_volume) <= 0.01:
-            # 持仓手数一致，没有平仓
-            if hasattr(self, '_main_engine') and self._main_engine:
-                self._main_engine.write_log(
-                    f"[ChartWidget] 持仓手数一致，无平仓: 持仓记录总手数={holding_total_volume}, 实际持仓手数={position.volume}",
-                    "ChartWidget"
-                )
+            # 持仓手数一致，没有平仓（不输出日志，避免刷屏）
+            pass
         else:
             # 实际持仓手数大于持仓记录总手数，可能是新开仓（通过 trade UI）
             if hasattr(self, '_main_engine') and self._main_engine:
@@ -706,17 +730,22 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
         # 直接使用 position.volume 作为总手数
         total_volume = position.volume
         
-        if hasattr(self, '_main_engine') and self._main_engine:
-            self._main_engine.write_log(
-                f"[ChartWidget] 持仓统计: 方向={position_direction}, 加权均价={avg_price:.2f}, 总手数={total_volume}, 浮动盈亏={position.pnl}",
-                "ChartWidget"
-            )
+        # 持仓统计（只在数据变化时输出）
+        cache_key_stats = f"{position_direction}_stats"
+        current_stats = (avg_price, total_volume, position.pnl, len(entry_lines))
+        last_stats = self._position_update_cache.get(cache_key_stats)
         
-        if hasattr(self, '_main_engine') and self._main_engine:
-            self._main_engine.write_log(
-                f"[ChartWidget] 从PriceLineManager获取入场线: {len(entry_lines)} 条（方向={position_direction}）",
-                "ChartWidget"
-            )
+        if last_stats != current_stats:
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log(
+                    f"[ChartWidget] 持仓统计: 方向={position_direction}, 加权均价={avg_price:.2f}, 总手数={total_volume}, 浮动盈亏={position.pnl}",
+                    "ChartWidget"
+                )
+                self._main_engine.write_log(
+                    f"[ChartWidget] 从PriceLineManager获取入场线: {len(entry_lines)} 条（方向={position_direction}）",
+                    "ChartWidget"
+                )
+            self._position_update_cache[cache_key_stats] = current_stats
         
         # 如果PriceLineManager中没有入场线，但持仓数量>0，需要创建入场线
         if not entry_lines and position.volume > 0:
@@ -860,12 +889,6 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
         # 直接使用 position.volume 作为总手数
         total_volume = position.volume
         
-        if hasattr(self, '_main_engine') and self._main_engine:
-            self._main_engine.write_log(
-                f"[ChartWidget] 持仓统计: 方向={position_direction}, 加权均价={avg_price:.2f}, 总手数={total_volume}, 浮动盈亏={position.pnl}",
-                "ChartWidget"
-            )
-        
         # 使用第一条入场线作为合并显示线
         main_line_id, main_line = entry_lines[0]
         
@@ -888,27 +911,34 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
         new_pnl = main_line.get_pnl()
         new_volume = main_line.get_volume()
         
-        if hasattr(self, '_main_engine') and self._main_engine:
-            price_precision = 0
-            label_text = main_line._create_label(avg_price, PriceLineType.ENTRY, price_precision, position_direction)
-            self._main_engine.write_log(
-                f"[ChartWidget] 已更新合并显示线: {main_line_id}, "
-                f"盈亏={old_pnl} -> {new_pnl}, 手数={old_volume} -> {new_volume}, 标签={label_text}",
-                "ChartWidget"
-            )
+        # 只在数据实际变化时输出日志
+        cache_key_line = f"{main_line_id}_update"
+        current_line_data = (old_pnl, new_pnl, old_volume, new_volume, avg_price)
+        last_line_data = self._position_update_cache.get(cache_key_line)
         
-            # 验证标签是否正确更新
-            if main_line.label is not None:
-                # 检查标签文本（InfLineLabel没有text()方法，但我们可以通过其他方式验证）
+        if last_line_data != current_line_data:
+            if hasattr(self, '_main_engine') and self._main_engine:
+                price_precision = 0
+                label_text = main_line._create_label(avg_price, PriceLineType.ENTRY, price_precision, position_direction)
                 self._main_engine.write_log(
-                    f"[ChartWidget] 入场线 {main_line_id} 标签已更新，价格={avg_price}, 手数={new_volume}, 盈亏={new_pnl}",
+                    f"[ChartWidget] 已更新合并显示线: {main_line_id}, "
+                    f"盈亏={old_pnl} -> {new_pnl}, 手数={old_volume} -> {new_volume}, 标签={label_text}",
                     "ChartWidget"
                 )
-            else:
-                self._main_engine.write_log(
-                    f"[ChartWidget] 警告: 入场线 {main_line_id} 的label为None，无法显示更新",
-                    "ChartWidget"
-                )
+                
+                # 验证标签是否正确更新
+                if main_line.label is not None:
+                    # 检查标签文本（InfLineLabel没有text()方法，但我们可以通过其他方式验证）
+                    self._main_engine.write_log(
+                        f"[ChartWidget] 入场线 {main_line_id} 标签已更新，价格={avg_price}, 手数={new_volume}, 盈亏={new_pnl}",
+                        "ChartWidget"
+                    )
+                else:
+                    self._main_engine.write_log(
+                        f"[ChartWidget] 警告: 入场线 {main_line_id} 的label为None，无法显示更新",
+                        "ChartWidget"
+                    )
+            self._position_update_cache[cache_key_line] = current_line_data
         
         # 隐藏其他入场线（但不删除，保留原始信息）
         # 保留所有止损/止盈线，并为每条设置对应的手数
@@ -1380,12 +1410,6 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
         if hasattr(self, '_main_engine') and self._main_engine:
             all_positions = self._main_engine.get_all_positions()
         
-        if hasattr(self, '_main_engine') and self._main_engine:
-            self._main_engine.write_log(
-                f"[ChartWidget] 获取所有持仓: 总数={len(all_positions)}, 当前持仓方向={position_direction}, 当前持仓数量={position.volume}",
-                "ChartWidget"
-            )
-        
         # 构建持仓映射：direction -> volume
         position_map = {}
         chart_vt_symbol = self._vt_symbol
@@ -1415,23 +1439,55 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
             if matched:
                 pos_direction = "long" if pos.direction.value == "多" else "short"
                 position_map[pos_direction] = pos.volume
-                if hasattr(self, '_main_engine') and self._main_engine:
-                    self._main_engine.write_log(
-                        f"[ChartWidget] 匹配持仓: {pos.vt_symbol} {pos.direction.value} {pos.volume}手 -> position_map[{pos_direction}]={pos.volume}",
-                        "ChartWidget"
-                    )
         
         updated_count = 0
         entry_lines = [l for l in all_lines.values() if l.get_line_type() == PriceLineType.ENTRY]
-        if hasattr(self, '_main_engine') and self._main_engine:
-            # 使用list()避免空字典{}被loguru解析为格式化占位符
-            position_map_items = list(position_map.items()) if position_map else []
-            available_volume = position.volume - position.frozen
-            self._main_engine.write_log(
-                f"[ChartWidget] 查找入场线: 总入场线数量={len(entry_lines)}, 持仓方向={position_direction}, "
-                f"持仓数量={position.volume}, 冻结={position.frozen}, 可用={available_volume}, 持仓映射={position_map_items}",
-                "ChartWidget"
-            )
+        
+        # 只在持仓映射或入场线数量变化时输出日志
+        cache_key_find = f"{position_direction}_find"
+        position_map_items = list(position_map.items()) if position_map else []
+        available_volume = position.volume - position.frozen
+        current_find = (len(entry_lines), position.volume, position.frozen, available_volume, tuple(position_map_items))
+        last_find = self._position_update_cache.get(cache_key_find)
+        
+        if last_find != current_find:
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log(
+                    f"[ChartWidget] 获取所有持仓: 总数={len(all_positions)}, 当前持仓方向={position_direction}, 当前持仓数量={position.volume}",
+                    "ChartWidget"
+                )
+                for pos in all_positions:
+                    pos_vt_symbol = pos.vt_symbol
+                    matched = False
+                    if chart_vt_symbol and pos_vt_symbol == chart_vt_symbol:
+                        matched = True
+                    else:
+                        pos_symbol = pos.symbol
+                        chart_symbol = chart_vt_symbol.split('.')[0] if '.' in chart_vt_symbol else chart_vt_symbol
+                        for gateway_name in self._main_engine.get_all_gateway_names():
+                            gateway = self._main_engine.get_gateway(gateway_name)
+                            if gateway and hasattr(gateway, 'get_main_contract_mapping'):
+                                mapping = gateway.get_main_contract_mapping()
+                                for main_symbol, actual_symbol in mapping.items():
+                                    if actual_symbol == pos_symbol:
+                                        main_vt_symbol = f"{main_symbol}.{pos.exchange.value}"
+                                        if main_vt_symbol == chart_vt_symbol:
+                                            matched = True
+                                            break
+                                if matched:
+                                    break
+                    if matched:
+                        pos_direction = "long" if pos.direction.value == "多" else "short"
+                        self._main_engine.write_log(
+                            f"[ChartWidget] 匹配持仓: {pos.vt_symbol} {pos.direction.value} {pos.volume}手 -> position_map[{pos_direction}]={pos.volume}",
+                            "ChartWidget"
+                        )
+                self._main_engine.write_log(
+                    f"[ChartWidget] 查找入场线: 总入场线数量={len(entry_lines)}, 持仓方向={position_direction}, "
+                    f"持仓数量={position.volume}, 冻结={position.frozen}, 可用={available_volume}, 持仓映射={position_map_items}",
+                    "ChartWidget"
+                )
+            self._position_update_cache[cache_key_find] = current_find
         
         # 收集需要删除的入场线（方向没有持仓或持仓为0）
         lines_to_delete = []
@@ -1446,11 +1502,12 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
             # 检查持仓方向是否匹配
             direction = line.get_direction()
         
-            if hasattr(self, '_main_engine') and self._main_engine:
-                self._main_engine.write_log(
-                    f"[ChartWidget] 检查入场线 {line_id}: 方向={direction}, 持仓方向={position_direction}, 匹配={direction == position_direction}, 持仓数量={position.volume}",
-                    "ChartWidget"
-                )
+            # 检查入场线的日志只在变化时输出（注释掉，避免刷屏）
+            # if hasattr(self, '_main_engine') and self._main_engine:
+            #     self._main_engine.write_log(
+            #         f"[ChartWidget] 检查入场线 {line_id}: 方向={direction}, 持仓方向={position_direction}, 匹配={direction == position_direction}, 持仓数量={position.volume}",
+            #         "ChartWidget"
+            #     )
         
             # 检查该方向的持仓是否存在且不为0
             # 优先使用当前持仓更新的值（position.volume），如果为0，则检查position_map
@@ -1506,29 +1563,38 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
             old_volume = line.get_volume()
             line.set_pnl_and_volume(position.pnl, position.volume)
         
-            if hasattr(self, '_main_engine') and self._main_engine:
-                self._main_engine.write_log(
-                    f"[ChartWidget] 更新入场线 {line_id} 盈亏和手数: 盈亏={old_pnl} -> {position.pnl}, 手数={old_volume} -> {position.volume}",
-                    "ChartWidget"
-                )
-        
-            # 标签已通过set_pnl_and_volume自动更新，这里只需要记录
-            if line.label is not None:
+            # 只在盈亏或手数实际变化时输出日志
+            cache_key_entry = f"{line_id}_entry_update"
+            current_entry_data = (old_pnl, position.pnl, old_volume, position.volume)
+            last_entry_data = self._position_update_cache.get(cache_key_entry)
+            
+            if last_entry_data != current_entry_data:
+                if hasattr(self, '_main_engine') and self._main_engine:
+                    self._main_engine.write_log(
+                        f"[ChartWidget] 更新入场线 {line_id} 盈亏和手数: 盈亏={old_pnl} -> {position.pnl}, 手数={old_volume} -> {position.volume}",
+                        "ChartWidget"
+                    )
+                
+                # 标签已通过set_pnl_and_volume自动更新，这里只需要记录
+                if line.label is not None:
+                    updated_count += 1
+                    if hasattr(self, '_main_engine') and self._main_engine:
+                        # 重新生成标签文本用于日志记录（InfLineLabel没有text()方法）
+                        price_precision = 0  # 默认整数显示
+                        label_text = line._create_label(line._price, line._line_type, price_precision, line._direction)
+                        self._main_engine.write_log(
+                            f"[ChartWidget] 已更新入场线 {line_id} 标签: {label_text}",
+                            "ChartWidget"
+                        )
+                else:
+                    if hasattr(self, '_main_engine') and self._main_engine:
+                        self._main_engine.write_log(
+                            f"[ChartWidget] 警告: 入场线 {line_id} 的label为None，无法更新显示",
+                            "ChartWidget"
+                        )
+                self._position_update_cache[cache_key_entry] = current_entry_data
+            elif line.label is not None:
                 updated_count += 1
-                if hasattr(self, '_main_engine') and self._main_engine:
-                    # 重新生成标签文本用于日志记录（InfLineLabel没有text()方法）
-                    price_precision = 0  # 默认整数显示
-                    label_text = line._create_label(line._price, line._line_type, price_precision, line._direction)
-                    self._main_engine.write_log(
-                        f"[ChartWidget] 已更新入场线 {line_id} 标签: {label_text}",
-                        "ChartWidget"
-                    )
-            else:
-                if hasattr(self, '_main_engine') and self._main_engine:
-                    self._main_engine.write_log(
-                        f"[ChartWidget] 警告: 入场线 {line_id} 的label为None，无法更新显示",
-                        "ChartWidget"
-                    )
         
         # 删除没有持仓的入场线及其关联的止损止盈线
         # 先打印数据库状态（用于调试）
@@ -1705,12 +1771,14 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
         #         "ChartWidget"
         #     )
         
-        if hasattr(self, '_main_engine') and self._main_engine:
-            self._main_engine.write_log(
-                f"[ChartWidget] 盈亏更新完成: 共更新 {updated_count} 条入场线，删除 {deleted_count} 条价格线 "
-                f"(入场线={deleted_entry_count}, 止损线={deleted_stop_loss_count}, 止盈线={deleted_take_profit_count})",
-                "ChartWidget"
-            )
+        # 只在有实际更新或删除时输出日志
+        if updated_count > 0 or deleted_count > 0:
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log(
+                    f"[ChartWidget] 盈亏更新完成: 共更新 {updated_count} 条入场线，删除 {deleted_count} 条价格线 "
+                    f"(入场线={deleted_entry_count}, 止损线={deleted_stop_loss_count}, 止盈线={deleted_take_profit_count})",
+                    "ChartWidget"
+                )
     
     
     def _load_position_holdings(self) -> None:

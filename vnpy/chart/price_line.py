@@ -91,6 +91,7 @@ class PriceLineItem(pg.InfiniteLine):
         self._vt_orderid: Optional[str] = None  # 关联的订单ID
         self._order_volume: Optional[float] = None  # 挂单线的订单手数（仅PENDING类型）
         self._order_offset: Optional[str] = None  # 挂单线的开平类型（"OPEN"/"CLOSE"，仅PENDING类型）
+        self._creation_time: Optional[float] = None  # 创建时间（秒，用于防止创建后立即触发）
 
     def _create_pen(
         self,
@@ -211,6 +212,10 @@ class PriceLineItem(pg.InfiniteLine):
         # 对于止损线和止盈线，如果设置了手数，也显示手数
         if line_type == PriceLineType.STOP_LOSS or line_type == PriceLineType.TAKE_PROFIT:
             volume = getattr(self, '_volume', 0.0)
+            # ✅ 检查创建时间，判断是否是挂单线的止损/止盈线
+            creation_time = getattr(self, '_creation_time', None)
+            is_pending_line = (creation_time is None)  # 创建时间为None表示关联挂单线（未激活）
+            
             if price_precision == 0:
                 price_str = str(int(price))
             else:
@@ -219,9 +224,17 @@ class PriceLineItem(pg.InfiniteLine):
             # 如果有手数，显示手数信息
             if volume > 0:
                 volume_str = f"{int(volume)}手" if volume == int(volume) else f"{volume:.1f}手"
-                return f"{type_name} {price_str} {volume_str}"
+                # 区分挂单线的止损/止盈线和持仓的止损/止盈线
+                if is_pending_line:
+                    return f"挂单{type_name} {price_str} {volume_str}"
+                else:
+                    return f"{type_name} {price_str} {volume_str}"
             else:
-                return f"{type_name} {price_str}"
+                # 区分挂单线的止损/止盈线和持仓的止损/止盈线
+                if is_pending_line:
+                    return f"挂单{type_name} {price_str}"
+                else:
+                    return f"{type_name} {price_str}"
         
         # 对于挂单线，显示方向（多单/空单）和手数
         if line_type == PriceLineType.PENDING:
@@ -359,6 +372,32 @@ class PriceLineItem(pg.InfiniteLine):
         """设置挂单线的开平类型（仅PENDING类型，应为"OPEN"或"CLOSE"）"""
         self._order_offset = offset
     
+    def get_creation_time(self) -> Optional[float]:
+        """获取创建时间（秒，用于防止创建后立即触发）"""
+        return getattr(self, '_creation_time', None)
+    
+    def set_creation_time(self, creation_time: Optional[float] = None) -> None:
+        """
+        设置创建时间（秒，用于防止创建后立即触发）
+        
+        Args:
+            creation_time: 创建时间（秒），如果为None则设置为当前时间。
+                          如果需要显式设置为None（表示未激活），使用 set_creation_time_explicit(None)
+        """
+        if creation_time is None:
+            from time import time
+            creation_time = time()
+        self._creation_time = creation_time
+    
+    def set_creation_time_explicit(self, creation_time: Optional[float]) -> None:
+        """
+        显式设置创建时间（允许设置为None）
+        
+        Args:
+            creation_time: 创建时间（秒），可以为None（表示未激活）
+        """
+        self._creation_time = creation_time
+    
     def set_pnl_and_volume(self, pnl: float, volume: float) -> None:
         """同时设置浮动盈亏和持仓手数并更新标签"""
         self._pnl = pnl
@@ -476,6 +515,12 @@ class PriceLineManager:
         # 设置订单ID（如果提供）
         if vt_orderid:
             line.set_vt_orderid(vt_orderid)
+        
+        # 对于止损/止盈线，设置创建时间（用于防止创建后立即触发）
+        # 注意：挂单线关联的止损/止盈线会在创建后立即将创建时间设置为None（表示未激活），
+        # 只有在挂单成交后才激活（重新设置创建时间）
+        if line_type in (PriceLineType.STOP_LOSS, PriceLineType.TAKE_PROFIT):
+            line.set_creation_time()
 
         self._lines[line_id] = line
         
