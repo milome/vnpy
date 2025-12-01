@@ -334,6 +334,264 @@ specs/
 - 便于项目级别的规划和协调
 - 可以跨多个模块进行功能开发
 
+## ⚙️ Speckit 工作流程原理
+
+### 概述
+
+Speckit 通过一系列命令（`/speckit.*`）来管理功能开发的完整生命周期。这些命令在 `specs/000-Overview/.cursor/commands/` 目录下定义，通过 PowerShell 脚本自动创建文件夹结构、生成文档和管理 Git 分支。
+
+### 核心命令流程
+
+#### 1. `/speckit.specify` - 创建功能规格说明
+
+**执行位置：** 在 `specs/000-Overview/` 目录或项目根目录执行
+
+**工作流程：**
+
+1. **自动创建新功能文件夹**
+   - 调用 `create-new-feature.ps1` 脚本
+   - 自动检测下一个可用的功能编号（如 001, 002, 003...）
+   - 从功能描述生成短名称（如 `fix-realtime-tick`）
+   - **自动创建文件夹**：`specs/004-fix-realtime-tick/`
+   - 创建并切换到新的 Git 分支（如果使用 Git）
+
+2. **生成功能规格文档**
+   - 创建 `spec.md` 文件（使用模板 `.specify/templates/spec-template.md`）
+   - 根据用户描述填充功能规格内容
+   - 生成用户场景、功能需求、成功标准等
+
+3. **创建质量检查清单**
+   - 自动创建 `checklists/requirements.md`
+   - 验证规格说明的完整性和质量
+   - 处理需要澄清的问题（最多 3 个）
+
+**关键脚本：** `.specify/scripts/powershell/create-new-feature.ps1`
+
+**输出文件：**
+- `specs/XXX-feature-name/spec.md` - 功能规格说明
+- `specs/XXX-feature-name/checklists/requirements.md` - 质量检查清单
+
+**示例：**
+```bash
+# 在 000-Overview 目录执行
+/speckit.specify 修复 ChartWindow 实时 tick 数据刷新问题
+
+# 自动创建：
+# - specs/004-fix-realtime-tick/spec.md
+# - specs/004-fix-realtime-tick/checklists/requirements.md
+# - Git 分支：004-fix-realtime-tick
+```
+
+#### 2. `/speckit.plan` - 生成实施计划
+
+**执行位置：** 在功能目录（如 `specs/004-fix-realtime-tick/`）执行
+
+**工作流程：**
+
+1. **读取功能规格**
+   - 读取 `spec.md` 文件
+   - 读取 `.specify/memory/constitution.md`（项目宪章）
+   - 加载实施计划模板
+
+2. **生成技术上下文**
+   - 填写技术栈、依赖、约束条件
+   - 执行 Constitution Check（规范检查）
+   - 标记需要澄清的部分（NEEDS CLARIFICATION）
+
+3. **Phase 0: 研究阶段**
+   - 生成 `research.md` 文件
+   - 研究技术选型、最佳实践
+   - 解决所有 NEEDS CLARIFICATION 标记
+
+4. **Phase 1: 设计阶段**
+   - 生成 `data-model.md` - 数据模型设计
+   - 生成 `contracts/` 目录 - API 契约定义
+   - 生成 `quickstart.md` - 快速开始指南
+   - 更新 AI 助手上下文文件
+
+5. **Phase 2: 计划阶段**
+   - 生成 `plan.md` - 完整的实施计划
+   - 包含技术方案、阶段划分、任务分解
+
+**关键脚本：** `.specify/scripts/powershell/setup-plan.ps1`
+
+**输出文件：**
+- `plan.md` - 实施计划（由 `/speckit.plan` 命令生成）
+- `research.md` - Phase 0 输出
+- `data-model.md` - Phase 1 输出
+- `quickstart.md` - Phase 1 输出
+- `contracts/` - Phase 1 输出（API 契约）
+- `tasks.md` - **不是**由 `/speckit.plan` 生成，而是由 `/speckit.tasks` 生成
+
+**示例：**
+```bash
+# 在功能目录执行
+/speckit.plan
+
+# 自动生成：
+# - plan.md
+# - research.md
+# - data-model.md
+# - quickstart.md
+# - contracts/
+```
+
+#### 3. `/speckit.tasks` - 生成任务清单
+
+**执行位置：** 在功能目录执行
+
+**工作流程：**
+
+1. **读取设计文档**
+   - 读取 `plan.md` 文件
+   - 读取 `data-model.md`、`research.md` 等设计文档
+
+2. **生成任务清单**
+   - 根据用户故事分解任务
+   - 为每个任务分配优先级和依赖关系
+   - 生成 `tasks.md` 文件
+
+**输出文件：**
+- `tasks.md` - 详细的任务清单（由 `/speckit.tasks` 命令生成）
+
+**示例：**
+```bash
+# 在功能目录执行
+/speckit.tasks
+
+# 自动生成：
+# - tasks.md
+```
+
+### 完整工作流程示例
+
+以下是一个完整的功能开发流程：
+
+```mermaid
+graph TD
+    A[用户在 000-Overview 执行 /speckit.specify] --> B[自动创建 specs/004-fix-realtime-tick/]
+    B --> C[生成 spec.md 和 checklists/]
+    C --> D[用户在功能目录执行 /speckit.plan]
+    D --> E[生成 plan.md, research.md, data-model.md 等]
+    E --> F[用户在功能目录执行 /speckit.tasks]
+    F --> G[生成 tasks.md]
+    G --> H[开始实施开发]
+```
+
+**步骤详解：**
+
+1. **Specify 阶段**（创建功能文件夹）
+   ```bash
+   # 位置：specs/000-Overview/
+   /speckit.specify 修复 ChartWindow 实时 tick 数据刷新问题
+   
+   # 结果：
+   # ✅ 创建 specs/004-fix-realtime-tick/
+   # ✅ 创建 spec.md
+   # ✅ 创建 checklists/requirements.md
+   # ✅ 创建 Git 分支 004-fix-realtime-tick
+   ```
+
+2. **Plan 阶段**（生成实施计划）
+   ```bash
+   # 位置：specs/004-fix-realtime-tick/
+   /speckit.plan
+   
+   # 结果：
+   # ✅ 生成 plan.md
+   # ✅ 生成 research.md
+   # ✅ 生成 data-model.md
+   # ✅ 生成 quickstart.md
+   # ✅ 生成 contracts/
+   ```
+
+3. **Tasks 阶段**（生成任务清单）
+   ```bash
+   # 位置：specs/004-fix-realtime-tick/
+   /speckit.tasks
+   
+   # 结果：
+   # ✅ 生成 tasks.md
+   ```
+
+### 关键机制说明
+
+#### 1. 自动文件夹创建
+
+`create-new-feature.ps1` 脚本的关键功能：
+
+- **编号检测**：自动检测现有功能编号（从 Git 分支、本地分支、specs 目录）
+- **短名称生成**：从功能描述中提取关键词，生成短名称（如 `fix-realtime-tick`）
+- **文件夹创建**：自动创建 `specs/XXX-feature-name/` 目录结构
+- **Git 分支**：如果使用 Git，自动创建并切换到新分支
+
+**编号规则：**
+- 检查远程分支：`git ls-remote --heads origin | grep "refs/heads/[0-9]+-"`
+- 检查本地分支：`git branch | grep "^[0-9]+-"`
+- 检查 specs 目录：`specs/[0-9]+-*/`
+- 取最高编号 + 1
+
+#### 2. 文档生成顺序
+
+文档生成遵循严格的顺序依赖：
+
+```
+spec.md (specify)
+    ↓
+plan.md (plan)
+    ↓
+research.md (plan - Phase 0)
+    ↓
+data-model.md, contracts/, quickstart.md (plan - Phase 1)
+    ↓
+tasks.md (tasks)
+```
+
+**重要提示：**
+- `tasks.md` **不是**由 `/speckit.plan` 生成
+- `tasks.md` 由 `/speckit.tasks` 命令单独生成
+- 必须先执行 `/speckit.plan`，再执行 `/speckit.tasks`
+
+#### 3. 文件模板系统
+
+Speckit 使用模板系统来生成文档：
+
+- **模板位置**：`.specify/templates/`
+- **模板文件**：
+  - `spec-template.md` - 功能规格模板
+  - `plan-template.md` - 实施计划模板
+  - `tasks-template.md` - 任务清单模板
+  - `checklist-template.md` - 检查清单模板
+
+#### 4. AI 助手上下文更新
+
+在 Phase 1 设计阶段，会自动更新 AI 助手上下文：
+
+- 运行 `.specify/scripts/powershell/update-agent-context.ps1`
+- 检测使用的 AI 助手类型（Cursor、Claude 等）
+- 更新对应的上下文文件
+- 添加新技术栈信息，保留手动添加的内容
+
+### 常见问题
+
+**Q: 为什么文件夹是在 specify 阶段创建的，而不是 plan 阶段？**
+
+A: 因为 `create-new-feature.ps1` 脚本在 `/speckit.specify` 命令中调用，它的职责就是创建新功能的基础结构（文件夹、spec.md、checklists/）。`/speckit.plan` 命令假设功能文件夹已经存在，只负责生成实施计划相关的文档。
+
+**Q: 可以跳过某个阶段吗？**
+
+A: 不建议跳过，因为每个阶段都有依赖关系：
+- 必须先执行 `/speckit.specify` 创建基础结构
+- 然后执行 `/speckit.plan` 生成设计文档
+- 最后执行 `/speckit.tasks` 生成任务清单
+
+**Q: 如何修改已创建的功能编号？**
+
+A: 功能编号在创建时确定，不建议修改。如果需要调整，可以：
+1. 手动重命名文件夹
+2. 更新 Git 分支名称
+3. 更新文档中的引用
+
 ## 🔄 工作流程建议
 
 ### 1. 新模块开发流程
@@ -385,7 +643,20 @@ specs/
 
 ---
 
-**文档版本：** 1.0  
-**最后更新：** 2025-01-15  
+**文档版本：** 1.1  
+**最后更新：** 2025-01-27  
 **维护者：** vnpy 开发团队
+
+## 📝 更新日志
+
+### v1.1 (2025-01-27)
+- ✅ 新增"Speckit 工作流程原理"章节
+- ✅ 详细说明 `/speckit.specify`、`/speckit.plan`、`/speckit.tasks` 命令的工作流程
+- ✅ 说明自动文件夹创建机制和文档生成顺序
+- ✅ 添加完整工作流程示例和常见问题解答
+
+### v1.0 (2025-01-15)
+- ✅ 初始版本
+- ✅ 多模块开发最佳实践总结
+- ✅ 组织方式推荐和最佳实践建议
 
