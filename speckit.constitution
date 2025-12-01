@@ -1,0 +1,108 @@
+# VeighNa Chartwindow Constitution
+
+<!--
+Sync Impact Report:
+Version: 1.1.0 (amended)
+- Added Principle VII: Code File Size Limit (single file max 500 lines)
+- Version bump: 1.0.0 → 1.1.0 (MINOR: new principle added)
+- Templates: ✅ All templates aligned with constitution principles
+-->
+
+## Core Principles
+
+### I. Test-First Development (NON-NEGOTIABLE)
+
+所有新功能开发必须遵循测试驱动开发（TDD）流程：先编写测试用例 → 用户确认 → 测试失败 → 然后实现功能。严格遵循 Red-Green-Refactor 循环。所有图表交互功能、画线交易逻辑、多周期数据同步等核心功能必须包含单元测试和集成测试。测试覆盖率要求：核心业务逻辑 >= 90%，UI 交互逻辑 >= 80%。
+
+### II. Code Quality Standards
+
+代码必须符合 PEP8 标准，使用 ruff 进行代码风格检查，使用 mypy 进行静态类型检查。所有函数和类必须包含 docstring（三引号格式）。代码提交前必须通过 `ruff check .` 和 `mypy vnpy` 检查，不允许存在 error 或 warning。类型注解必须完整，禁止使用 `Any` 类型（除非有明确理由）。
+
+### III. Modular Architecture
+
+图表功能采用 Mixin 模式组织代码，将不同功能模块分离到不同的 Mixin 类中（如 ChartWidgetPositionMixin、ChartWidgetOrderMixin 等）。每个模块必须独立可测试，职责单一。新功能必须作为独立模块添加，避免在现有类中直接扩展导致代码膨胀。
+
+### IV. Real-Time Performance
+
+多周期K线显示和画线交易功能必须保证实时性能：K线数据更新延迟 < 100ms，画线交互响应时间 < 50ms，价格突破触发延迟 < 200ms。使用事件驱动架构，避免阻塞主线程。关键路径必须进行性能测试和优化。
+
+### V. Data Consistency & Persistence
+
+画线交易数据（入场线、止损线、止盈线）必须持久化到数据库，支持跨会话恢复。多周期K线数据必须保持时间同步，避免数据不一致。使用事务确保数据操作的原子性。数据库操作必须包含错误处理和回滚机制。
+
+### VI. Event-Driven Design
+
+所有图表更新、订单状态变化、持仓变化必须通过事件系统（EventEngine）进行通信。禁止直接调用方法传递状态，必须通过事件订阅机制。事件处理必须幂等，支持去重机制避免重复处理。
+
+### VII. Code File Size Limit
+
+单个源代码文件不得超过 500 行代码（不包括空行和注释）。当文件接近或超过此限制时，必须进行代码分片重构：将功能拆分为独立的模块、类或 Mixin。使用 Mixin 模式、组合模式或模块化设计来组织代码。代码审查时必须检查文件行数，超过限制的文件必须重构后才能合并。
+
+## Development Constraints
+
+### Technology Stack
+
+- **Language**: Python 3.10+ (推荐 3.13)
+- **UI Framework**: PySide6 6.8.2.1, pyqtgraph >= 0.13.7
+- **Testing**: pytest, 支持 Qt 测试框架
+- **Code Quality**: ruff (PEP8), mypy (类型检查)
+- **Database**: SQLite (默认), 支持其他数据库后端
+
+### Performance Requirements
+
+- K线图表渲染：支持至少 1000 根K线流畅显示
+- 多周期同步：支持至少 5 个不同周期同时显示
+- 画线交易：支持至少 100 条价格线同时显示和管理
+- 内存占用：单个图表窗口内存占用 < 200MB
+
+### Compatibility Requirements
+
+- 支持 Windows、Linux、macOS 平台
+- 兼容 VeighNa 现有事件系统和数据接口
+- 向后兼容现有 ChartWidget API，不破坏现有功能
+
+## Development Workflow
+
+### Code Review Process
+
+所有 PR 必须通过以下检查：
+1. 代码风格检查：`ruff check .` 无错误
+2. 类型检查：`mypy vnpy` 无错误
+3. 文件大小检查：单个文件不超过 500 行，超过必须重构
+4. 测试覆盖：新增代码必须有对应测试，覆盖率达标
+5. 功能测试：手动测试验证功能正常
+6. Constitution 合规性检查：确保符合本 Constitution 的所有原则
+
+### Testing Requirements
+
+- **单元测试**：所有业务逻辑函数必须有单元测试
+- **集成测试**：图表与事件系统、数据库的集成必须有测试
+- **UI 测试**：关键交互流程（画线、下单、平仓）必须有 UI 测试
+- **性能测试**：关键路径必须有性能基准测试
+
+### Documentation Requirements
+
+- 所有公共 API 必须有完整的 docstring
+- 复杂算法和业务逻辑必须有注释说明
+- 新增功能必须更新相关文档（README、用户文档等）
+- 重大变更必须记录在 CHANGELOG 中
+
+## Governance
+
+本 Constitution 优先于所有其他开发实践和约定。任何违反 Constitution 原则的代码修改必须经过明确批准并记录理由。
+
+### Amendment Process
+
+- Constitution 的修改必须经过讨论和批准
+- 版本号遵循语义化版本：MAJOR.MINOR.PATCH
+  - MAJOR: 向后不兼容的原则变更或移除
+  - MINOR: 新增原则或重大扩展
+  - PATCH: 澄清、措辞修正、非语义性改进
+- 修改后必须更新所有相关模板和文档
+
+### Compliance Review
+
+所有 PR 和代码审查必须验证是否符合 Constitution。复杂性必须被证明是必要的，否则必须简化。使用 `CLAUDE.md` 和项目文档作为运行时开发指导。
+
+**Version**: 1.1.0 | **Ratified**: 2025-01-27 | **Last Amended**: 2025-01-27
+

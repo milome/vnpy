@@ -4,6 +4,7 @@ Basic widgets for UI.
 
 import csv
 import platform
+import time
 from enum import Enum
 from typing import cast, Any
 from copy import copy
@@ -22,7 +23,8 @@ from ..event import (
     EVENT_POSITION,
     EVENT_POSITION_VIEW,
     EVENT_ACCOUNT,
-    EVENT_LOG
+    EVENT_LOG,
+    EVENT_CONTRACT
 )
 from ..object import (
     OrderRequest,
@@ -39,9 +41,6 @@ from ..setting import SETTING_FILENAME, SETTINGS
 from ..locale import _
 from ..period_utils import (
     get_period_start,
-    get_hkfe_hour_period_start,
-    get_hkfe_4hour_period,
-    is_hkfe_trading_time,
     PeriodOpenPriceHelper
 )
 
@@ -56,13 +55,13 @@ COLOR_BLACK = QtGui.QColor("black")
 class ToastNotification(QtWidgets.QLabel):
     """
     Toast提示组件 - 温和的浮动通知，自动淡入淡出消失。
-    
+
     用于显示主力合约切换等重要但不紧急的通知。
     """
-    
+
     def __init__(self, parent: QtWidgets.QWidget = None) -> None:
         super().__init__(parent)
-        
+
         # 设置样式
         self.setStyleSheet("""
             QLabel {
@@ -74,46 +73,46 @@ class ToastNotification(QtWidgets.QLabel):
                 font-weight: bold;
             }
         """)
-        
+
         self.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.setWindowFlags(
-            QtCore.Qt.WindowType.FramelessWindowHint | 
+            QtCore.Qt.WindowType.FramelessWindowHint |
             QtCore.Qt.WindowType.WindowStaysOnTopHint |
             QtCore.Qt.WindowType.Tool
         )
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        
+
         # 动画效果
         self.opacity_effect = QtWidgets.QGraphicsOpacityEffect(self)
         self.setGraphicsEffect(self.opacity_effect)
-        
+
         # 淡入动画
         self.fade_in_animation = QtCore.QPropertyAnimation(self.opacity_effect, b"opacity")
         self.fade_in_animation.setDuration(300)
         self.fade_in_animation.setStartValue(0.0)
         self.fade_in_animation.setEndValue(1.0)
-        
+
         # 淡出动画
         self.fade_out_animation = QtCore.QPropertyAnimation(self.opacity_effect, b"opacity")
         self.fade_out_animation.setDuration(500)
         self.fade_out_animation.setStartValue(1.0)
         self.fade_out_animation.setEndValue(0.0)
         self.fade_out_animation.finished.connect(self.hide)
-        
+
         # 定时器（显示时长）
         self.timer = QtCore.QTimer(self)
         self.timer.setSingleShot(True)
         self.timer.timeout.connect(self.start_fade_out)
-        
+
         self.hide()
-    
-    def show_message(self, message: str, duration: int = 4000, 
+
+    def show_message(self, message: str, duration: int = 4000,
                      icon: str = "🔄", color: str = None,
                      position: str = "top") -> None:
         """
         显示Toast消息。
-        
+
         Args:
             message: 消息内容
             duration: 显示时长（毫秒），默认4秒
@@ -123,7 +122,7 @@ class ToastNotification(QtWidgets.QLabel):
         """
         # 设置消息内容
         self.setText(f"  {icon}  {message}  ")
-        
+
         # 自定义颜色
         if color:
             self.setStyleSheet(f"""
@@ -136,29 +135,29 @@ class ToastNotification(QtWidgets.QLabel):
                     font-weight: bold;
                 }}
             """)
-        
+
         # 调整大小
         self.adjustSize()
-        
+
         # 计算位置
         if self.parent():
             parent = self.parent()
             parent_rect = parent.geometry()
-            
+
             # 确保父窗口已显示
             if not parent.isVisible():
                 parent.show()
-            
+
             # 水平居中
             x = parent_rect.x() + (parent_rect.width() - self.width()) // 2
-            
+
             if position == "center":
                 # 屏幕中央
                 y = parent_rect.y() + (parent_rect.height() - self.height()) // 2
             else:
                 # 顶部（紧贴标题栏下方，不遮挡内容）
                 y = parent_rect.y() + 35  # 紧贴标题栏
-            
+
             self.move(x, y)
         else:
             # 如果没有父窗口，使用屏幕坐标
@@ -170,15 +169,15 @@ class ToastNotification(QtWidgets.QLabel):
             else:
                 y = 50  # 顶部
             self.move(x, y)
-        
+
         # 显示并开始动画
         self.show()
         self.raise_()
         self.fade_in_animation.start()
-        
+
         # 设置定时器
         self.timer.start(duration)
-    
+
     def start_fade_out(self) -> None:
         """开始淡出动画"""
         self.fade_out_animation.start()
@@ -384,12 +383,12 @@ class CommissionCell(BaseCell):
         if not hasattr(data, 'extra') or data.extra is None:
             self.setText("无")
             return
-        
+
         # 尝试从extra中获取费用信息
         commission = data.extra.get("commission", 0)
         fee = data.extra.get("fee", 0)
         cost = data.extra.get("cost", 0)
-        
+
         # 优先使用commission，其次fee，最后cost
         total_fee = 0
         if commission:
@@ -398,20 +397,20 @@ class CommissionCell(BaseCell):
             total_fee = float(fee)
         elif cost:
             total_fee = float(cost)
-        
+
         # 如果都没有，尝试中文字段
         if total_fee == 0:
             commission_cn = data.extra.get("佣金", 0)
             fee_cn = data.extra.get("费用", 0)
             cost_cn = data.extra.get("手续费", 0)
-            
+
             if commission_cn:
                 total_fee = float(commission_cn)
             elif fee_cn:
                 total_fee = float(fee_cn)
             elif cost_cn:
                 total_fee = float(cost_cn)
-        
+
         if total_fee > 0:
             # 格式化显示，保留2位小数
             self.setText(f"{total_fee:.2f}")
@@ -532,7 +531,7 @@ class BaseMonitor(QtWidgets.QTableWidget):
                         content = data.extra[header]
                     else:
                         content = None
-            
+
             cell: QtWidgets.QTableWidgetItem = setting["cell"](content, data)
             self.setItem(0, column, cell)
 
@@ -769,7 +768,7 @@ class PositionMonitor(BaseMonitor):
         """
         position: PositionData = event.data
         key: str = position.vt_positionid
-        
+
         # If volume is zero, remove the row and don't process further
         if position.volume <= 0:
             if key in self.cells:
@@ -795,7 +794,7 @@ class PositionMonitor(BaseMonitor):
                             break
             # Don't call parent's process_event to avoid inserting/updating zero-volume positions
             return
-        
+
         # Otherwise, use parent's process_event
         super().process_event(event)
 
@@ -982,7 +981,7 @@ class TradingWidget(QtWidgets.QWidget):
         exchanges: list[Exchange] = self.main_engine.get_all_exchanges()
         self.exchange_combo: QtWidgets.QComboBox = QtWidgets.QComboBox()
         self.exchange_combo.addItems([exchange.value for exchange in exchanges])
-        
+
         # 设置默认交易所为HKFE
         hkfe_index = -1
         for i, exchange in enumerate(exchanges):
@@ -1010,7 +1009,7 @@ class TradingWidget(QtWidgets.QWidget):
         self.order_type_combo: QtWidgets.QComboBox = QtWidgets.QComboBox()
         order_types = [order_type.value for order_type in OrderType]
         self.order_type_combo.addItems(order_types)
-        
+
         # 设置默认订单类型为对手价
         opponent_index = -1
         for i, order_type in enumerate(OrderType):
@@ -1163,12 +1162,12 @@ class TradingWidget(QtWidgets.QWidget):
         vbox.addLayout(grid)
         vbox.addLayout(form)
         self.setLayout(vbox)
-        
+
         # 初始化完成后，设置默认订单类型对应的价格框状态
         # 由于信号连接在设置默认值之后，需要手动调用一次
         current_order_type = str(self.order_type_combo.currentText())
         self.on_order_type_changed(current_order_type)
-        
+
         # 如果默认合约已设置，尝试加载合约信息
         if self.symbol_line.text():
             # 使用QTimer延迟执行，确保UI完全初始化后再调用
@@ -1193,6 +1192,8 @@ class TradingWidget(QtWidgets.QWidget):
         """"""
         self.signal_tick.connect(self.process_tick_event)
         self.event_engine.register(EVENT_TICK, self.signal_tick.emit)
+        # ✅ 注册合约事件，当合约信息加载后自动更新名称
+        self.event_engine.register(EVENT_CONTRACT, self.process_contract_event)
 
     def process_tick_event(self, event: Event) -> None:
         """"""
@@ -1281,8 +1282,40 @@ class TradingWidget(QtWidgets.QWidget):
         # Update name line widget and clear all labels
         contract: ContractData | None = self.main_engine.get_contract(vt_symbol)
         if not contract:
-            self.name_line.setText("")
-            gateway_name: str = self.gateway_combo.currentText()
+            # ✅ 如果合约不存在，尝试通过主力合约映射查找实际合约
+            # 例如：MHImain.HKFE -> MHI2512.HKFE
+            actual_contract = None
+            symbol_part = vt_symbol.split('.')[0] if '.' in vt_symbol else vt_symbol
+            exchange_part = exchange_value
+            
+            # 尝试从所有gateway查找主力合约映射
+            for gateway_name in self.main_engine.get_all_gateway_names():
+                gateway = self.main_engine.get_gateway(gateway_name)
+                if gateway and hasattr(gateway, 'get_main_contract_mapping'):
+                    mapping = gateway.get_main_contract_mapping()
+                    for main_symbol, actual_symbol in mapping.items():
+                        if main_symbol == symbol_part:
+                            # 找到了映射，尝试获取实际合约
+                            actual_vt_symbol = f"{actual_symbol}.{exchange_part}"
+                            actual_contract = self.main_engine.get_contract(actual_vt_symbol)
+                            if actual_contract:
+                                # 使用实际合约的信息，但保持主力合约代码显示
+                                self.name_line.setText(actual_contract.name)
+                                gateway_name = actual_contract.gateway_name
+                                # Update gateway combo box.
+                                ix: int = self.gateway_combo.findText(gateway_name)
+                                if ix >= 0:
+                                    self.gateway_combo.setCurrentIndex(ix)
+                                # Update price digits
+                                self.price_digits = get_digits(actual_contract.pricetick)
+                                break
+                    if actual_contract:
+                        break
+            
+            # 如果仍然没有找到合约
+            if not actual_contract:
+                self.name_line.setText("")
+                gateway_name: str = self.gateway_combo.currentText()
         else:
             self.name_line.setText(contract.name)
             gateway_name = contract.gateway_name
@@ -1330,6 +1363,55 @@ class TradingWidget(QtWidgets.QWidget):
 
         # 延迟100ms执行价格更新，确保订阅已生效
         Timer(0.1, delayed_price_update).start()
+    
+    def process_contract_event(self, event: Event) -> None:
+        """
+        处理合约信息更新事件，如果当前设置的合约代码匹配，自动更新名称。
+        """
+        from ..object import ContractData
+        from ..utility import get_digits
+        contract: ContractData = event.data
+        
+        # 检查是否是当前设置的合约
+        symbol: str = str(self.symbol_line.text())
+        if not symbol:
+            return
+        
+        exchange_value: str = str(self.exchange_combo.currentText())
+        vt_symbol: str = f"{symbol}.{exchange_value}"
+        
+        # 直接匹配
+        if contract.vt_symbol == vt_symbol:
+            self.name_line.setText(contract.name)
+            # 更新gateway combo box
+            ix: int = self.gateway_combo.findText(contract.gateway_name)
+            if ix >= 0:
+                self.gateway_combo.setCurrentIndex(ix)
+            # 更新价格精度
+            self.price_digits = get_digits(contract.pricetick)
+            return
+        
+        # 主力合约映射匹配：当前是主力合约，合约信息是实际合约
+        symbol_part = vt_symbol.split('.')[0] if '.' in vt_symbol else vt_symbol
+        contract_symbol_part = contract.vt_symbol.split('.')[0] if '.' in contract.vt_symbol else contract.vt_symbol
+        
+        # 尝试从所有gateway查找主力合约映射
+        for gateway_name in self.main_engine.get_all_gateway_names():
+            gateway = self.main_engine.get_gateway(gateway_name)
+            if gateway and hasattr(gateway, 'get_main_contract_mapping'):
+                mapping = gateway.get_main_contract_mapping()
+                # 检查是否是主力合约映射关系
+                for main_symbol, actual_symbol in mapping.items():
+                    if main_symbol == symbol_part and actual_symbol == contract_symbol_part:
+                        # 找到映射，更新名称
+                        self.name_line.setText(contract.name)
+                        # 更新gateway combo box
+                        ix: int = self.gateway_combo.findText(contract.gateway_name)
+                        if ix >= 0:
+                            self.gateway_combo.setCurrentIndex(ix)
+                        # 更新价格精度
+                        self.price_digits = get_digits(contract.pricetick)
+                        return
 
     def clear_label_text(self) -> None:
         """
@@ -1813,7 +1895,7 @@ class TradingWidget(QtWidgets.QWidget):
         for order in order_list:
             req: CancelRequest = order.create_cancel_request()
             self.main_engine.cancel_order(req, order.gateway_name)
-        
+
         # 清理所有gateway的追价订单（包括等待tick数据的订单，即使它们不在active_orders中）
         # 这对于Futu gateway特别重要，因为等待tick数据时订单状态是CANCELLED，不在active_orders中
         for gateway_name, gateway in self.main_engine.gateways.items():
@@ -2101,7 +2183,7 @@ class GlobalDialog(QtWidgets.QDialog):
 class ChartWindow(QtWidgets.QWidget):
     """
     K线图表窗口，作为独立窗口显示实时K线数据。
-    
+
     功能：
     - 支持多周期K线显示（1分钟、5分钟、1小时、4小时、1天）
     - 支持从数据库或CSV文件加载数据
@@ -2109,29 +2191,29 @@ class ChartWindow(QtWidgets.QWidget):
     - 支持切换不同合约
     - 底部滚动条可以快速切换时间范围
     """
-    
+
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
         """
         Handle key press events at window level.
-        
+
         - ESC: Disable drawing order mode
         """
         if event.key() == QtCore.Qt.Key.Key_Escape:
             # Disable drawing order mode when ESC is pressed
-            if (self.chart and 
-                self.chart.get_drawing_order_controller() and 
+            if (self.chart and
+                self.chart.get_drawing_order_controller() and
                 self.chart.get_drawing_order_controller().is_enabled()):
                 # 禁用画线下单模式
                 self.drawing_mode_button.setChecked(False)
                 self.toggle_drawing_mode()
                 event.accept()
                 return
-        
+
         super().keyPressEvent(event)
-    
+
     # 默认显示的合约
     DEFAULT_SYMBOL: str = "MHImain.HKFE"
-    
+
     # 周期选项映射
     INTERVAL_MAP: dict = {
         "1分钟": "1m",
@@ -2140,118 +2222,214 @@ class ChartWindow(QtWidgets.QWidget):
         "4小时": "4h",
         "1天": "1d"
     }
-    
+
     # 数据源选项
     DATA_SOURCE_DB: str = "数据库"
     DATA_SOURCE_CSV: str = "CSV文件"
-    
+
     signal_tick: QtCore.Signal = QtCore.Signal(Event)
     signal_history: QtCore.Signal = QtCore.Signal(object)
-    
+    signal_update_data_complete: QtCore.Signal = QtCore.Signal(bool, str)  # (success, message)
+
     def __init__(self, main_engine: MainEngine, event_engine: EventEngine) -> None:
         """构造函数"""
         super().__init__()
-        
+
         self.main_engine: MainEngine = main_engine
         self.event_engine: EventEngine = event_engine
-        
+
         # 当前显示的合约
         self.current_vt_symbol: str = ""
-        
+
         # 当前选择的周期
         self.current_interval: str = "1m"
-        
+
         # 当前数据源
         self.current_data_source: str = self.DATA_SOURCE_DB
-        
+
         # CSV文件路径
         self.csv_file_path: str = ""
-        
+
         # K线生成器（用于将tick合成K线）
-        self.bg: "BarGenerator" = None
-        
+        self.bg: BarGenerator = None
+
         # 图表组件
-        self.chart: "ChartWidget" = None
-        
+        self.chart: ChartWidget = None
+
         # 历史数据加载状态
         self.history_loaded: bool = False
-        
+
         # 历史数据缓存（用于滚动条）
         self.history_data: list = []
-        
+
         # 开盘价获取辅助类（复用通用工具模块）
         self.open_price_helper: PeriodOpenPriceHelper = PeriodOpenPriceHelper()
-        
+
         # 当前未完成的K线（用于大周期实时更新）
-        self._current_bar: "BarData" = None
-        self._current_bar_period: "datetime" = None
+        self._current_bar: BarData = None
+        self._current_bar_period: datetime = None
         self._current_bar_index: int = -1
-        
+
         # 周期开始时的基准成交量（用于计算周期内成交量）
         self._period_start_volume: float = 0
         self._period_start_turnover: float = 0
-        
+
         # 数据缺口状态
         self._has_data_gap: bool = False
         self._gap_info: str = ""
-        
+
+        # Phase 5: 性能监控（可选，通过配置开启）
+        from vnpy.trader.setting import SETTINGS
+        self._perf_monitoring_enabled: bool = SETTINGS.get("chart.performance_monitoring", False)
+        self._perf_stats: dict = {
+            "tick_update": {
+                "count": 0,
+                "total_time_ms": 0.0,
+                "min_time_ms": float('inf'),
+                "max_time_ms": 0.0,
+                "last_time_ms": 0.0,
+                "last_log_time": 0.0
+            },
+            "chart_refresh": {
+                "count": 0,
+                "total_time_ms": 0.0,
+                "min_time_ms": float('inf'),
+                "max_time_ms": 0.0,
+                "last_time_ms": 0.0,
+                "last_log_time": 0.0
+            },
+            "price_breakthrough": {
+                "count": 0,
+                "total_time_ms": 0.0,
+                "min_time_ms": float('inf'),
+                "max_time_ms": 0.0,
+                "last_time_ms": 0.0,
+                "last_log_time": 0.0
+            }
+        }
+        self._perf_log_interval: float = 60.0  # 每60秒记录一次性能统计
+
         self.init_ui()
         self.register_event()
+        # 连接更新数据完成信号槽（在主线程中）
+        self.signal_update_data_complete.connect(self._on_update_data_complete)
         
-        # 默认加载合约数据
+        # 默认加载合约数据（必须在init_ui()之后调用，因为需要symbol_line组件）
         self.load_default_symbol()
-    
+
+    def _record_performance_metric(self, metric_name: str, latency_ms: float) -> None:
+        """
+        Phase 5: 性能监控辅助方法 - 统一记录性能指标
+
+        Args:
+            metric_name: 指标名称（"tick_update", "chart_refresh", "price_breakthrough"）
+            latency_ms: 延迟时间（毫秒）
+        """
+        if not self._perf_monitoring_enabled:
+            return
+
+        # 确保统计项存在
+        if metric_name not in self._perf_stats:
+            self._perf_stats[metric_name] = {
+                "count": 0,
+                "total_time_ms": 0.0,
+                "min_time_ms": float('inf'),
+                "max_time_ms": 0.0,
+                "last_time_ms": 0.0,
+                "last_log_time": 0.0
+            }
+
+        # 更新统计信息
+        stats = self._perf_stats[metric_name]
+        stats["count"] += 1
+        stats["total_time_ms"] += latency_ms
+        stats["min_time_ms"] = min(stats["min_time_ms"], latency_ms)
+        stats["max_time_ms"] = max(stats["max_time_ms"], latency_ms)
+        stats["last_time_ms"] = latency_ms
+
+        # 定期输出性能统计（每60秒）
+        current_time = time.time()
+        if current_time - stats["last_log_time"] >= self._perf_log_interval:
+            avg_time_ms = stats["total_time_ms"] / stats["count"] if stats["count"] > 0 else 0
+
+            # 指标名称映射（用于日志显示）
+            metric_display_names = {
+                "tick_update": "Tick更新延迟",
+                "chart_refresh": "图表刷新延迟",
+                "price_breakthrough": "价格突破监控延迟"
+            }
+            display_name = metric_display_names.get(metric_name, metric_name)
+
+            if self.main_engine:
+                self.main_engine.write_log(
+                    f"[ChartWindow] [性能监控] {display_name}: "
+                    f"平均={avg_time_ms:.3f}ms, 最小={stats['min_time_ms']:.3f}ms, "
+                    f"最大={stats['max_time_ms']:.3f}ms, 最新={latency_ms:.3f}ms, "
+                    f"样本数={stats['count']}",
+                    "ChartWindow"
+                )
+            stats["last_log_time"] = current_time
+
+    def load_default_symbol(self) -> None:
+        """加载默认合约"""
+        if self.DEFAULT_SYMBOL:
+            # 设置合约输入框的文本
+            self.symbol_line.setText(self.DEFAULT_SYMBOL)
+            # 切换到默认合约（会自动加载数据）
+            self.switch_chart()
+
     def init_ui(self) -> None:
         """初始化界面"""
         from vnpy.chart import ChartWidget, CandleItem, VolumeItem
-        from vnpy.chart.order_dialog import OrderDialog
-        
+
         self.setWindowTitle(_("K线图表"))
         self.setWindowFlags(
             QtCore.Qt.WindowType.Window |
             QtCore.Qt.WindowType.WindowCloseButtonHint |
             QtCore.Qt.WindowType.WindowMinMaxButtonsHint
         )
-        
+
         # 合约选择区域
         self.symbol_line: QtWidgets.QLineEdit = QtWidgets.QLineEdit()
+        # 设置默认合约
+        self.symbol_line.setText(self.DEFAULT_SYMBOL)
         self.symbol_line.setPlaceholderText(_("输入合约代码，如 MHImain.HKFE"))
         self.symbol_line.returnPressed.connect(self.switch_chart)
-        
+
         self.switch_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("切换"))
         self.switch_button.clicked.connect(self.switch_chart)
-        
+
         # 画线交易功能按钮
         self.drawing_mode_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("画线下单"))
         self.drawing_mode_button.setCheckable(True)
         self.drawing_mode_button.clicked.connect(self.toggle_drawing_mode)
         self.drawing_mode_button.setToolTip(_("启用画线下单模式：在图表上点击价格位置创建订单"))
-        
+
         # 模拟成交按钮（用于休市时测试挂单成交）
         self.simulate_trade_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("模拟成交"))
         self.simulate_trade_button.clicked.connect(self.simulate_trade_breakthrough)
         self.simulate_trade_button.setToolTip(_("模拟tick突破挂单线，触发挂单成交（用于休市测试）"))
         self.simulate_trade_button.setStyleSheet("background-color: #FF9800; color: white; font-weight: bold;")
-        
+
         # 模拟止损按钮（用于休市时测试止损触发）
         self.simulate_stop_loss_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("模拟止损"))
         self.simulate_stop_loss_button.clicked.connect(self.simulate_stop_loss)
         self.simulate_stop_loss_button.setToolTip(_("模拟tick触及止损线，触发平仓（用于休市测试）"))
         self.simulate_stop_loss_button.setStyleSheet("background-color: #F44336; color: white; font-weight: bold;")
-        
+
         # 模拟止盈按钮（用于休市时测试止盈触发）
         self.simulate_take_profit_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("模拟止盈"))
         self.simulate_take_profit_button.clicked.connect(self.simulate_take_profit)
         self.simulate_take_profit_button.setToolTip(_("模拟tick触及止盈线，触发平仓（用于休市测试）"))
         self.simulate_take_profit_button.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;")
-        
+
         # 模拟功能开关状态（默认启用，用于控制三个模拟按钮）
         self._simulate_functions_enabled: bool = True
-        
+
         # 注意：RLock保护逻辑在ChartWidget中实现，这里不需要重复定义
-        # ChartWidget中的 _stop_loss_trigger_lock 和 _take_profit_trigger_lock 
+        # ChartWidget中的 _stop_loss_trigger_lock 和 _take_profit_trigger_lock
         # 保护的是"触发止损/止盈平仓"这个逻辑本身，无论是真实tickdata触发还是模拟触发
-        
+
         # 周期选择下拉框
         self.interval_combo: QtWidgets.QComboBox = QtWidgets.QComboBox()
         for name in self.INTERVAL_MAP.keys():
@@ -2260,7 +2438,7 @@ class ChartWindow(QtWidgets.QWidget):
         self.interval_combo.setToolTip(_("选择K线周期"))
         self.interval_combo.setFixedWidth(80)
         self.interval_combo.currentTextChanged.connect(self.on_interval_changed)
-        
+
         # 数据源选择下拉框
         self.datasource_combo: QtWidgets.QComboBox = QtWidgets.QComboBox()
         self.datasource_combo.addItem(self.DATA_SOURCE_DB)
@@ -2269,19 +2447,19 @@ class ChartWindow(QtWidgets.QWidget):
         self.datasource_combo.setToolTip(_("选择数据加载来源"))
         self.datasource_combo.setFixedWidth(80)
         self.datasource_combo.currentTextChanged.connect(self.on_datasource_changed)
-        
+
         # CSV文件选择按钮
         self.csv_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("选择文件"))
         self.csv_button.clicked.connect(self.select_csv_file)
         self.csv_button.setToolTip(_("选择CSV数据文件"))
         self.csv_button.setFixedWidth(70)
         self.csv_button.setEnabled(False)  # 默认禁用，只有选择CSV数据源时启用
-        
+
         # CSV文件路径显示
         self.csv_path_label: QtWidgets.QLabel = QtWidgets.QLabel("")
         self.csv_path_label.setStyleSheet("color: #666; font-size: 11px;")
         self.csv_path_label.setToolTip("")
-        
+
         # 日期时间选择器（只需设置起始时间，结束时间默认为最新）
         self.start_datetime: QtWidgets.QDateTimeEdit = QtWidgets.QDateTimeEdit()
         self.start_datetime.setDisplayFormat("yyyy-MM-dd HH:mm")
@@ -2290,12 +2468,12 @@ class ChartWindow(QtWidgets.QWidget):
         default_start = QtCore.QDateTime.currentDateTime().addDays(-7)
         self.start_datetime.setDateTime(default_start)
         self.start_datetime.setToolTip(_("历史数据开始时间，结束时间默认为最新"))
-        
+
         # 刷新按钮
         self.refresh_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("加载"))
         self.refresh_button.clicked.connect(self.refresh_chart)
         self.refresh_button.setToolTip(_("从起始时间加载数据到最新"))
-        
+
         # 跳转到指定日期
         self.goto_date: QtWidgets.QDateTimeEdit = QtWidgets.QDateTimeEdit()
         self.goto_date.setDisplayFormat("MM-dd HH:mm")
@@ -2303,21 +2481,26 @@ class ChartWindow(QtWidgets.QWidget):
         self.goto_date.setDateTime(QtCore.QDateTime.currentDateTime())
         self.goto_date.setToolTip(_("选择要跳转到的日期时间"))
         self.goto_date.setFixedWidth(110)
-        
+
         self.goto_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("跳转"))
         self.goto_button.clicked.connect(self.goto_datetime)
         self.goto_button.setToolTip(_("跳转到指定日期时间"))
-        
+
         # 跳转到最新按钮
         self.latest_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("最新"))
         self.latest_button.clicked.connect(self.goto_latest)
         self.latest_button.setToolTip(_("跳转到最新K线"))
-        
+
         # 保存CSV按钮
         self.save_csv_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("保存CSV"))
         self.save_csv_button.clicked.connect(self.save_to_csv)
         self.save_csv_button.setToolTip(_("将当前加载的数据保存为CSV文件"))
-        
+
+        # 更新数据按钮
+        self.update_data_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("更新数据"))
+        self.update_data_button.clicked.connect(self.update_history_data)
+        self.update_data_button.setToolTip(_("从数据库已有数据的结束日期开始，下载截止到当前最新日期的1分钟K线数据并补齐大周期"))
+
         # 顶部布局 - 第一行：合约选择、周期、数据源
         hbox1: QtWidgets.QHBoxLayout = QtWidgets.QHBoxLayout()
         hbox1.addWidget(QtWidgets.QLabel(_("合约:")))
@@ -2333,7 +2516,7 @@ class ChartWindow(QtWidgets.QWidget):
         hbox1.addWidget(self.simulate_trade_button)
         hbox1.addWidget(self.simulate_stop_loss_button)
         hbox1.addWidget(self.simulate_take_profit_button)
-        
+
         # 顶部布局 - 第二行：时间范围选择（结束时间默认为最新）
         hbox2: QtWidgets.QHBoxLayout = QtWidgets.QHBoxLayout()
         hbox2.addWidget(QtWidgets.QLabel(_("起始时间:")))
@@ -2346,8 +2529,10 @@ class ChartWindow(QtWidgets.QWidget):
         hbox2.addWidget(self.latest_button)
         hbox2.addSpacing(20)
         hbox2.addWidget(self.save_csv_button)
+        hbox2.addSpacing(20)
+        hbox2.addWidget(self.update_data_button)
         hbox2.addStretch()
-        
+
         # 创建K线图表
         self.chart = ChartWidget()
         self.chart.add_plot("candle", hide_x_axis=True)
@@ -2355,16 +2540,16 @@ class ChartWindow(QtWidgets.QWidget):
         self.chart.add_item(CandleItem, "candle", "candle")
         self.chart.add_item(VolumeItem, "volume", "volume")
         self.chart.add_cursor()
-        
+
         # 设置 MainEngine 和事件监听
         self.chart.set_main_engine(self.main_engine)
-        
+
         # 设置画线模式点击回调
         self.chart.set_drawing_click_callback(self._on_drawing_click)
-        
+
         # 设置画线模式状态变化回调（用于ESC键退出）
         self.chart.set_drawing_mode_changed_callback(self._on_drawing_mode_changed)
-        
+
         # 时间滚动条（横向）
         self.time_slider: QtWidgets.QSlider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self.time_slider.setMinimum(0)
@@ -2372,7 +2557,7 @@ class ChartWindow(QtWidgets.QWidget):
         self.time_slider.setValue(100)  # 默认显示最新
         self.time_slider.setToolTip(_("拖动滚动条查看不同时间段的K线"))
         self.time_slider.valueChanged.connect(self.on_time_slider_changed)
-        
+
         # 价格滚动条（竖向）- 用于缩放价格范围
         self.price_slider: QtWidgets.QSlider = QtWidgets.QSlider(QtCore.Qt.Orientation.Vertical)
         self.price_slider.setMinimum(10)
@@ -2381,7 +2566,7 @@ class ChartWindow(QtWidgets.QWidget):
         self.price_slider.setToolTip(_("拖动滚动条缩放K线数量（上多下少）"))
         self.price_slider.valueChanged.connect(self.on_price_slider_changed)
         self.price_slider.setFixedWidth(20)
-        
+
         # 时间范围标签
         self.time_start_label: QtWidgets.QLabel = QtWidgets.QLabel("")
         self.time_end_label: QtWidgets.QLabel = QtWidgets.QLabel("")
@@ -2389,25 +2574,25 @@ class ChartWindow(QtWidgets.QWidget):
         self.time_end_label.setStyleSheet("color: #666; font-size: 11px;")
         self.time_start_label.setFixedWidth(80)
         self.time_end_label.setFixedWidth(80)
-        
+
         # 图表和竖向滚动条的水平布局
         chart_layout: QtWidgets.QHBoxLayout = QtWidgets.QHBoxLayout()
         chart_layout.setSpacing(5)
         chart_layout.addWidget(self.chart, 1)
         chart_layout.addWidget(self.price_slider)
-        
+
         # 底部时间滚动条布局（扩展更多空间）
         slider_layout: QtWidgets.QHBoxLayout = QtWidgets.QHBoxLayout()
         slider_layout.setContentsMargins(0, 5, 25, 0)  # 右边留出空间对齐竖向滚动条
         slider_layout.addWidget(self.time_start_label)
         slider_layout.addWidget(self.time_slider, 1)
         slider_layout.addWidget(self.time_end_label)
-        
+
         # 状态标签
         self.status_label: QtWidgets.QLabel = QtWidgets.QLabel(_("请输入合约代码开始查看K线"))
         self.status_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.status_label.setStyleSheet("color: #888; font-size: 12px;")
-        
+
         # 总体布局
         vbox: QtWidgets.QVBoxLayout = QtWidgets.QVBoxLayout()
         vbox.setContentsMargins(10, 10, 10, 10)
@@ -2416,53 +2601,425 @@ class ChartWindow(QtWidgets.QWidget):
         vbox.addLayout(chart_layout, 1)
         vbox.addLayout(slider_layout)
         vbox.addWidget(self.status_label)
-        
+
         self.setLayout(vbox)
         self.resize(1100, 750)
-    
+
     def register_event(self) -> None:
-        """注册事件监听"""
-        self.signal_tick.connect(self.process_tick_event)
-        self.signal_history.connect(self.process_history_data)
-        self.event_engine.register(EVENT_TICK, self.signal_tick.emit)
-        
-        # 注册订单事件（用于画线交易功能）
-        from vnpy.trader.event import EVENT_ORDER
-        self.event_engine.register(EVENT_ORDER, self.process_order_event)
-        
-        # 初始化按钮状态（有合约时启用，无合约时禁用）
-        self._update_simulate_buttons_state()
-    
+        """
+        Phase 5: 注册事件监听器
+
+        注册 EVENT_TICK 和 EVENT_ORDER 事件监听，用于接收实时 tick 数据并更新图表。
+        使用信号-槽机制确保线程安全。
+
+        注意：
+        - 合约切换时不需要重新注册事件，因为 process_tick_event 已经通过过滤
+          current_vt_symbol 来处理，只处理当前显示合约的 tick。
+        - 窗口关闭时会自动调用 closeEvent() 注销所有事件监听器。
+        """
+        try:
+            # 检查 event_engine 是否已初始化
+            if not self.event_engine:
+                if self.main_engine:
+                    self.main_engine.write_log(
+                        "[ChartWindow] 警告：EventEngine 未初始化，无法注册事件监听",
+                        "ChartWindow"
+                    )
+                return
+
+            from vnpy.trader.event import EVENT_TICK
+
+            # 注册 tick 事件监听（使用信号槽机制确保线程安全）
+            self.signal_tick.connect(self.process_tick_event)
+            self.event_engine.register(EVENT_TICK, self.signal_tick.emit)
+
+            # 注册历史数据事件监听
+            self.signal_history.connect(self.process_history_data)
+
+            # 注册订单事件（用于画线交易功能）
+            from vnpy.trader.event import EVENT_ORDER
+            self.event_engine.register(EVENT_ORDER, self.process_order_event)
+
+            # 记录日志
+            if self.main_engine:
+                self.main_engine.write_log(
+                    "[ChartWindow] [Phase 5] 已注册事件监听：EVENT_TICK (signal_tick.emit), EVENT_ORDER (process_order_event)",
+                    "ChartWindow"
+                )
+
+            # 初始化按钮状态（有合约时启用，无合约时禁用）
+            self._update_simulate_buttons_state()
+        except Exception as e:
+            # 错误处理：记录错误但不阻止窗口初始化
+            if self.main_engine:
+                self.main_engine.write_log(
+                    f"[ChartWindow] 注册事件监听失败：{str(e)}",
+                    "ChartWindow"
+                )
+
     def process_tick_event(self, event: Event) -> None:
         """
-        处理tick事件，更新价格突破监控和按钮状态
-        
-        注意：按钮状态现在始终在有合约时启用，允许在有tickdata时也使用模拟功能进行测试
+        处理Tick事件 - 支持所有周期的实时更新
+
+        此方法同时处理：
+        1. 多周期K线实时更新（1分钟、5分钟、1小时、4小时、1日）
+        2. 价格突破监控（用于画线交易功能）
+        3. 按钮状态更新
+
+        Phase 5: 性能监控 - 测量tick更新延迟
         """
         from vnpy.trader.object import TickData
         tick: TickData = event.data
-        
-        # 只处理当前合约的tick数据
-        if tick.vt_symbol == self.current_vt_symbol:
-            # 更新价格突破监控
-            if self.chart and self.chart._breakthrough_monitor:
-                all_lines = self.chart._price_line_manager.get_all_lines()
+
+        # Phase 5: 性能监控 - 开始测量tick更新延迟
+        tick_update_start_time = None
+        if self._perf_monitoring_enabled:
+            tick_update_start_time = time.perf_counter()
+
+        # 只处理当前显示合约的tick
+        if tick.vt_symbol != self.current_vt_symbol:
+            return
+
+        # 如果历史数据还没加载完，跳过K线更新（但可以更新价格突破监控）
+        if self.history_loaded:
+            # 获取当前周期
+            interval_enum = self._get_interval_enum()
+            from vnpy.trader.constant import Interval
+
+            if interval_enum == Interval.MINUTE:
+                # 1分钟周期：使用BarGenerator从tick合成K线
+                if self.bg:
+                    # 更新BarGenerator（这会自动创建或更新bg.bar）
+                    self.bg.update_tick(tick)
+
+                    # 实时更新当前K线（每次tick都更新，确保实时显示）
+                    # 注意：bg.bar在第一个有效tick时会被创建，之后每次tick都会更新
+                    if self.bg.bar:
+                        from vnpy.trader.object import BarData
+                        # 创建当前K线的副本用于实时更新（避免修改原始bar对象）
+                        bar: BarData = copy(self.bg.bar)
+                        # 规范化datetime（去掉秒和微秒，确保与历史数据一致）
+                        bar.datetime = bar.datetime.replace(second=0, microsecond=0)
+                        
+                        # ✅ 对于1分钟周期，检查并修正开盘价
+                        # 
+                        # 【开盘价定义】：1分钟K线的开盘价 = 该分钟第一个tick的last_price
+                        # 
+                        # 【判定是否需要修正】：
+                        # 1. 如果当前tick的秒数 > 0，说明该分钟已经开始，第一个tick已经过去
+                        #    BarGenerator创建K线时用的不是第一个tick，开盘价不正确，需要修正
+                        # 2. 如果当前tick的秒数 = 0，说明可能是该分钟的第一个tick（或接近）
+                        #    但为了安全起见，仍然检查是否有更准确的参照物
+                        # 
+                        # 【参照物（按优先级）】：
+                        # 1. 保存的删除K线开盘价（最高优先级，来自历史数据，已完成）
+                        # 2. 历史数据中的该分钟K线（已完成，开盘价来自完整tick数据）
+                        # 3. 数据库中的该分钟K线（已完成，开盘价来自完整tick数据）
+                        # 4. 该分钟第一个tick的last_price（通过查询tick数据获取）
+                        # 
+                        # 【判定改的对不对】：
+                        # - 参照物的开盘价是从完整的历史数据生成的，理论上应该是正确的
+                        # - 如果找不到参照物，只能使用BarGenerator的开盘价（可能不正确，但无法验证）
+                        bar_minute_start = bar.datetime.replace(second=0, microsecond=0)
+                        correct_open_price = None
+                        need_correct = False
+                        
+                        # 判断是否需要修正：如果tick的秒数>0，说明该分钟已经开始，第一个tick已过去
+                        tick_second = tick.datetime.second
+                        if tick_second > 0:
+                            # 该分钟已经开始，BarGenerator创建K线时用的不是第一个tick，需要修正
+                            need_correct = True
+                            self.main_engine.write_log(
+                                f"[实时K线] 检测到该分钟已开始({tick.datetime.strftime('%H:%M:%S')})，"
+                                f"需要修正开盘价（BarGenerator使用的不是第一个tick）"
+                            )
+                        else:
+                            # 可能是该分钟的第一个tick，但仍然检查是否有更准确的参照物
+                            # （例如历史数据中的K线，可能是从更完整的tick数据生成的）
+                            need_correct = True  # 仍然检查，但优先级较低
+                        
+                        # 只有需要修正时才查找参照物
+                        if need_correct:
+                            # 方法1（最高优先级）：检查是否有保存的被删除K线的开盘价
+                            # 参照物：删除前历史数据中的K线开盘价（已完成，理论上正确）
+                            if (hasattr(self, '_removed_minute_bar_open_price') and 
+                                self._removed_minute_bar_open_price and
+                                hasattr(self, '_removed_minute_bar_datetime') and
+                                self._removed_minute_bar_datetime == bar_minute_start):
+                                correct_open_price = self._removed_minute_bar_open_price
+                                self.main_engine.write_log(
+                                    f"[实时K线] 1分钟K线({bar_minute_start.strftime('%H:%M')}) "
+                                    f"使用保存的开盘价: {correct_open_price} (参照物：删除的历史K线，已完成)"
+                                )
+                                # 使用后清除，避免重复使用
+                                self._removed_minute_bar_open_price = None
+                                self._removed_minute_bar_datetime = None
+                            
+                            # 方法2：检查历史数据中是否有该分钟的K线
+                            # 参照物：历史数据中的K线开盘价（已完成，从完整tick数据生成，理论上正确）
+                            if not correct_open_price and self.history_data:
+                                for hist_bar in reversed(self.history_data):
+                                    hist_bar_minute_start = hist_bar.datetime.replace(second=0, microsecond=0)
+                                    if hist_bar_minute_start == bar_minute_start:
+                                        # 找到历史数据中该分钟的K线，使用其开盘价
+                                        if hist_bar.open_price > 0:
+                                            correct_open_price = hist_bar.open_price
+                                            self.main_engine.write_log(
+                                                f"[实时K线] 1分钟K线({bar_minute_start.strftime('%H:%M')}) "
+                                                f"从历史数据获取开盘价: {correct_open_price} "
+                                                f"(参照物：历史K线，已完成)"
+                                            )
+                                        break
+                            
+                            # 方法3：如果历史数据中没有，尝试从数据库加载该分钟的K线
+                            # 参照物：数据库中的K线开盘价（已完成，从完整tick数据生成，理论上正确）
+                            if not correct_open_price:
+                                try:
+                                    from vnpy.trader.database import get_database
+                                    from vnpy.trader.utility import extract_vt_symbol
+                                    from vnpy.trader.constant import Interval
+                                    
+                                    database = get_database()
+                                    symbol, exchange = extract_vt_symbol(self.current_vt_symbol)
+                                    
+                                    # 查询该分钟的K线数据
+                                    minute_bars = database.load_bar_data(
+                                        symbol,
+                                        exchange,
+                                        Interval.MINUTE,
+                                        bar_minute_start,
+                                        bar_minute_start
+                                    )
+                                    
+                                    if minute_bars and len(minute_bars) > 0:
+                                        # 找到该分钟的K线，使用其开盘价
+                                        minute_bar = minute_bars[0]
+                                        if minute_bar.open_price > 0:
+                                            correct_open_price = minute_bar.open_price
+                                            self.main_engine.write_log(
+                                                f"[实时K线] 1分钟K线({bar_minute_start.strftime('%H:%M')}) "
+                                                f"从数据库获取开盘价: {correct_open_price} "
+                                                f"(参照物：数据库K线，已完成)"
+                                            )
+                                except Exception as e:
+                                    # 数据库查询失败，忽略
+                                    pass
+                            
+                            # 方法4（最后手段）：从tick数据恢复正确的开盘价
+                            # 参照物：该分钟第一个tick的last_price（这是开盘价的准确定义）
+                            # 如果前三种方法都无法获取，尝试从数据库或datafeed查询该分钟的历史tick数据
+                            if not correct_open_price:
+                                try:
+                                    from datetime import timedelta
+                                    from vnpy.trader.database import get_database
+                                    from vnpy.trader.utility import extract_vt_symbol
+                                    from vnpy.trader.constant import Interval
+                                    from vnpy.trader.object import HistoryRequest
+                                    
+                                    symbol, exchange = extract_vt_symbol(self.current_vt_symbol)
+                                    
+                                    # 计算该分钟的时间范围
+                                    minute_end = bar_minute_start + timedelta(minutes=1)
+                                    
+                                    # 方法4.1：尝试从数据库加载该分钟的tick数据
+                                    try:
+                                        database = get_database()
+                                        ticks = database.load_tick_data(
+                                            symbol,
+                                            exchange,
+                                            bar_minute_start,
+                                            minute_end
+                                        )
+                                        
+                                        if ticks:
+                                            # 按时间排序，找到第一个tick
+                                            ticks.sort(key=lambda x: x.datetime)
+                                            first_tick = ticks[0]
+                                            if first_tick.last_price > 0:
+                                                correct_open_price = first_tick.last_price
+                                                self.main_engine.write_log(
+                                                    f"[实时K线] 1分钟K线({bar_minute_start.strftime('%H:%M')}) "
+                                                    f"从数据库tick数据获取开盘价: {correct_open_price} "
+                                                    f"(参照物：该分钟第一个tick，时间: {first_tick.datetime.strftime('%H:%M:%S')})"
+                                                )
+                                    except Exception as e:
+                                        # 数据库查询tick失败，继续尝试datafeed
+                                        pass
+                                    
+                                    # 方法4.2：如果数据库没有，尝试从datafeed查询该分钟的tick数据
+                                    if not correct_open_price:
+                                        try:
+                                            datafeed = None
+                                            if hasattr(self.main_engine, 'get_datafeed'):
+                                                datafeed = self.main_engine.get_datafeed()
+                                            
+                                            # 如果没有现成的datafeed，尝试创建FUTU datafeed
+                                            if datafeed is None:
+                                                try:
+                                                    from vnpy_futu.datafeed import Datafeed as FutuDatafeed
+                                                    datafeed = FutuDatafeed()
+                                                    if not datafeed.init(output=self.main_engine.write_log):
+                                                        datafeed = None
+                                                except ImportError:
+                                                    pass
+                                                except Exception:
+                                                    pass
+                                            
+                                            if datafeed:
+                                                req = HistoryRequest(
+                                                    symbol=symbol,
+                                                    exchange=exchange,
+                                                    interval=Interval.TICK,
+                                                    start=bar_minute_start,
+                                                    end=minute_end
+                                                )
+                                                
+                                                ticks = datafeed.query_tick_history(req, output=self.main_engine.write_log)
+                                                
+                                                if ticks:
+                                                    # 按时间排序，找到第一个tick
+                                                    ticks.sort(key=lambda x: x.datetime)
+                                                    first_tick = ticks[0]
+                                                    if first_tick.last_price > 0:
+                                                        correct_open_price = first_tick.last_price
+                                                        self.main_engine.write_log(
+                                                            f"[实时K线] 1分钟K线({bar_minute_start.strftime('%H:%M')}) "
+                                                            f"从datafeed tick数据获取开盘价: {correct_open_price} "
+                                                            f"(参照物：该分钟第一个tick，时间: {first_tick.datetime.strftime('%H:%M:%S')})"
+                                                        )
+                                        except Exception as e:
+                                            # datafeed查询失败，忽略
+                                            pass
+                                except Exception as e:
+                                    # 查询tick数据失败，忽略
+                                    pass
+                        
+                        # 如果找到了参照物且开盘价不同，则使用参照物的开盘价
+                        if correct_open_price and correct_open_price > 0:
+                            if correct_open_price != bar.open_price:
+                                old_open_price = bar.open_price
+                                bar.open_price = correct_open_price
+                                self.main_engine.write_log(
+                                    f"[实时K线] 1分钟K线({bar_minute_start.strftime('%H:%M')}) "
+                                    f"开盘价已修正: {old_open_price} -> {correct_open_price} "
+                                    f"(使用参照物修正)"
+                                )
+                            else:
+                                # 开盘价相同，说明BarGenerator的开盘价是正确的（可能是第一个tick）
+                                self.main_engine.write_log(
+                                    f"[实时K线] 1分钟K线({bar_minute_start.strftime('%H:%M')}) "
+                                    f"开盘价验证正确: {bar.open_price} (与参照物一致)"
+                                )
+                        elif need_correct:
+                            # 需要修正但找不到参照物，记录警告
+                            self.main_engine.write_log(
+                                f"[实时K线] 1分钟K线({bar_minute_start.strftime('%H:%M')}) "
+                                f"无法获取参照物修正开盘价，使用BarGenerator的开盘价: {bar.open_price} "
+                                f"(可能不准确，因为该分钟已开始: {tick.datetime.strftime('%H:%M:%S')})"
+                            )
+                        
+                        # 更新图表显示（BarManager会自动处理新bar的添加和已有bar的更新）
+                        # 这会实时更新最后一根K线的显示（如果bar已存在）或添加新K线（如果bar不存在）
+                        # Phase 5: 性能监控 - 测量图表刷新延迟
+                        chart_refresh_start_time = None
+                        if self._perf_monitoring_enabled:
+                            chart_refresh_start_time = time.perf_counter()
+
+                        self.chart.update_bar(bar)
+
+                        # Phase 5: 性能监控 - 记录图表刷新延迟
+                        if self._perf_monitoring_enabled and chart_refresh_start_time is not None:
+                            chart_refresh_end_time = time.perf_counter()
+                            chart_refresh_latency_ms = (chart_refresh_end_time - chart_refresh_start_time) * 1000
+                            self._record_performance_metric("chart_refresh", chart_refresh_latency_ms)
+            else:
+                # 5分钟、1小时、4小时周期：使用tick数据直接更新当前未完成的K线
+                # 这样可以实现所有周期的实时更新
+                self._update_current_bar_with_tick(tick, interval_enum)
+
+        # 更新价格突破监控（用于画线交易功能）
+        if self.chart and self.chart._breakthrough_monitor:
+            all_lines = self.chart._price_line_manager.get_all_lines()
+            # 只处理挂单线（PENDING类型），避免不必要的处理
+            from vnpy.chart.price_line import PriceLineType
+            pending_lines = {
+                line_id: line
+                for line_id, line in all_lines.items()
+                if line.get_line_type() == PriceLineType.PENDING
+            }
+            if pending_lines:
+                # Phase 5: 性能监控 - 测量价格突破触发延迟
+                breakthrough_start_time = None
+                if self._perf_monitoring_enabled:
+                    breakthrough_start_time = time.perf_counter()
+
                 self.chart._breakthrough_monitor.update_tick(tick, all_lines)
-            
-            # 更新按钮状态（现在始终启用，如果有合约的话）
-            self._update_simulate_buttons_state()
-    
+
+                # Phase 5: 性能监控 - 记录价格突破触发延迟
+                if self._perf_monitoring_enabled and breakthrough_start_time is not None:
+                    breakthrough_end_time = time.perf_counter()
+                    breakthrough_latency_ms = (breakthrough_end_time - breakthrough_start_time) * 1000
+                    self._record_performance_metric("price_breakthrough", breakthrough_latency_ms)
+
+        # 更新止损/止盈线监控（Phase 4: 实时止损止盈功能）
+        if self.chart and self.chart._price_line_manager:
+            all_lines = self.chart._price_line_manager.get_all_lines()
+            from vnpy.chart.price_line import PriceLineType
+
+            # 处理止损线
+            stop_loss_lines = {
+                line_id: line
+                for line_id, line in all_lines.items()
+                if line.get_line_type() == PriceLineType.STOP_LOSS
+            }
+            for line_id, line in stop_loss_lines.items():
+                try:
+                    # 调用触发方法，方法内部会检查价格是否触及止损线
+                    self.chart.trigger_stop_loss_close(line_id, line, tick)
+                except Exception as e:
+                    if self.main_engine:
+                        self.main_engine.write_log(
+                            f"[ChartWindow] 止损线监控异常: {line_id} (价格: {tick.last_price}, 止损价: {line.get_price()}): {str(e)}",
+                            "ChartWindow"
+                        )
+
+            # 处理止盈线
+            take_profit_lines = {
+                line_id: line
+                for line_id, line in all_lines.items()
+                if line.get_line_type() == PriceLineType.TAKE_PROFIT
+            }
+            for line_id, line in take_profit_lines.items():
+                try:
+                    # 调用触发方法，方法内部会检查价格是否触及止盈线
+                    self.chart.trigger_take_profit_close(line_id, line, tick)
+                except Exception as e:
+                    if self.main_engine:
+                        self.main_engine.write_log(
+                            f"[ChartWindow] 止盈线监控异常: {line_id} (价格: {tick.last_price}, 止盈价: {line.get_price()}): {str(e)}",
+                            "ChartWindow"
+                        )
+
+        # 更新按钮状态（现在始终启用，如果有合约的话）
+        self._update_simulate_buttons_state()
+
+        # Phase 5: 性能监控 - 记录tick更新延迟
+        if self._perf_monitoring_enabled and tick_update_start_time is not None:
+            tick_update_end_time = time.perf_counter()
+            tick_update_latency_ms = (tick_update_end_time - tick_update_start_time) * 1000
+            self._record_performance_metric("tick_update", tick_update_latency_ms)
+
     def on_interval_changed(self, text: str) -> None:
         """周期选择改变时的处理"""
         self.current_interval = self.INTERVAL_MAP.get(text, "1m")
         # 如果已加载合约，自动刷新
         if self.current_vt_symbol:
             self.refresh_chart()
-    
+
     def on_datasource_changed(self, text: str) -> None:
         """数据源选择改变时的处理"""
         self.current_data_source = text
-        
+
         # 根据数据源启用/禁用CSV文件选择按钮
         if text == self.DATA_SOURCE_CSV:
             self.csv_button.setEnabled(True)
@@ -2474,7 +3031,7 @@ class ChartWindow(QtWidgets.QWidget):
         else:
             self.csv_button.setEnabled(False)
             self.csv_path_label.setText("")
-    
+
     def select_csv_file(self) -> None:
         """选择CSV数据文件"""
         file_path, selected_filter = QtWidgets.QFileDialog.getOpenFileName(
@@ -2483,18 +3040,18 @@ class ChartWindow(QtWidgets.QWidget):
             "",
             "CSV Files (*.csv);;All Files (*)"
         )
-        
+
         if file_path:
             self.csv_file_path = file_path
             # 显示文件名（不显示完整路径）
             file_name = file_path.split("/")[-1].split("\\")[-1]
             self.csv_path_label.setText(file_name)
             self.csv_path_label.setToolTip(file_path)
-            
+
             # 如果已选择合约，自动加载
             if self.current_vt_symbol:
                 self.refresh_chart()
-    
+
     def save_to_csv(self) -> None:
         """将当前加载的数据保存为CSV文件"""
         if not self.history_data:
@@ -2504,34 +3061,34 @@ class ChartWindow(QtWidgets.QWidget):
                 _("没有可保存的数据，请先加载数据")
             )
             return
-        
+
         # 生成默认文件名
         from datetime import datetime
-        interval_name = self.interval_combo.currentText()
+        self.interval_combo.currentText()
         default_name = f"{self.current_vt_symbol}_{self.current_interval}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        
+
         file_path, selected_filter = QtWidgets.QFileDialog.getSaveFileName(
             self,
             _("保存CSV文件"),
             default_name,
             "CSV Files (*.csv);;All Files (*)"
         )
-        
+
         if not file_path:
             return
-        
+
         try:
             import csv
-            
+
             with open(file_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
-                
+
                 # 写入表头
                 writer.writerow([
-                    'datetime', 'open', 'high', 'low', 'close', 
+                    'datetime', 'open', 'high', 'low', 'close',
                     'volume', 'turnover', 'open_interest'
                 ])
-                
+
                 # 写入数据
                 for bar in self.history_data:
                     writer.writerow([
@@ -2544,15 +3101,15 @@ class ChartWindow(QtWidgets.QWidget):
                         bar.turnover if bar.turnover else 0,
                         bar.open_interest if bar.open_interest else 0
                     ])
-            
+
             self.main_engine.write_log(f"[保存CSV] 已保存 {len(self.history_data)} 根K线到 {file_path}")
-            
+
             QtWidgets.QMessageBox.information(
                 self,
                 _("成功"),
                 _("已保存 {} 根K线到:\n{}").format(len(self.history_data), file_path)
             )
-            
+
         except Exception as e:
             error_msg = str(e).replace("{", "{{").replace("}", "}}")
             self.main_engine.write_log(f"[保存CSV] 保存失败: {error_msg}")
@@ -2561,11 +3118,447 @@ class ChartWindow(QtWidgets.QWidget):
                 _("错误"),
                 _("保存失败: {}").format(str(e))
             )
+
+    def update_history_data(self) -> None:
+        """
+        更新历史数据：从数据库已有数据的结束日期开始，下载截止到当前最新日期的1分钟K线数据。
+        
+        短期解决方案：调用DataManager的更新数据功能。
+        """
+        # 检查是否有当前合约
+        if not self.current_vt_symbol:
+            QtWidgets.QMessageBox.warning(
+                self,
+                _("警告"),
+                _("请先选择合约后再更新数据")
+            )
+            return
+        
+        from threading import Thread
+        from datetime import datetime, timedelta
+        from tzlocal import get_localzone_name
+        from vnpy.trader.utility import extract_vt_symbol, ZoneInfo
+        from vnpy.trader.constant import Interval
+        from vnpy.trader.database import get_database
+        
+        # 验证vt_symbol格式
+        if "." not in self.current_vt_symbol:
+            QtWidgets.QMessageBox.warning(
+                self,
+                _("警告"),
+                _("合约代码格式不正确，应为：合约代码.交易所（如：MHImain.HKFE）")
+            )
+            return
+        
+        try:
+            symbol, exchange = extract_vt_symbol(self.current_vt_symbol)
+        except (ValueError, AttributeError) as e:
+            QtWidgets.QMessageBox.warning(
+                self,
+                _("警告"),
+                _("无法解析合约代码：{}\n请检查格式是否正确（如：MHImain.HKFE）").format(self.current_vt_symbol)
+            )
+            self.main_engine.write_log(
+                f"[ChartWindow] 解析合约代码失败: {self.current_vt_symbol}, 错误: {e}",
+                "ChartWindow"
+            )
+            return
+        
+        # 显示进度提示（在主线程中创建）
+        self._update_progress_dialog = QtWidgets.QProgressDialog(
+            _("正在更新数据，请稍候..."),
+            _("取消"),
+            0,
+            0,
+            self
+        )
+        self._update_progress_dialog.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
+        self._update_progress_dialog.setAutoClose(False)
+        self._update_progress_dialog.setAutoReset(False)
+        self._update_progress_dialog.show()
+        
+        def _update():
+            try:
+                # 1. 尝试通过DataManagerApp更新数据
+                datamanager_app = None
+                if hasattr(self.main_engine, 'apps'):
+                    # 尝试获取DataManagerApp
+                    for app_name, app in self.main_engine.apps.items():
+                        # 检查是否是DataManagerApp（通过app_name或类型判断）
+                        if app_name == "DataManager" or (hasattr(app, 'app_name') and app.app_name == "DataManager"):
+                            datamanager_app = app
+                            break
+                        # 也尝试通过类型判断
+                        try:
+                            from vnpy_datamanager import DataManagerApp
+                            if isinstance(app, DataManagerApp):
+                                datamanager_app = app
+                                break
+                        except ImportError:
+                            pass
+                
+                if datamanager_app:
+                    # 尝试获取DataManager引擎
+                    datamanager_engine = None
+                    if hasattr(self.main_engine, 'engines'):
+                        datamanager_engine = self.main_engine.engines.get("DataManager")
+                    
+                    if datamanager_engine and hasattr(datamanager_engine, 'update_data'):
+                        # 使用DataManager的更新数据功能
+                        self.main_engine.write_log(
+                            f"[ChartWindow] 使用DataManager更新数据: {self.current_vt_symbol}",
+                            "ChartWindow"
+                        )
+                        
+                        # 构建更新参数（DataManager的update_data可能需要特定格式）
+                        # 这里我们尝试调用update_data方法，传入当前合约信息
+                        try:
+                            # 尝试直接调用update_data方法（如果它接受参数）
+                            # 注意：DataManager的update_data可能不接受参数，而是更新所有合约
+                            # 这里我们先尝试获取数据库最后日期，然后手动更新当前合约
+                            database = get_database()
+                            
+                            # 查询数据库中1分钟数据的最后日期
+                            local_tz = ZoneInfo(get_localzone_name())
+                            # 查询最近30天的数据来确定最后日期
+                            end_date = datetime.now(local_tz)
+                            start_date = end_date.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=30)
+                            
+                            existing_bars = database.load_bar_data(
+                                symbol,
+                                exchange,
+                                Interval.MINUTE,
+                                start_date,
+                                end_date
+                            )
+                            
+                            if existing_bars:
+                                # 找到最后一条数据的日期
+                                existing_bars.sort(key=lambda x: x.datetime)
+                                last_bar_date = existing_bars[-1].datetime
+                                # 从最后一条数据的下一条开始下载
+                                update_start = last_bar_date.replace(second=0, microsecond=0) + timedelta(minutes=1)
+                            else:
+                                # 如果没有数据，从7天前开始下载
+                                update_start = end_date.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=7)
+                            
+                            # 调用DataManager的下载方法（如果可用）
+                            if hasattr(datamanager_engine, 'download_history_data'):
+                                self.main_engine.write_log(
+                                    f"[ChartWindow] 调用DataManager下载数据: {symbol}.{exchange.value} "
+                                    f"从 {update_start.strftime('%Y-%m-%d %H:%M')} 到 {end_date.strftime('%Y-%m-%d %H:%M')}",
+                                    "ChartWindow"
+                                )
+                                datamanager_engine.download_history_data(
+                                    symbol=symbol,
+                                    exchange=exchange,
+                                    interval=Interval.MINUTE,
+                                    start=update_start,
+                                    end=end_date
+                                )
+                            else:
+                                # 如果没有download_history_data方法，使用datafeed直接下载
+                                self._download_and_save_minute_data(
+                                    symbol, exchange, update_start, end_date, database
+                                )
+                            
+                            # 发送完成信号（在主线程中处理UI更新）
+                            self.signal_update_data_complete.emit(True, _("数据更新完成，已刷新图表"))
+                            return
+                            
+                        except Exception as e:
+                            error_msg = str(e).replace("{", "{{").replace("}", "}}")
+                            self.main_engine.write_log(
+                                f"[ChartWindow] DataManager更新数据失败: {error_msg}，尝试直接下载",
+                                "ChartWindow"
+                            )
+                            # 如果DataManager方法失败，降级到直接下载
+                
+                # 2. 如果没有DataManager，直接实现数据更新逻辑
+                database = get_database()
+                local_tz = ZoneInfo(get_localzone_name())
+                end_date = datetime.now(local_tz)
+                
+                # 查询数据库中1分钟数据的最后日期
+                # 查询最近30天的数据来确定最后日期
+                start_query = end_date.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=30)
+                
+                existing_bars = database.load_bar_data(
+                    symbol,
+                    exchange,
+                    Interval.MINUTE,
+                    start_query,
+                    end_date
+                )
+                
+                if existing_bars:
+                    # 找到最后一条数据的日期
+                    existing_bars.sort(key=lambda x: x.datetime)
+                    last_bar_date = existing_bars[-1].datetime
+                    # 从最后一条数据的下一条开始下载
+                    update_start = last_bar_date.replace(second=0, microsecond=0) + timedelta(minutes=1)
+                    self.main_engine.write_log(
+                        f"[ChartWindow] 数据库中最后一条1分钟数据日期: {last_bar_date.strftime('%Y-%m-%d %H:%M')}",
+                        "ChartWindow"
+                    )
+                else:
+                    # 如果没有数据，从7天前开始下载
+                    update_start = end_date.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=7)
+                    self.main_engine.write_log(
+                        f"[ChartWindow] 数据库中没有1分钟数据，从 {update_start.strftime('%Y-%m-%d %H:%M')} 开始下载",
+                        "ChartWindow"
+                    )
+                
+                # 检查是否需要更新（如果最后数据已经是最新的，不需要更新）
+                if update_start >= end_date:
+                    self.signal_update_data_complete.emit(False, _("数据已是最新，无需更新"))
+                    return
+                
+                # 下载并保存1分钟数据
+                self._download_and_save_minute_data(
+                    symbol, exchange, update_start, end_date, database
+                )
+                
+                # 发送完成信号（在主线程中处理UI更新）
+                self.signal_update_data_complete.emit(True, _("数据更新完成，已刷新图表"))
+                
+            except Exception as e:
+                error_msg = str(e).replace("{", "{{").replace("}", "}}")
+                self.main_engine.write_log(
+                    f"[ChartWindow] 更新数据失败: {error_msg}",
+                    "ChartWindow"
+                )
+                import traceback
+                self.main_engine.write_log(
+                    f"[ChartWindow] 更新数据异常堆栈: {traceback.format_exc()}",
+                    "ChartWindow"
+                )
+                # 发送错误信号（在主线程中处理UI更新）
+                error_message = _("更新数据失败: {}\n\n请检查数据服务配置或网络连接").format(str(e))
+                self.signal_update_data_complete.emit(False, error_message)
+        
+        # 在后台线程执行更新
+        thread = Thread(target=_update)
+        thread.start()
     
+    def _on_update_data_complete(self, success: bool, message: str) -> None:
+        """
+        处理更新数据完成信号（在主线程中执行）
+        
+        Args:
+            success: 是否成功
+            message: 消息内容
+        """
+        # 关闭进度对话框
+        if hasattr(self, '_update_progress_dialog'):
+            self._update_progress_dialog.close()
+            delattr(self, '_update_progress_dialog')
+        
+        # 显示消息
+        if success:
+            QtWidgets.QMessageBox.information(
+                self,
+                _("成功"),
+                message
+            )
+            # 刷新图表
+            QtCore.QTimer.singleShot(100, lambda: self.refresh_chart())
+        else:
+            if "数据已是最新" in message or "无需更新" in message:
+                QtWidgets.QMessageBox.information(
+                    self,
+                    _("提示"),
+                    message
+                )
+            else:
+                QtWidgets.QMessageBox.critical(
+                    self,
+                    _("错误"),
+                    message
+                )
+    
+    def _download_and_save_minute_data(
+        self,
+        symbol: str,
+        exchange: "Exchange",
+        start: datetime,
+        end: datetime,
+        database
+    ) -> None:
+        """
+        下载并保存1分钟K线数据到数据库
+        
+        Args:
+            symbol: 合约代码
+            exchange: 交易所
+            start: 开始时间
+            end: 结束时间
+            database: 数据库实例
+        """
+        from vnpy.trader.object import HistoryRequest
+        from vnpy.trader.constant import Interval
+        from vnpy.trader.datafeed import get_datafeed
+        
+        self.main_engine.write_log(
+            f"[ChartWindow] 开始下载1分钟数据: {symbol}.{exchange.value} "
+            f"从 {start.strftime('%Y-%m-%d %H:%M')} 到 {end.strftime('%Y-%m-%d %H:%M')}",
+            "ChartWindow"
+        )
+        
+        # 获取数据服务
+        datafeed = get_datafeed()
+        if not datafeed:
+            self.main_engine.write_log(
+                "[ChartWindow] 未配置数据服务，无法下载数据。请先在设置中配置数据服务（如富途futu）",
+                "ChartWindow"
+            )
+            raise Exception(_("未配置数据服务"))
+        
+        # 初始化数据服务
+        if not datafeed.init(output=self.main_engine.write_log):
+            self.main_engine.write_log(
+                "[ChartWindow] 数据服务初始化失败，请检查数据服务是否正常运行",
+                "ChartWindow"
+            )
+            raise Exception(_("数据服务初始化失败"))
+        
+        # 创建历史数据请求
+        req = HistoryRequest(
+            symbol=symbol,
+            exchange=exchange,
+            interval=Interval.MINUTE,
+            start=start,
+            end=end
+        )
+        
+        # 查询历史数据
+        bars = datafeed.query_bar_history(req, output=self.main_engine.write_log)
+        
+        if not bars:
+            self.main_engine.write_log(
+                f"[ChartWindow] 未获取到1分钟数据，可能数据服务不支持该合约或时间范围内无数据",
+                "ChartWindow"
+            )
+            raise Exception(_("未获取到数据"))
+        
+        self.main_engine.write_log(
+            f"[ChartWindow] 成功获取 {len(bars)} 条1分钟K线数据",
+            "ChartWindow"
+        )
+        
+        # 保存到数据库
+        if database.save_bar_data(bars):
+            self.main_engine.write_log(
+                f"[ChartWindow] 已保存 {len(bars)} 条1分钟K线数据到数据库",
+                "ChartWindow"
+            )
+        else:
+            self.main_engine.write_log(
+                "[ChartWindow] 保存数据到数据库失败",
+                "ChartWindow"
+            )
+            raise Exception(_("保存数据到数据库失败"))
+        
+        # ✅ 自动聚合大周期K线数据（5分钟、1小时、4小时）
+        # 复用DataManager的聚合逻辑，确保严格按照港期时间边界划分规则（period_utils.py）进行聚合
+        self._aggregate_larger_intervals_using_datamanager(symbol, exchange)
+        
+        # 关闭数据服务
+        if hasattr(datafeed, 'close'):
+            datafeed.close()
+    
+    def _aggregate_larger_intervals_using_datamanager(
+        self,
+        symbol: str,
+        exchange: "Exchange"
+    ) -> None:
+        """
+        使用DataManager的聚合方法自动聚合大周期K线数据
+        
+        复用DataManager的聚合逻辑，确保严格按照港期时间边界划分规则（period_utils.py）进行聚合：
+        - 5分钟K线：使用 get_period_start(bar_dt, Interval.MINUTE_5, exchange)
+        - 1小时K线：使用 get_hkfe_hour_period_start(bar_dt)
+        - 4小时K线：使用 get_hkfe_4hour_period(bar_dt)
+        
+        Args:
+            symbol: 合约代码
+            exchange: 交易所
+        """
+        # 尝试获取DataManager引擎，复用其聚合方法
+        datamanager_engine = None
+        if hasattr(self.main_engine, 'engines'):
+            datamanager_engine = self.main_engine.engines.get("DataManager")
+        
+        if datamanager_engine and hasattr(datamanager_engine, 'aggregate_5minute_bars'):
+            # 使用DataManager的聚合方法（推荐方式）
+            try:
+                self.main_engine.write_log(
+                    f"[ChartWindow] 使用DataManager聚合5分钟K线数据: {symbol}.{exchange.value}",
+                    "ChartWindow"
+                )
+                count_5m = datamanager_engine.aggregate_5minute_bars(symbol, exchange)
+                if count_5m > 0:
+                    self.main_engine.write_log(
+                        f"[ChartWindow] 已聚合 {count_5m} 条5分钟K线数据",
+                        "ChartWindow"
+                    )
+            except Exception as e:
+                error_msg = str(e).replace("{", "{{").replace("}", "}}")
+                self.main_engine.write_log(
+                    f"[ChartWindow] 聚合5分钟K线数据失败: {error_msg}",
+                    "ChartWindow"
+                )
+            
+            try:
+                self.main_engine.write_log(
+                    f"[ChartWindow] 使用DataManager聚合1小时K线数据: {symbol}.{exchange.value}",
+                    "ChartWindow"
+                )
+                count_1h = datamanager_engine.aggregate_hour_bars(symbol, exchange)
+                if count_1h > 0:
+                    self.main_engine.write_log(
+                        f"[ChartWindow] 已聚合 {count_1h} 条1小时K线数据",
+                        "ChartWindow"
+                    )
+            except Exception as e:
+                error_msg = str(e).replace("{", "{{").replace("}", "}}")
+                self.main_engine.write_log(
+                    f"[ChartWindow] 聚合1小时K线数据失败: {error_msg}",
+                    "ChartWindow"
+                )
+            
+            try:
+                self.main_engine.write_log(
+                    f"[ChartWindow] 使用DataManager聚合4小时K线数据: {symbol}.{exchange.value}",
+                    "ChartWindow"
+                )
+                count_4h = datamanager_engine.aggregate_4hour_bars(symbol, exchange)
+                if count_4h > 0:
+                    self.main_engine.write_log(
+                        f"[ChartWindow] 已聚合 {count_4h} 条4小时K线数据",
+                        "ChartWindow"
+                    )
+            except Exception as e:
+                error_msg = str(e).replace("{", "{{").replace("}", "}}")
+                self.main_engine.write_log(
+                    f"[ChartWindow] 聚合4小时K线数据失败: {error_msg}",
+                    "ChartWindow"
+                )
+        else:
+            # DataManager不可用，记录警告（不强制要求DataManager）
+            self.main_engine.write_log(
+                "[ChartWindow] DataManager引擎不可用，跳过自动聚合大周期K线数据",
+                "ChartWindow"
+            )
+            self.main_engine.write_log(
+                "[ChartWindow] 建议：加载DataManager模块后可自动聚合5分钟、1小时、4小时K线数据",
+                "ChartWindow"
+            )
+
     def _get_interval_enum(self) -> "Interval":
         """根据当前选择的周期返回Interval枚举"""
         from vnpy.trader.constant import Interval
-        
+
         interval_map = {
             "1m": Interval.MINUTE,
             "5m": Interval.MINUTE_5,
@@ -2574,7 +3567,7 @@ class ChartWindow(QtWidgets.QWidget):
             "1d": Interval.DAILY
         }
         return interval_map.get(self.current_interval, Interval.MINUTE)
-    
+
     def _get_future_bars(self) -> int:
         """根据当前周期返回未来空间的K线数量"""
         # 未来2小时的空间，根据不同周期计算K线数量
@@ -2586,52 +3579,62 @@ class ChartWindow(QtWidgets.QWidget):
             "1d": 1       # 日线周期，预留1根
         }
         return future_bars_map.get(self.current_interval, 120)
-    
+
     def switch_chart(self) -> None:
-        """切换到新的合约图表"""
+        """
+        切换到新的合约图表
+
+        Phase 5: 合约切换时的事件处理说明：
+        - 不需要取消注册和重新注册事件监听器
+        - process_tick_event 方法已经通过过滤 current_vt_symbol 来处理，
+          只处理当前显示合约的 tick，因此切换合约时只需更新 current_vt_symbol
+        - 这种设计避免了频繁的事件注册/注销操作，提高了性能
+        """
         vt_symbol: str = str(self.symbol_line.text()).strip()
         if not vt_symbol:
             self.status_label.setText(_("请输入有效的合约代码"))
             return
-        
+
         if vt_symbol == self.current_vt_symbol:
             return
-        
+
+        # Phase 5: 合约切换时，事件监听器保持不变，只需更新当前合约代码
+        # process_tick_event 会通过过滤 current_vt_symbol 自动处理新合约的 tick
         # 保存新的合约代码
         self.current_vt_symbol = vt_symbol
         self.history_loaded = False
         self.history_data = []
-        
+
         # 重置当前K线状态
         self._current_bar = None
         self._current_bar_period = None
         self._current_bar_index = -1
-        
+
         # 重置成交量追踪状态
         self._period_start_volume = 0
         self._period_start_turnover = 0
         self._bar_historical_volume = 0
         self._bar_historical_turnover = 0
         self._need_init_baseline = True
-        
+
         # 重置数据缺口状态
         self._has_data_gap = False
         self._gap_info = ""
-        
+
         # 清空图表
         self.chart.clear_all()
-        
+
         # 重置滚动条
         self.time_slider.setValue(100)
         self.time_start_label.setText("")
         self.time_end_label.setText("")
-        
+
         # 创建新的K线生成器
         # 对于HKFE交易所，使用HKFEBarGenerator以确保时间边界正确
         from vnpy.trader.utility import BarGenerator, extract_vt_symbol
         from vnpy.trader.constant import Exchange, Interval
         from vnpy.trader.hkfe_bar_generator import create_bar_generator
-        
+
         # 检查是否为HKFE交易所
         try:
             symbol, exchange = extract_vt_symbol(vt_symbol)
@@ -2649,90 +3652,90 @@ class ChartWindow(QtWidgets.QWidget):
             else:
                 # 其他交易所使用标准BarGenerator
                 self.bg = BarGenerator(self.on_bar)
-        except:
+        except Exception:
             # 如果提取失败，使用标准BarGenerator
             self.bg = BarGenerator(self.on_bar)
-        
+
         # 更新窗口标题（显示合约和周期）
         interval_name = self.interval_combo.currentText()
         self.setWindowTitle(_("K线图表 - {} - {}").format(vt_symbol, interval_name))
-        
+
         # 更新状态
         self.status_label.setText(_("正在加载 {} 的历史数据...").format(vt_symbol))
-        
+
         # 设置图表的 VT symbol（用于画线交易功能）
         self.chart.set_vt_symbol(vt_symbol)
-        
+
         # 更新模拟功能按钮状态（切换合约时更新）
         self._update_simulate_buttons_state()
-        
+
         # 加载历史K线数据（最近7天的1分钟数据）
         self.load_history_data(vt_symbol)
-        
+
         # 订阅行情数据（订阅后可能会收到tick数据，从而更新按钮状态）
         # 注意：这里不直接调用subscribe_tick，因为可能没有gateway
         # 按钮状态会在收到tick事件时自动更新
-    
+
     def refresh_chart(self) -> None:
         """刷新当前图表"""
         if self.current_vt_symbol:
             self.history_loaded = False
             self.history_data = []
-            
+
             # 重置当前K线状态
             self._current_bar = None
             self._current_bar_period = None
             self._current_bar_index = -1
-            
+
             # 重置成交量追踪状态
             self._period_start_volume = 0
             self._period_start_turnover = 0
             self._bar_historical_volume = 0
             self._bar_historical_turnover = 0
             self._need_init_baseline = True
-            
+
             # 重置数据缺口状态
             self._has_data_gap = False
             self._gap_info = ""
-            
+
             self.chart.clear_all()
-            
+
             # 设置图表的 VT symbol（用于画线交易功能）
             self.chart.set_vt_symbol(self.current_vt_symbol)
-            
+
             # 更新模拟功能按钮状态
             self._update_simulate_buttons_state()
-            
+
             self.status_label.setStyleSheet("color: #888; font-size: 12px;")
             self.status_label.setText(_("正在刷新 {} 的数据...").format(self.current_vt_symbol))
             self.load_history_data(self.current_vt_symbol)
-    
+
     def goto_latest(self) -> None:
         """
         跳转到最新K线（包含未来空间）
-        
+
         确保各个周期都能正确跳转到最新的实时K线
         """
         if not self.history_data:
             return
-        
+
         # 设置滚动条到最右边
         self.time_slider.setValue(100)
-        
+
         # 扩展限制并移动到扩展后的末尾
         self.extend_chart_x_limit(move_to_end=True)
-        
+
         # 更新状态显示
         if self.history_data:
             last_bar = self.history_data[-1]
             interval_name = self.interval_combo.currentText()
-            
+
             # 检查是否是当前进行中的K线
             is_current = ""
             if hasattr(self, '_current_bar') and self._current_bar is not None:
                 if self._current_bar.datetime == last_bar.datetime:
                     is_current = _(" (进行中)")
-            
+
             self.status_label.setText(
                 _("已跳转到最新 | {} | {} | 最后K线: {}{}").format(
                     self.current_vt_symbol,
@@ -2741,46 +3744,46 @@ class ChartWindow(QtWidgets.QWidget):
                     is_current
                 )
             )
-    
+
     def goto_datetime(self) -> None:
         """跳转到指定日期时间"""
         if not self.history_data:
             return
-        
+
         # 获取目标日期时间
         target_qdt = self.goto_date.dateTime()
         target_py = target_qdt.toPython()
-        
+
         # 在历史数据中查找最接近的K线索引
         target_ix = None
         min_diff = None
-        
+
         for ix, bar in enumerate(self.history_data):
             # 比较时间差（忽略时区）
             bar_dt = bar.datetime.replace(tzinfo=None)
             target_dt = target_py.replace(tzinfo=None) if hasattr(target_py, 'tzinfo') else target_py
-            
+
             diff = abs((bar_dt - target_dt).total_seconds())
-            
+
             if min_diff is None or diff < min_diff:
                 min_diff = diff
                 target_ix = ix
-        
+
         if target_ix is not None:
             # 计算滚动条位置（让目标K线显示在视图中央）
             visible_bars = self.chart._bar_count
             right_ix = target_ix + visible_bars // 2
-            
+
             total_bars = len(self.history_data)
             future_bars = self._get_future_bars()
             max_right_ix = total_bars + future_bars
-            
+
             right_ix = max(visible_bars, min(max_right_ix, right_ix))
-            
+
             # 更新图表视图
             self.chart._right_ix = right_ix
             self.chart._update_x_range()
-            
+
             # 更新滚动条位置
             if max_right_ix > visible_bars:
                 slider_value = int((right_ix - visible_bars) / (max_right_ix - visible_bars) * 100)
@@ -2788,7 +3791,7 @@ class ChartWindow(QtWidgets.QWidget):
                 self.time_slider.blockSignals(True)
                 self.time_slider.setValue(slider_value)
                 self.time_slider.blockSignals(False)
-            
+
             # 更新状态
             bar = self.history_data[target_ix]
             self.status_label.setText(
@@ -2798,63 +3801,63 @@ class ChartWindow(QtWidgets.QWidget):
                     total_bars
                 )
             )
-    
+
     def on_time_slider_changed(self, value: int) -> None:
         """时间滚动条值改变时更新图表视图（横向滚动）"""
         if not self.history_data:
             return
-        
+
         total_bars = len(self.history_data)
         if total_bars == 0:
             return
-        
+
         # 获取当前显示的K线数量
         visible_bars = self.chart._bar_count
-        
+
         # 根据当前周期获取未来空间K线数量
         future_bars = self._get_future_bars()
-        
+
         # 先确保图表的x轴限制已扩展
         self.extend_chart_x_limit()
-        
+
         # 根据滚动条位置计算右边界索引
         # value=0时显示最早的数据，value=100时显示最新数据+未来空间
         max_right_ix = total_bars + future_bars  # 扩展到未来
         min_right_ix = visible_bars
-        
+
         right_ix = int(min_right_ix + (max_right_ix - min_right_ix) * value / 100)
         right_ix = max(visible_bars, min(max_right_ix, right_ix))
-        
+
         # 更新图表视图
         self.chart._right_ix = right_ix
         self.chart._update_x_range()
-    
+
     def on_price_slider_changed(self, value: int) -> None:
         """价格滚动条值改变时更新图表视图（缩放K线数量）"""
         if not self.history_data:
             return
-        
+
         total_bars = len(self.history_data)
         if total_bars == 0:
             return
-        
+
         # value范围10-200，对应显示K线数量
         # value=10时显示较少K线（放大），value=200时显示较多K线（缩小）
         min_bars = 50
         max_bars = min(500, total_bars)
-        
+
         # 计算显示的K线数量
         bar_count = int(min_bars + (max_bars - min_bars) * value / 200)
         bar_count = max(min_bars, min(max_bars, bar_count))
-        
+
         # 更新图表的K线数量
         self.chart._bar_count = bar_count
         self.chart._update_x_range()
-        
+
         # 根据当前周期获取未来空间K线数量
         future_bars = self._get_future_bars()
         max_right_ix = total_bars + future_bars
-        
+
         # 同步更新时间滚动条位置
         if hasattr(self.chart, '_right_ix'):
             current_right = self.chart._right_ix
@@ -2865,41 +3868,39 @@ class ChartWindow(QtWidgets.QWidget):
                 self.time_slider.blockSignals(True)
                 self.time_slider.setValue(slider_value)
                 self.time_slider.blockSignals(False)
-    
+
     def load_history_data(self, vt_symbol: str) -> None:
         """加载历史K线数据"""
         from threading import Thread
         from datetime import datetime
         from tzlocal import get_localzone_name
-        
+
         # 获取用户选择的起始时间
         start_qdt = self.start_datetime.dateTime()
-        
+
         # 转换为Python datetime
         start_py = start_qdt.toPython()
-        
+
         # 获取当前选择的周期和数据源
         interval_enum = self._get_interval_enum()
         data_source = self.current_data_source
         csv_path = self.csv_file_path
-        
+
         def _load():
             try:
                 from vnpy.trader.utility import extract_vt_symbol, ZoneInfo
                 from vnpy.trader.constant import Interval
-                from vnpy.trader.object import HistoryRequest, BarData
                 from vnpy.trader.database import get_database
-                from vnpy.trader.datafeed import get_datafeed
-                
+
                 symbol, exchange = extract_vt_symbol(vt_symbol)
-                
+
                 # 起始时间使用用户选择，结束时间使用当前最新时间
                 local_tz = ZoneInfo(get_localzone_name())
                 start: datetime = start_py.replace(tzinfo=local_tz)
                 end: datetime = datetime.now(local_tz)  # 结束时间始终为当前最新
-                
+
                 data = None
-                
+
                 # 根据数据源加载数据
                 if data_source == self.DATA_SOURCE_CSV:
                     # 从CSV文件加载
@@ -2914,7 +3915,7 @@ class ChartWindow(QtWidgets.QWidget):
                         start,
                         end
                     )
-                    
+
                     # 如果数据库中没有数据或数据不完整，根据周期类型进行处理
                     # 对于5分钟、1小时和4小时数据，尝试从1分钟数据自动合成补齐
                     if interval_enum in [Interval.MINUTE_5, Interval.HOUR, Interval.HOUR_4]:
@@ -2932,28 +3933,28 @@ class ChartWindow(QtWidgets.QWidget):
                             self.main_engine.write_log(f"从FUTU API获取了 {len(data)} 根{interval_enum.value}K线")
                         else:
                             self.main_engine.write_log(f"无法从FUTU API获取{interval_enum.value}数据，请先在DataManager中下载数据")
-                
+
                 # 对于1小时数据，如果从CSV加载，需要检测并补齐gap（这个主要是用于CSV到当前时间的gap，不是历史数据的gap）
                 if data and interval_enum == Interval.HOUR and data_source == self.DATA_SOURCE_CSV:
                     # 检测并补齐gap
                     data = self._detect_and_fill_gap(data, vt_symbol, interval_enum)
-                
+
                 # 发送历史数据更新信号
                 if data:
                     self.signal_history.emit(data)
                 else:
                     self.signal_history.emit([])
-                    
+
             except Exception as e:
                 # 转义花括号避免loguru格式化错误
                 error_msg = str(e).replace("{", "{{").replace("}", "}}")
                 self.main_engine.write_log(f"加载K线历史数据失败: {error_msg}")
                 self.signal_history.emit([])
-        
+
         # 在后台线程加载
         thread: Thread = Thread(target=_load)
         thread.start()
-    
+
     def _load_from_csv(
         self,
         csv_path: str,
@@ -2967,25 +3968,24 @@ class ChartWindow(QtWidgets.QWidget):
         import csv
         from datetime import datetime
         from vnpy.trader.object import BarData
-        from vnpy.trader.constant import Interval
-        
+
         if not csv_path:
             self.main_engine.write_log("未选择CSV文件")
             return []
-        
+
         try:
             bars: list[BarData] = []
-            
-            with open(csv_path, "r", encoding="utf-8") as f:
+
+            with open(csv_path, encoding="utf-8") as f:
                 reader = csv.DictReader(f)
-                
+
                 for row in reader:
                     try:
                         # 解析日期时间（支持多种格式）
                         dt_str = row.get("datetime", row.get("date", row.get("time", "")))
                         if not dt_str:
                             continue
-                        
+
                         # 尝试多种日期格式
                         dt = None
                         for fmt in [
@@ -3001,20 +4001,20 @@ class ChartWindow(QtWidgets.QWidget):
                                 break
                             except ValueError:
                                 continue
-                        
+
                         if dt is None:
                             continue
-                        
+
                         # 添加时区
                         if dt.tzinfo is None:
                             from tzlocal import get_localzone_name
                             from vnpy.trader.utility import ZoneInfo
                             dt = dt.replace(tzinfo=ZoneInfo(get_localzone_name()))
-                        
+
                         # 过滤时间范围
                         if dt < start or dt > end:
                             continue
-                        
+
                         # 创建BarData对象
                         bar = BarData(
                             symbol=symbol,
@@ -3031,21 +4031,21 @@ class ChartWindow(QtWidgets.QWidget):
                             gateway_name="CSV"
                         )
                         bars.append(bar)
-                        
-                    except (ValueError, KeyError) as e:
+
+                    except (ValueError, KeyError):
                         continue
-            
+
             # 按时间排序
             bars.sort(key=lambda x: x.datetime)
-            
+
             self.main_engine.write_log(f"从CSV加载了 {len(bars)} 根K线数据")
             return bars
-            
+
         except Exception as e:
             error_msg = str(e).replace("{", "{{").replace("}", "}}")
             self.main_engine.write_log(f"CSV文件读取失败: {error_msg}")
             return []
-    
+
     def _fill_missing_bars(
         self,
         data: list,
@@ -3058,10 +4058,10 @@ class ChartWindow(QtWidgets.QWidget):
     ) -> list:
         """
         检测并补齐数据中的缺失时间段
-        
+
         对于5分钟、1小时、4小时K线，检测查询范围内是否有缺失的时间段，
         如果有缺失，从1分钟数据自动聚合补齐。
-        
+
         Args:
             data: 已加载的K线数据（可能为空或部分数据）
             symbol: 合约代码
@@ -3070,41 +4070,40 @@ class ChartWindow(QtWidgets.QWidget):
             start: 查询起始时间
             end: 查询结束时间
             database: 数据库实例
-            
+
         Returns:
             补齐后的K线数据列表（按时间排序）
         """
         from vnpy.trader.constant import Interval
-        from vnpy.trader.database import DB_TZ
-        
+
         # 如果没有数据，尝试整个范围自动合成
         if not data:
             return self._synthesize_missing_bars(
                 symbol, exchange, interval, start, end, database
             )
-        
+
         # 对数据进行排序
         data.sort(key=lambda x: x.datetime)
-        
+
         # 检查数据是否完整覆盖查询范围
         data_start = data[0].datetime if data else None
         data_end = data[-1].datetime if data else None
-        
+
         # 判断是否需要补齐：检查整体范围或中间缺失
         need_fill = False
-        
+
         # 1. 检查是否完全没有数据
         if not data:
             need_fill = True
             self.main_engine.write_log(f"数据库中没有{interval.value}数据，尝试从1分钟数据自动合成...")
-        
+
         # 2. 检查数据范围是否不完整
         elif data_start and data_end:
             data_range = (data_end - data_start).total_seconds()
             query_range = (end - start).total_seconds()
-            
+
             # 如果数据范围小于查询范围的80%，或数据起始/结束时间不在查询范围内，补齐整个范围
-            if (data_range < query_range * 0.8 or 
+            if (data_range < query_range * 0.8 or
                 data_start > start + (end - start) * 0.1 or
                 data_end < end - (end - start) * 0.1):
                 need_fill = True
@@ -3113,28 +4112,28 @@ class ChartWindow(QtWidgets.QWidget):
                     f"{data_end.strftime('%m-%d %H:%M')}，查询范围: {start.strftime('%m-%d %H:%M')} - "
                     f"{end.strftime('%m-%d %H:%M')}），尝试补齐..."
                 )
-        
+
         # 如果整体范围不完整，直接补齐整个查询范围
         if need_fill:
             synthesized_data = self._synthesize_missing_bars(
                 symbol, exchange, interval, start, end, database
             )
-            
+
             if synthesized_data:
                 # 合并数据，去重（使用datetime作为key）
                 merged_dict = {}
-                
+
                 # 先添加已有数据
                 for bar in data:
                     bar_dt = bar.datetime.replace(tzinfo=None) if bar.datetime.tzinfo else bar.datetime
                     merged_dict[bar_dt] = bar
-                
+
                 # 添加合成的数据（不覆盖已有数据）
                 for bar in synthesized_data:
                     bar_dt = bar.datetime.replace(tzinfo=None) if bar.datetime.tzinfo else bar.datetime
                     if bar_dt not in merged_dict:
                         merged_dict[bar_dt] = bar
-                
+
                 # 按时间排序返回
                 result = list(merged_dict.values())
                 result.sort(key=lambda x: x.datetime)
@@ -3143,15 +4142,14 @@ class ChartWindow(QtWidgets.QWidget):
             else:
                 self.main_engine.write_log(f"无法补齐{interval.value}数据，使用已有数据")
                 return data
-        
+
         # 3. 即使整体范围完整，也要检查中间是否有缺失的数据段
         # 通过检查连续K线之间的时间间隔来判断
         if data and len(data) > 1:
-            from vnpy.trader.period_utils import get_period_start
             from datetime import timedelta
-            
+
             missing_ranges = []
-            
+
             # 计算每个周期的期望间隔（秒）
             if interval == Interval.MINUTE_5:
                 expected_interval = 300  # 5分钟 = 300秒
@@ -3161,63 +4159,63 @@ class ChartWindow(QtWidgets.QWidget):
                 expected_interval = 14400  # 4小时 = 14400秒
             else:
                 expected_interval = 60  # 默认1分钟
-            
+
             # 检查连续K线之间是否有缺失
             for i in range(len(data) - 1):
                 bar1 = data[i]
                 bar2 = data[i + 1]
-                
+
                 bar1_dt = bar1.datetime.replace(tzinfo=None) if bar1.datetime.tzinfo else bar1.datetime
                 bar2_dt = bar2.datetime.replace(tzinfo=None) if bar2.datetime.tzinfo else bar2.datetime
-                
+
                 # 计算时间间隔
                 time_gap = (bar2_dt - bar1_dt).total_seconds()
-                
+
                 # 如果间隔明显大于期望间隔（允许10%的误差），说明中间有缺失
                 if time_gap > expected_interval * 1.5:  # 1.5倍阈值，考虑到HKFE的特殊时段划分
                     gap_start = bar1_dt
                     gap_end = bar2_dt
                     missing_ranges.append((gap_start, gap_end))
-            
+
             # 如果有缺失的段，补齐这些段
             if missing_ranges:
                 self.main_engine.write_log(f"检测到{len(missing_ranges)}个缺失时间段，开始补齐...")
                 synthesized_bars = []
-                
+
                 for gap_start, gap_end in missing_ranges:
                     # 稍微扩大范围，确保包含边界
                     gap_start_expanded = gap_start + timedelta(seconds=1)
                     gap_end_expanded = gap_end - timedelta(seconds=1)
-                    
+
                     gap_data = self._synthesize_missing_bars(
                         symbol, exchange, interval, gap_start_expanded, gap_end_expanded, database
                     )
                     if gap_data:
                         synthesized_bars.extend(gap_data)
-                
+
                 if synthesized_bars:
                     # 合并数据，去重
                     merged_dict = {}
-                    
+
                     # 先添加已有数据
                     for bar in data:
                         bar_dt = bar.datetime.replace(tzinfo=None) if bar.datetime.tzinfo else bar.datetime
                         merged_dict[bar_dt] = bar
-                    
+
                     # 添加补齐的数据（不覆盖已有数据）
                     for bar in synthesized_bars:
                         bar_dt = bar.datetime.replace(tzinfo=None) if bar.datetime.tzinfo else bar.datetime
                         if bar_dt not in merged_dict:
                             merged_dict[bar_dt] = bar
-                    
+
                     # 按时间排序返回
                     result = list(merged_dict.values())
                     result.sort(key=lambda x: x.datetime)
                     self.main_engine.write_log(f"中间缺失段补齐完成，合并后共有 {len(result)} 根{interval.value}K线（原有{len(data)}根，新增{len(result) - len(data)}根）")
                     return result
-        
+
         return data
-    
+
     def _synthesize_missing_bars(
         self,
         symbol: str,
@@ -3229,7 +4227,7 @@ class ChartWindow(QtWidgets.QWidget):
     ) -> list:
         """
         从1分钟数据合成缺失的K线数据
-        
+
         Args:
             symbol: 合约代码
             exchange: 交易所
@@ -3237,31 +4235,31 @@ class ChartWindow(QtWidgets.QWidget):
             start: 查询起始时间
             end: 查询结束时间
             database: 数据库实例
-            
+
         Returns:
             合成后的K线数据列表
         """
         from vnpy_datamanager import APP_NAME
         from vnpy.trader.database import DB_TZ
         from vnpy.trader.constant import Interval
-        
+
         try:
             manager_engine = self.main_engine.get_engine(APP_NAME)
             if not manager_engine:
-                self.main_engine.write_log(f"无法获取DataManager引擎，请确保DataManager模块已加载")
+                self.main_engine.write_log("无法获取DataManager引擎，请确保DataManager模块已加载")
                 return []
-            
+
             # 转换时区到数据库时区
             if start.tzinfo:
                 start_db = start.astimezone(DB_TZ)
             else:
                 start_db = start.replace(tzinfo=DB_TZ)
-            
+
             if end.tzinfo:
                 end_db = end.astimezone(DB_TZ)
             else:
                 end_db = end.replace(tzinfo=DB_TZ)
-            
+
             # 合成数据（会保存到数据库）
             count = 0
             if interval == Interval.MINUTE_5:
@@ -3270,7 +4268,7 @@ class ChartWindow(QtWidgets.QWidget):
                 count = manager_engine.aggregate_hour_bars(symbol, exchange, start_db, end_db)
             elif interval == Interval.HOUR_4:
                 count = manager_engine.aggregate_4hour_bars(symbol, exchange, start_db, end_db)
-            
+
             if count > 0:
                 self.main_engine.write_log(f"自动合成了 {count} 根{interval.value}K线，正在加载...")
                 # 从数据库重新加载合成后的数据
@@ -3286,14 +4284,14 @@ class ChartWindow(QtWidgets.QWidget):
                 self.main_engine.write_log(f"无法合成{interval.value}数据：可能缺少1分钟基础数据，请先在DataManager中下载1分钟数据")
                 return []
         except ImportError:
-            self.main_engine.write_log(f"无法导入DataManager模块，请确保DataManager已安装")
+            self.main_engine.write_log("无法导入DataManager模块，请确保DataManager已安装")
             return []
         except Exception as e:
             self.main_engine.write_log(f"自动合成{interval.value}数据失败: {e}")
             import traceback
             traceback.print_exc()
             return []
-    
+
     def _detect_and_fill_gap(
         self,
         history: list,
@@ -3302,19 +4300,19 @@ class ChartWindow(QtWidgets.QWidget):
     ) -> list:
         """
         检测并填充数据缺口
-        
+
         对于所有周期的K线，检测历史数据与当前时间的gap：
         - 1分钟周期：先从数据库加载，没有则从FUTU API获取
         - 大周期（>1分钟）：先从数据库加载1分钟数据，没有则从FUTU API获取，然后合成
-        
+
         注意：所有大周期合成都使用相同的 _synthesize_bars_from_minute 方法，
         确保合成逻辑一致。
-        
+
         Args:
             history: 已加载的历史K线数据
             vt_symbol: 合约代码
             interval: K线周期
-            
+
         Returns:
             填充后的K线数据列表
         """
@@ -3323,40 +4321,70 @@ class ChartWindow(QtWidgets.QWidget):
         from vnpy.trader.utility import extract_vt_symbol, ZoneInfo
         from vnpy.trader.database import get_database
         from tzlocal import get_localzone_name
-        
+
         if not history:
             return history
-        
+
         try:
             # 获取最后一根K线的时间
             last_bar = history[-1]
             last_bar_time = last_bar.datetime
-            
+
             # 获取当前时间
             local_tz = ZoneInfo(get_localzone_name())
             now = datetime.now(local_tz)
-            
-            # 计算需要补齐的时间范围
-            gap_start = last_bar_time + timedelta(minutes=1)
+
+            # ✅ 对于1分钟和5分钟周期，排除当前时间周期，避免补齐未完成的K线
+            # 这样可以确保最后几根K线的数据准确，不会被未完成的K线覆盖
+            from vnpy.trader.period_utils import get_period_start
             gap_end = now
             
+            if interval == Interval.MINUTE:
+                # 1分钟周期：排除当前分钟
+                current_minute_start = get_period_start(now, Interval.MINUTE, exchange)
+                if current_minute_start and current_minute_start < now:
+                    # 当前分钟已经开始，排除当前分钟
+                    gap_end = current_minute_start
+                    self.main_engine.write_log(
+                        f"[数据补齐] 1分钟周期：排除当前分钟K线 ({current_minute_start.strftime('%H:%M')})，"
+                        f"避免补齐未完成的K线"
+                    )
+            elif interval == Interval.MINUTE_5:
+                # 5分钟周期：排除当前5分钟周期
+                current_period_start = get_period_start(now, Interval.MINUTE_5, exchange)
+                if current_period_start and current_period_start < now:
+                    # 当前5分钟周期已经开始，排除当前周期
+                    gap_end = current_period_start
+                    self.main_engine.write_log(
+                        f"[数据补齐] 5分钟周期：排除当前5分钟周期K线 ({current_period_start.strftime('%H:%M')})，"
+                        f"避免补齐未完成的K线"
+                    )
+
+            # 计算需要补齐的时间范围
+            gap_start = last_bar_time + timedelta(minutes=1) if interval == Interval.MINUTE else (
+                last_bar_time + timedelta(minutes=5) if interval == Interval.MINUTE_5 else
+                last_bar_time + timedelta(hours=1) if interval == Interval.HOUR else
+                last_bar_time + timedelta(hours=4) if interval == Interval.HOUR_4 else
+                last_bar_time + timedelta(days=1)
+            )
+
             # 如果没有gap，直接返回
             if gap_start >= gap_end:
                 self._has_data_gap = False
                 return history
-            
+
             # 计算gap的大小（小时）
             gap_hours = (gap_end - gap_start).total_seconds() / 3600
-            
+
             interval_name = self.interval_combo.currentText() if hasattr(self, 'interval_combo') else str(interval)
             self.main_engine.write_log(
                 f"[数据补齐] 检测到{interval_name}数据缺口: {gap_start.strftime('%m-%d %H:%M')} - {gap_end.strftime('%m-%d %H:%M')} (约{gap_hours:.1f}小时)"
             )
-            
+
             # 从数据库加载1分钟数据来填充gap（仅1分钟周期尝试数据库）
             symbol, exchange = extract_vt_symbol(vt_symbol)
             minute_bars = []
-            
+
             if interval == Interval.MINUTE:
                 # 1分钟周期：先尝试数据库
                 database = get_database()
@@ -3367,58 +4395,58 @@ class ChartWindow(QtWidgets.QWidget):
                     gap_start,
                     gap_end
                 )
-                
+
                 if minute_bars:
                     self.main_engine.write_log(f"[数据补齐] 从数据库加载了 {len(minute_bars)} 根1分钟K线用于补齐")
-            
+
             # 如果没有从数据库获取到数据，尝试FUTU API
             if not minute_bars:
                 self.main_engine.write_log("[数据补齐] 尝试从FUTU API获取1分钟数据...")
-                
+
                 minute_bars = self._fetch_bars_from_futu(
                     symbol, exchange, Interval.MINUTE, gap_start, gap_end
                 )
-                
+
                 if not minute_bars:
                     # 标记存在数据缺口，无法补齐
                     self._has_data_gap = True
                     self._gap_info = f"{gap_start.strftime('%m-%d %H:%M')} - {gap_end.strftime('%m-%d %H:%M')}"
-                    
+
                     self.main_engine.write_log(
-                        f"[数据补齐] 未能获取到1分钟数据用于补齐。"
+                        "[数据补齐] 未能获取到1分钟数据用于补齐。"
                     )
                     return history
-                
+
                 self.main_engine.write_log(f"[数据补齐] 从FUTU API获取了 {len(minute_bars)} 根1分钟K线")
-            
+
             # 根据目标周期处理补齐数据
             if interval == Interval.MINUTE:
                 # 1分钟周期：直接使用加载的1分钟数据
                 self._has_data_gap = False
                 self.main_engine.write_log(f"[数据补齐] 补齐了 {len(minute_bars)} 根1分钟K线")
-                
+
                 # 合并历史数据和补齐数据
                 result = list(history)
-                
+
                 # 检查是否有重复的时间戳
                 existing_times = {bar.datetime for bar in result}
                 for bar in minute_bars:
                     if bar.datetime not in existing_times:
                         result.append(bar)
-                
+
                 # 按时间排序
                 result.sort(key=lambda x: x.datetime)
                 return result
             else:
                 # 大周期：从1分钟数据合成
                 synthesized_bars = []
-                
+
                 # 对于1小时数据，使用DataManager的精确合成逻辑
                 if interval == Interval.HOUR:
                     try:
                         from vnpy_datamanager import APP_NAME
                         from vnpy.trader.database import DB_TZ
-                        
+
                         manager_engine = self.main_engine.get_engine(APP_NAME)
                         if manager_engine:
                             # 转换时区到数据库时区
@@ -3426,19 +4454,19 @@ class ChartWindow(QtWidgets.QWidget):
                                 gap_start_db = gap_start.astimezone(DB_TZ)
                             else:
                                 gap_start_db = gap_start.replace(tzinfo=DB_TZ)
-                            
+
                             if gap_end.tzinfo:
                                 gap_end_db = gap_end.astimezone(DB_TZ)
                             else:
                                 gap_end_db = gap_end.replace(tzinfo=DB_TZ)
-                            
+
                             # 先保存1分钟数据到数据库（临时），然后合成1小时数据
                             database = get_database()
                             if minute_bars:
                                 # 临时保存1分钟数据用于合成
                                 database.save_bar_data(minute_bars)
                                 self.main_engine.write_log(f"[数据补齐] 临时保存了 {len(minute_bars)} 根1分钟K线用于合成1小时数据")
-                            
+
                             # 使用DataManager的精确1小时合成逻辑
                             count = manager_engine.aggregate_hour_bars(symbol, exchange, gap_start_db, gap_end_db)
                             if count > 0:
@@ -3468,15 +4496,15 @@ class ChartWindow(QtWidgets.QWidget):
                     synthesized_bars = self._synthesize_bars_from_minute(
                         minute_bars, interval, symbol, exchange
                     )
-                
+
                 if synthesized_bars:
                     self.main_engine.write_log(f"[数据补齐] 从1分钟数据合成了 {len(synthesized_bars)} 根{interval_name}K线")
                     self._has_data_gap = False
-                    
+
                     # 合并历史数据和补齐数据
                     # 注意：最后一根可能是未完成的K线，需要特殊处理
                     result = list(history)
-                    
+
                     for bar in synthesized_bars:
                         # 检查是否与最后一根历史K线是同一周期
                         if result and self._is_same_period(result[-1], bar, interval):
@@ -3484,18 +4512,18 @@ class ChartWindow(QtWidgets.QWidget):
                             result[-1] = self._merge_bars(result[-1], bar)
                         else:
                             result.append(bar)
-                    
+
                     return result
-            
+
             self._has_data_gap = False
             return history
-            
+
         except Exception as e:
             error_msg = str(e).replace("{", "{{").replace("}", "}}")
             self.main_engine.write_log(f"[数据补齐] 填充失败: {error_msg}")
             self._has_data_gap = False
             return history
-    
+
     def _fetch_bars_from_futu(
         self,
         symbol: str,
@@ -3506,27 +4534,27 @@ class ChartWindow(QtWidgets.QWidget):
     ) -> list:
         """
         从FUTU API获取K线数据
-        
+
         Args:
             symbol: 合约代码
             exchange: 交易所
             interval: K线周期
             start: 开始时间
             end: 结束时间
-            
+
         Returns:
             K线数据列表，失败返回空列表
         """
         from vnpy.trader.object import HistoryRequest
-        
+
         try:
             # 尝试从main_engine获取datafeed
             datafeed = None
-            
+
             # 尝试获取已连接的datafeed
             if hasattr(self.main_engine, 'get_datafeed'):
                 datafeed = self.main_engine.get_datafeed()
-            
+
             # 如果没有现成的datafeed，尝试创建FUTU datafeed
             if datafeed is None:
                 try:
@@ -3542,7 +4570,7 @@ class ChartWindow(QtWidgets.QWidget):
                     error_msg = str(e).replace("{", "{{").replace("}", "}}")
                     self.main_engine.write_log(f"[FUTU API] 初始化失败: {error_msg}")
                     return []
-            
+
             # 创建历史数据请求
             req = HistoryRequest(
                 symbol=symbol,
@@ -3551,22 +4579,22 @@ class ChartWindow(QtWidgets.QWidget):
                 start=start,
                 end=end
             )
-            
+
             # 查询数据
             bars = datafeed.query_bar_history(req, output=self.main_engine.write_log)
-            
+
             if bars:
                 self.main_engine.write_log(f"[FUTU API] 成功获取 {len(bars)} 根K线数据")
             else:
                 self.main_engine.write_log("[FUTU API] 未获取到数据")
-            
+
             return bars
-            
+
         except Exception as e:
             error_msg = str(e).replace("{", "{{").replace("}", "}}")
             self.main_engine.write_log(f"[FUTU API] 获取数据失败: {error_msg}")
             return []
-    
+
     def _synthesize_bars_from_minute(
         self,
         minute_bars: list,
@@ -3576,56 +4604,56 @@ class ChartWindow(QtWidgets.QWidget):
     ) -> list:
         """
         从1分钟K线合成大周期K线
-        
+
         支持的周期：5分钟、1小时、4小时、日线
         4小时K线按照HKFE交易时段边界合成
-        
+
         特殊处理：
         - 第三根4小时K线（01:15-03:00 + 09:15-11:29）跨越周末或金融假期时，
           需要正确合并数据
-        
+
         Args:
             minute_bars: 1分钟K线数据列表
             target_interval: 目标周期
             symbol: 合约代码
             exchange: 交易所
-            
+
         Returns:
             合成的K线数据列表
         """
         from vnpy.trader.constant import Interval
         from vnpy.trader.object import BarData
-        
+
         if not minute_bars:
             return []
-        
+
         # 对于4小时周期，使用特殊的合成逻辑处理跨假期情况
         if target_interval == Interval.HOUR_4:
             return self._synthesize_4hour_bars(minute_bars, symbol, exchange)
-        
+
         # 其他周期使用标准逻辑
         period_bars: dict = {}
-        
+
         for bar in minute_bars:
             period_start = get_period_start(bar.datetime, target_interval, exchange)
             if period_start is None:
                 continue
-            
+
             if period_start not in period_bars:
                 period_bars[period_start] = []
             period_bars[period_start].append(bar)
-        
+
         # 合成K线
         result: list[BarData] = []
-        
+
         for period_start in sorted(period_bars.keys()):
             bars = period_bars[period_start]
             if not bars:
                 continue
-            
+
             # 按时间排序
             bars.sort(key=lambda x: x.datetime)
-            
+
             # 计算OHLCV
             synthesized = BarData(
                 symbol=symbol,
@@ -3642,9 +4670,9 @@ class ChartWindow(QtWidgets.QWidget):
                 gateway_name="SYNTHESIZED"
             )
             result.append(synthesized)
-        
+
         return result
-    
+
     def _synthesize_4hour_bars(
         self,
         minute_bars: list,
@@ -3653,7 +4681,7 @@ class ChartWindow(QtWidgets.QWidget):
     ) -> list:
         """
         专门合成4小时K线，正确处理跨周末和金融假期的情况
-        
+
         第三根4小时K线（01:15-03:00 + 09:15-11:29）特殊处理：
         - 周末：周五夜盘01:15开始，周一早盘11:29结束
         - 金融假期：假期前夜盘01:15开始，假期后第一个交易日11:29结束
@@ -3661,24 +4689,24 @@ class ChartWindow(QtWidgets.QWidget):
         from datetime import timedelta
         from vnpy.trader.constant import Interval
         from vnpy.trader.object import BarData
-        
+
         if not minute_bars:
             return []
-        
+
         # 按时间排序
         sorted_bars = sorted(minute_bars, key=lambda x: x.datetime)
-        
+
         # 分组逻辑：维护一个"待完成的第三周期"
         period_bars: dict = {}
         pending_period3_start = None  # 待完成的第三周期起始时间
         pending_period3_bars = []     # 待完成的第三周期数据
-        
+
         for bar in sorted_bars:
             dt = bar.datetime
             hour = dt.hour
             minute = dt.minute
             time_value = hour * 100 + minute
-            
+
             # 判断属于哪个时段
             if 1715 <= time_value <= 2114:
                 # 时段1: 17:15-21:14
@@ -3686,21 +4714,21 @@ class ChartWindow(QtWidgets.QWidget):
                 if period_start not in period_bars:
                     period_bars[period_start] = []
                 period_bars[period_start].append(bar)
-                
+
             elif 2115 <= time_value <= 2359:
                 # 时段2前半: 21:15-23:59
                 period_start = dt.replace(hour=21, minute=15, second=0, microsecond=0)
                 if period_start not in period_bars:
                     period_bars[period_start] = []
                 period_bars[period_start].append(bar)
-                
+
             elif 0 <= time_value <= 114:
                 # 时段2后半: 00:00-01:14
                 period_start = (dt - timedelta(days=1)).replace(hour=21, minute=15, second=0, microsecond=0)
                 if period_start not in period_bars:
                     period_bars[period_start] = []
                 period_bars[period_start].append(bar)
-                
+
             elif 115 <= time_value <= 300:
                 # 时段3前半: 01:15-03:00（夜盘尾段）
                 # 如果有待完成的第三周期，先完成它
@@ -3709,11 +4737,11 @@ class ChartWindow(QtWidgets.QWidget):
                         period_bars[pending_period3_start] = []
                     period_bars[pending_period3_start].extend(pending_period3_bars)
                     pending_period3_bars = []
-                
+
                 # 开始新的第三周期
                 pending_period3_start = dt.replace(hour=1, minute=15, second=0, microsecond=0)
                 pending_period3_bars = [bar]
-                
+
             elif 915 <= time_value <= 1129:
                 # 时段3后半: 09:15-11:29（早盘）
                 if pending_period3_start is not None:
@@ -3726,7 +4754,7 @@ class ChartWindow(QtWidgets.QWidget):
                     if period_start not in period_bars:
                         period_bars[period_start] = []
                     period_bars[period_start].append(bar)
-                
+
             elif (1130 <= time_value <= 1200) or (1300 <= time_value <= 1629):
                 # 时段4: 11:30-12:00 + 13:00-16:29
                 # 如果有待完成的第三周期，先完成它
@@ -3736,29 +4764,29 @@ class ChartWindow(QtWidgets.QWidget):
                     period_bars[pending_period3_start].extend(pending_period3_bars)
                     pending_period3_start = None
                     pending_period3_bars = []
-                
+
                 period_start = dt.replace(hour=11, minute=30, second=0, microsecond=0)
                 if period_start not in period_bars:
                     period_bars[period_start] = []
                 period_bars[period_start].append(bar)
-        
+
         # 处理最后可能剩余的待完成第三周期
         if pending_period3_start is not None and pending_period3_bars:
             if pending_period3_start not in period_bars:
                 period_bars[pending_period3_start] = []
             period_bars[pending_period3_start].extend(pending_period3_bars)
-        
+
         # 合成K线
         result: list[BarData] = []
-        
+
         for period_start in sorted(period_bars.keys()):
             bars = period_bars[period_start]
             if not bars:
                 continue
-            
+
             # 按时间排序
             bars.sort(key=lambda x: x.datetime)
-            
+
             # 计算OHLCV
             synthesized = BarData(
                 symbol=symbol,
@@ -3775,19 +4803,19 @@ class ChartWindow(QtWidgets.QWidget):
                 gateway_name="SYNTHESIZED"
             )
             result.append(synthesized)
-        
+
         return result
-    
+
     def _is_same_period(self, bar1: "BarData", bar2: "BarData", interval: "Interval") -> bool:
         """判断两根K线是否属于同一周期"""
         period1 = get_period_start(bar1.datetime, interval, bar1.exchange)
         period2 = get_period_start(bar2.datetime, interval, bar2.exchange)
         return period1 == period2
-    
+
     def _merge_bars(self, bar1: "BarData", bar2: "BarData") -> "BarData":
         """合并两根K线（用于更新未完成的K线）"""
         from vnpy.trader.object import BarData
-        
+
         return BarData(
             symbol=bar1.symbol,
             exchange=bar1.exchange,
@@ -3802,20 +4830,20 @@ class ChartWindow(QtWidgets.QWidget):
             open_interest=bar2.open_interest,
             gateway_name=bar1.gateway_name
         )
-    
+
     def _create_current_bar_from_tick(self, tick: "TickData") -> "BarData":
         """
         根据tick数据创建当前未完成的K线
         用于大周期K线的实时更新
         """
         from vnpy.trader.object import BarData
-        
+
         interval_enum = self._get_interval_enum()
         period_start = self._get_period_start(tick.datetime, interval_enum)
-        
+
         if period_start is None:
             return None
-        
+
         return BarData(
             symbol=tick.symbol,
             exchange=tick.exchange,
@@ -3830,18 +4858,18 @@ class ChartWindow(QtWidgets.QWidget):
             open_interest=tick.open_interest,
             gateway_name=tick.gateway_name
         )
-    
+
     def subscribe_tick(self, vt_symbol: str) -> None:
         """订阅行情数据"""
         from vnpy.trader.utility import extract_vt_symbol
-        
+
         try:
             symbol, exchange = extract_vt_symbol(vt_symbol)
             req: SubscribeRequest = SubscribeRequest(
                 symbol=symbol,
                 exchange=exchange
             )
-            
+
             # 查找合约并订阅
             contract = self.main_engine.get_contract(vt_symbol)
             if contract:
@@ -3851,84 +4879,47 @@ class ChartWindow(QtWidgets.QWidget):
                 gateway_names = self.main_engine.get_all_gateway_names()
                 for gw_name in gateway_names:
                     self.main_engine.subscribe(req, gw_name)
-                    
+
         except Exception as e:
             # 转义花括号避免loguru格式化错误
             error_msg = str(e).replace("{", "{{").replace("}", "}}")
             self.main_engine.write_log(f"订阅行情失败: {error_msg}")
-    
-    def process_tick_event(self, event: Event) -> None:
-        """处理Tick事件 - 支持所有周期的实时更新"""
-        tick: TickData = event.data
-        
-        # 只处理当前显示合约的tick
-        if tick.vt_symbol != self.current_vt_symbol:
-            return
-        
-        # 如果历史数据还没加载完，跳过
-        if not self.history_loaded:
-            return
-        
-        # 获取当前周期
-        interval_enum = self._get_interval_enum()
-        from vnpy.trader.constant import Interval
-        
-        if interval_enum == Interval.MINUTE:
-            # 1分钟周期：使用BarGenerator从tick合成K线
-            if self.bg:
-                # 更新BarGenerator（这会自动创建或更新bg.bar）
-                self.bg.update_tick(tick)
-                
-                # 实时更新当前K线（每次tick都更新，确保实时显示）
-                # 注意：bg.bar在第一个有效tick时会被创建，之后每次tick都会更新
-                if self.bg.bar:
-                    from vnpy.trader.object import BarData
-                    # 创建当前K线的副本用于实时更新（避免修改原始bar对象）
-                    bar: BarData = copy(self.bg.bar)
-                    # 规范化datetime（去掉秒和微秒，确保与历史数据一致）
-                    bar.datetime = bar.datetime.replace(second=0, microsecond=0)
-                    # 更新图表显示（BarManager会自动处理新bar的添加和已有bar的更新）
-                    # 这会实时更新最后一根K线的显示（如果bar已存在）或添加新K线（如果bar不存在）
-                    self.chart.update_bar(bar)
-        else:
-            # 5分钟、1小时、4小时周期：使用tick数据直接更新当前未完成的K线
-            # 这样可以实现所有周期的实时更新
-            self._update_current_bar_with_tick(tick, interval_enum)
-    
+
+
     def _update_current_bar_with_tick(self, tick: "TickData", interval: "Interval") -> None:
         """
         用tick数据更新当前大周期K线
-        
+
         根据tick时间判断是否属于当前周期：
         - 如果属于当前周期，更新当前K线
         - 如果属于新周期，完成当前K线并创建新K线
-        
+
         成交量计算：
         - tick.volume 是当日累计成交量
         - 需要记录周期开始时的基准成交量，用当前累计量减去基准得到周期内成交量
         - 如果K线来自历史数据（有历史成交量），需要累加
         """
         from vnpy.trader.object import BarData
-        
+
         # 获取tick所属的周期
         from vnpy.trader.utility import extract_vt_symbol
         _, exchange = extract_vt_symbol(tick.vt_symbol)
         tick_period = get_period_start(tick.datetime, interval, exchange)
-        
+
         if tick_period is None:
             # tick时间不在交易时段内
             return
-        
+
         # 获取当前累计成交量和成交额
         current_volume = tick.volume if tick.volume else 0
         current_turnover = tick.turnover if tick.turnover else 0
-        
+
         # 获取该周期第一根分钟K线的开盘价（用于1小时、4小时等大周期）
         open_price = self.open_price_helper.get_period_open_price(
             tick_period, interval, tick.vt_symbol, tick=tick,
             minute_bar_generator=self.bg, history_data=self.history_data
         )
-        
+
         # 如果无法获取开盘价，使用tick价格作为fallback（仅用于创建新K线时）
         if not open_price or open_price <= 0:
             open_price = tick.last_price if tick.last_price > 0 else None
@@ -3936,7 +4927,7 @@ class ChartWindow(QtWidgets.QWidget):
                 self.main_engine.write_log(
                     f"[实时K线] 无法获取{tick_period.strftime('%H:%M')}周期开盘价，使用tick价格: {open_price}"
                 )
-        
+
         # 检查是否有当前K线
         if not hasattr(self, '_current_bar') or self._current_bar is None:
             # 记录周期开始时的基准成交量
@@ -3945,7 +4936,7 @@ class ChartWindow(QtWidgets.QWidget):
             self._bar_historical_volume = 0
             self._bar_historical_turnover = 0
             self._need_init_baseline = False
-            
+
             # 创建新的当前K线（使用该周期第一根分钟K线的开盘价）
             # 如果open_price无效，使用tick价格作为fallback
             final_open_price = open_price if open_price and open_price > 0 else tick.last_price
@@ -3964,11 +4955,13 @@ class ChartWindow(QtWidgets.QWidget):
                 gateway_name=tick.gateway_name
             )
             self._current_bar_period = tick_period
-            
+            # 标记开盘价是否已更新（新创建的K线，开盘价已设置）
+            self._current_bar_open_price_updated = (open_price and open_price > 0)
+
             # 添加到历史数据
             self.history_data.append(self._current_bar)
             self._current_bar_index = len(self.history_data) - 1
-            
+
         elif self._current_bar_period is None or tick_period != self._current_bar_period:
             # 新周期开始，完成当前K线
             if self._current_bar_period is not None:
@@ -3979,14 +4972,14 @@ class ChartWindow(QtWidgets.QWidget):
                 self.main_engine.write_log(
                     f"[K线开始] 开始新周期: {tick_period.strftime('%m-%d %H:%M')}"
                 )
-            
+
             # 记录新周期开始时的基准成交量
             self._period_start_volume = current_volume
             self._period_start_turnover = current_turnover
             self._bar_historical_volume = 0
             self._bar_historical_turnover = 0
             self._need_init_baseline = False
-            
+
             # 创建新的当前K线（使用该周期第一根分钟K线的开盘价）
             # 如果open_price无效，使用tick价格作为fallback
             final_open_price = open_price if open_price and open_price > 0 else tick.last_price
@@ -4005,14 +4998,16 @@ class ChartWindow(QtWidgets.QWidget):
                 gateway_name=tick.gateway_name
             )
             self._current_bar_period = tick_period
-            
+            # 标记开盘价是否已更新（新创建的K线，开盘价已设置）
+            self._current_bar_open_price_updated = (open_price and open_price > 0)
+
             # 添加到历史数据
             self.history_data.append(self._current_bar)
             self._current_bar_index = len(self.history_data) - 1
-            
+
         else:
             # 更新当前K线
-            
+
             # 如果需要初始化基准（来自历史数据的当前K线）
             if hasattr(self, '_need_init_baseline') and self._need_init_baseline:
                 self._period_start_volume = current_volume
@@ -4021,126 +5016,158 @@ class ChartWindow(QtWidgets.QWidget):
                 self.main_engine.write_log(
                     f"[成交量基准] 初始化基准: {current_volume}, 历史成交量: {self._bar_historical_volume}"
                 )
-            
+
+            # ✅ 实时更新时，如果开盘价还没有被正确设置，尝试更新开盘价
+            # 这对于从历史数据标记的当前K线很重要，因为历史数据的开盘价可能不准确
+            # 只有在开盘价还没有被正确设置时才更新（避免覆盖已正确的开盘价）
+            if (self._current_bar.open_price <= 0 or 
+                (hasattr(self, '_current_bar_open_price_updated') and not self._current_bar_open_price_updated)):
+                # 尝试获取正确的开盘价
+                correct_open_price = self.open_price_helper.get_period_open_price(
+                    tick_period, interval, tick.vt_symbol, tick=tick,
+                    minute_bar_generator=self.bg, history_data=self.history_data
+                )
+                
+                if correct_open_price and correct_open_price > 0:
+                    if self._current_bar.open_price != correct_open_price:
+                        old_open_price = self._current_bar.open_price
+                        self._current_bar.open_price = correct_open_price
+                        self._current_bar_open_price_updated = True
+                        self.main_engine.write_log(
+                            f"[实时K线] {interval.value}K线({tick_period.strftime('%H:%M')}) "
+                            f"开盘价已更新: {old_open_price} -> {correct_open_price} (实时更新时修正)"
+                        )
+
             self._current_bar.high_price = max(self._current_bar.high_price, tick.last_price)
             self._current_bar.low_price = min(self._current_bar.low_price, tick.last_price)
             self._current_bar.close_price = tick.last_price
-            
+
             # 计算周期内的成交量
             # = 历史成交量（来自加载数据）+ tick增量成交量（当前累计 - 基准）
             tick_delta_volume = 0
             tick_delta_turnover = 0
-            
+
             if current_volume >= self._period_start_volume:
                 tick_delta_volume = current_volume - self._period_start_volume
-            
+
             if current_turnover >= self._period_start_turnover:
                 tick_delta_turnover = current_turnover - self._period_start_turnover
-            
+
             # 获取历史成交量
             historical_volume = getattr(self, '_bar_historical_volume', 0)
             historical_turnover = getattr(self, '_bar_historical_turnover', 0)
-            
+
             self._current_bar.volume = historical_volume + tick_delta_volume
             self._current_bar.turnover = historical_turnover + tick_delta_turnover
-            
+
             if tick.open_interest:
                 self._current_bar.open_interest = tick.open_interest
-            
+
             # 更新历史数据中的当前K线
             if self._current_bar_index >= 0 and self._current_bar_index < len(self.history_data):
                 self.history_data[self._current_bar_index] = self._current_bar
-        
+
         # 更新图表显示
+        # Phase 5: 性能监控 - 测量图表刷新延迟（大周期更新）
+        chart_refresh_start_time = None
+        if self._perf_monitoring_enabled:
+            chart_refresh_start_time = time.perf_counter()
+
         self.chart.update_bar(self._current_bar)
-    
+
+        # Phase 5: 性能监控 - 记录图表刷新延迟（大周期更新）
+        if self._perf_monitoring_enabled and chart_refresh_start_time is not None:
+            chart_refresh_end_time = time.perf_counter()
+            chart_refresh_latency_ms = (chart_refresh_end_time - chart_refresh_start_time) * 1000
+            self._record_performance_metric("chart_refresh", chart_refresh_latency_ms)
+
     def on_bar(self, bar: "BarData") -> None:
         """K线合成回调（仅用于1分钟周期）"""
         from vnpy.trader.constant import Interval
-        
+
         self.chart.update_bar(bar)
         # 更新历史数据缓存
         self.history_data.append(bar)
-        
+
         # 缓存1分钟K线（用于快速查找开盘价）
         if bar.interval == Interval.MINUTE:
             self.open_price_helper.cache_minute_bar(bar)
-        
+
         # 检查是否需要更新大周期K线的开盘价
         # 如果当前有大周期K线正在生成，且该分钟K线是该周期的第一根，更新开盘价
         self._update_period_open_price_if_needed(bar)
-    
+
     def _update_period_open_price_if_needed(self, minute_bar: "BarData") -> None:
         """
         检查是否需要更新大周期K线的开盘价
-        
+
         当第一根分钟K线完成时，如果当前有大周期K线正在生成，
         且该分钟K线是该周期的第一根，更新大周期K线的开盘价。
         """
         from vnpy.trader.constant import Interval
-        
+
         # 只处理1分钟K线
         if minute_bar.interval != Interval.MINUTE:
             return
-        
+
         # 检查是否有当前大周期K线
         if not hasattr(self, '_current_bar') or self._current_bar is None:
             return
-        
+
         # 获取当前周期类型
         current_interval = self._current_bar.interval
-        
+
         # 只处理大周期（5分钟、1小时、4小时）
         if current_interval == Interval.MINUTE:
             return
-        
+
         # 获取该分钟K线所属的大周期
         from vnpy.trader.utility import extract_vt_symbol
         _, exchange = extract_vt_symbol(minute_bar.vt_symbol)
         minute_bar_period = get_period_start(minute_bar.datetime, current_interval, exchange)
-        
+
         # 检查该分钟K线是否属于当前大周期K线的第一根
         if minute_bar_period == self._current_bar.datetime:
             # 获取该分钟K线的周期起始时间（应该是该分钟K线本身的时间）
             minute_period = get_period_start(minute_bar.datetime, Interval.MINUTE, exchange)
-            
+
             # 检查该分钟K线是否是该大周期的第一根（分钟K线的时间应该等于大周期的开始时间）
             if minute_period == self._current_bar.datetime:
                 # 如果当前大周期K线的开盘价不是该分钟K线的开盘价，需要更新
-                if (minute_bar.open_price and minute_bar.open_price > 0 and 
+                if (minute_bar.open_price and minute_bar.open_price > 0 and
                     self._current_bar.open_price != minute_bar.open_price):
                     old_open_price = self._current_bar.open_price
                     self._current_bar.open_price = minute_bar.open_price
-                    
+
                     self.main_engine.write_log(
                         f"[开盘价更新] {current_interval.value}K线({self._current_bar.datetime.strftime('%H:%M')}) "
                         f"开盘价已更新: {old_open_price} -> {minute_bar.open_price} "
                         f"(来自{minute_bar.datetime.strftime('%H:%M')}分钟K线)"
                     )
-                    
+
                     # 更新历史数据中的当前K线
                     if self._current_bar_index >= 0 and self._current_bar_index < len(self.history_data):
                         self.history_data[self._current_bar_index] = self._current_bar
-                    
+
                     # 更新图表显示
                     self.chart.update_bar(self._current_bar)
-    
+
     def process_history_data(self, history: list) -> None:
         """处理历史数据"""
         if not history:
             self.status_label.setText(_("未找到历史数据，等待实时行情..."))
             self.history_loaded = True
             return
-        
+
         # 确保是当前合约的数据
         first_bar = history[0]
         if first_bar.vt_symbol != self.current_vt_symbol:
             return
-        
+
         # 获取当前周期
         interval_enum = self._get_interval_enum()
         from vnpy.trader.constant import Interval
-        
+
         # 尝试检测并填充数据缺口（所有周期都检测）
         self.status_label.setText(_("正在检测数据缺口并补齐..."))
         history = self._detect_and_fill_gap(
@@ -4148,50 +5175,55 @@ class ChartWindow(QtWidgets.QWidget):
             self.current_vt_symbol,
             interval_enum
         )
-        
+
         # 缓存历史数据
         self.history_data = list(history)
-        
+
         # 先标记最后一根K线是否为当前未完成的K线（在修正之前）
         # 这样可以在修正时跳过正在进行的K线，避免错误修正
         self._mark_current_bar(self.history_data, interval_enum)
-        
+
         # 修正所有已完成K线的开盘价（使用该周期第一根分钟K线的开盘价）
         # 这对于从数据库加载的历史数据很重要，因为历史数据中的开盘价可能不正确
         # 注意：修正会直接修改self.history_data中的K线对象，但会跳过正在进行的K线
         self._correct_all_bars_open_price(self.history_data, interval_enum)
-        
+
         # 如果标记了当前K线，需要确保开盘价正确（使用第一根分钟K线的开盘价）
         # 这必须在更新图表之前完成
         if hasattr(self, '_current_bar') and self._current_bar:
             # 更新历史数据中的当前K线（如果开盘价被修正了）
             if self._current_bar_index >= 0 and self._current_bar_index < len(self.history_data):
                 self.history_data[self._current_bar_index] = self._current_bar
-        
+
         # 先设置未来空间，再更新历史数据
         future_bars = self._get_future_bars()
         self.chart.set_future_bars(future_bars)
-        
+
+        # ✅ 对于1分钟和5分钟周期，确保最后几根K线与实时数据对齐
+        # 删除当前时间周期的K线，让实时tick创建新的当前K线
+        if interval_enum in (Interval.MINUTE, Interval.MINUTE_5) and self.history_data:
+            self._remove_current_period_bars_for_alignment(interval_enum)
+
         # 更新图表（使用修正后的历史数据）
         self.chart.update_history(self.history_data)
         self.history_loaded = True
-        
+
         # 更新时间范围标签
-        if history:
-            start_time = history[0].datetime.strftime("%m-%d %H:%M")
-            end_time = history[-1].datetime.strftime("%m-%d %H:%M")
+        if self.history_data:
+            start_time = self.history_data[0].datetime.strftime("%m-%d %H:%M")
+            end_time = self.history_data[-1].datetime.strftime("%m-%d %H:%M")
             self.time_start_label.setText(start_time)
             self.time_end_label.setText(end_time)
-        
+
         # 更新状态（显示周期和数据源）
         interval_name = self.interval_combo.currentText()
         source_name = self.datasource_combo.currentText()
-        
+
         # 检查是否有当前未完成的K线
         current_bar_info = ""
         if hasattr(self, '_current_bar') and self._current_bar:
             current_bar_info = _(" | 当前K线进行中")
-        
+
         # 检查是否有数据缺口
         gap_warning = ""
         if hasattr(self, '_has_data_gap') and self._has_data_gap:
@@ -4200,7 +5232,7 @@ class ChartWindow(QtWidgets.QWidget):
             self.status_label.setStyleSheet("color: #ff6600; font-size: 12px;")
         else:
             self.status_label.setStyleSheet("color: #888; font-size: 12px;")
-        
+
         self.status_label.setText(
             _("{} | {} | {} | {} 根K线{}{}").format(
                 self.current_vt_symbol,
@@ -4211,7 +5243,7 @@ class ChartWindow(QtWidgets.QWidget):
                 gap_warning
             )
         )
-        
+
         # 如果有数据缺口，显示详细提示
         if hasattr(self, '_has_data_gap') and self._has_data_gap and hasattr(self, '_gap_info'):
             self.status_label.setToolTip(
@@ -4219,21 +5251,21 @@ class ChartWindow(QtWidgets.QWidget):
             )
         else:
             self.status_label.setToolTip("")
-        
+
         # 确保滚动条在最右边
         self.time_slider.setValue(100)
-        
+
         # 订阅实时行情数据（用于实时更新K线）
         if self.current_vt_symbol:
             self.subscribe_tick(self.current_vt_symbol)
-    
+
     def _mark_current_bar(self, history: list, interval: "Interval") -> None:
         """
         标记当前未完成的K线
-        
+
         检查最后一根K线是否属于当前正在进行的周期，
         如果是，则标记为当前K线，用于后续tick更新。
-        
+
         成交量处理：
         - 标记现有K线时，记录该K线已有的成交量作为"历史成交量"
         - 后续tick更新时，需要在历史成交量基础上累加
@@ -4242,7 +5274,7 @@ class ChartWindow(QtWidgets.QWidget):
         from vnpy.trader.constant import Interval
         from vnpy.trader.utility import ZoneInfo
         from tzlocal import get_localzone_name
-        
+
         self._current_bar = None
         self._current_bar_period = None
         self._current_bar_index = -1
@@ -4253,41 +5285,43 @@ class ChartWindow(QtWidgets.QWidget):
         self._bar_historical_turnover = 0
         # 标记是否需要在第一个tick时初始化基准
         self._need_init_baseline = True
-        
+        # 标记当前K线的开盘价是否已更新（用于实时更新时判断是否需要更新开盘价）
+        self._current_bar_open_price_updated = False
+
         if not history or interval == Interval.MINUTE:
             return
-        
+
         try:
             # 获取当前时间
             local_tz = ZoneInfo(get_localzone_name())
             now = datetime.now(local_tz)
-            
+
             # 获取当前时间应该属于的周期
             from vnpy.trader.utility import extract_vt_symbol
             _, exchange = extract_vt_symbol(self.current_vt_symbol)
             current_period = get_period_start(now, interval, exchange)
-            
+
             if current_period is None:
                 return
-            
+
             # 检查最后一根K线是否属于当前周期
             last_bar = history[-1]
             last_bar_period = get_period_start(last_bar.datetime, interval, exchange)
-            
+
             if last_bar_period == current_period:
                 # 最后一根K线是当前未完成的K线
                 self._current_bar = last_bar
                 self._current_bar_period = current_period
                 self._current_bar_index = len(history) - 1
-                
+
                 # 记录历史成交量（来自加载的数据，需要在tick更新时累加）
                 self._bar_historical_volume = last_bar.volume if last_bar.volume else 0
                 self._bar_historical_turnover = last_bar.turnover if last_bar.turnover else 0
-                
+
                 # 检查并更新开盘价（使用该周期第一根分钟K线的开盘价）
                 # 因为历史数据中的开盘价可能不正确（可能是从tick价格生成的）
                 self._update_current_bar_open_price()
-                
+
                 self.main_engine.write_log(
                     f"[当前K线] 标记当前未完成K线: {current_period.strftime('%m-%d %H:%M')}, "
                     f"已有成交量: {self._bar_historical_volume}, "
@@ -4297,31 +5331,31 @@ class ChartWindow(QtWidgets.QWidget):
                 # 需要创建一个新的当前K线
                 # 这种情况下，最后一根历史K线是完整的，当前周期还没有K线
                 pass
-                
+
         except Exception as e:
             error_msg = str(e).replace("{", "{{").replace("}", "}}")
             self.main_engine.write_log(f"[当前K线] 标记失败: {error_msg}")
-    
+
     def _correct_all_bars_open_price(self, history: list, interval: "Interval") -> None:
         """
         修正所有K线的开盘价（使用该周期第一根分钟K线的开盘价）
-        
+
         对于从数据库加载的历史数据，开盘价可能不正确（可能是从tick价格生成的），
         需要重新从第一根分钟K线获取正确的开盘价。
         """
         from vnpy.trader.constant import Interval
-        
+
         # 只处理大周期（5分钟、1小时、4小时）
         if interval == Interval.MINUTE:
             return
-        
+
         try:
             corrected_count = 0
-            
+
             # 检查是否有正在进行的当前K线，如果有则跳过它
             current_bar_index = getattr(self, '_current_bar_index', -1)
             current_bar_period = getattr(self, '_current_bar_period', None)
-            
+
             for i, bar in enumerate(history):
                 # 跳过正在进行的当前K线（它的开盘价应该在实时更新时处理，或者在标记时已经更新）
                 if i == current_bar_index and current_bar_period is not None:
@@ -4334,7 +5368,7 @@ class ChartWindow(QtWidgets.QWidget):
                         bar_dt_str = bar.datetime.strftime('%Y-%m-%d %H:%M:%S')
                         print(f"[DEBUG] _correct_all_bars_open_price: - 跳过正在进行的当前K线 | bar_dt={bar_dt_str}, 开盘价={bar.open_price}, 当前K线开盘价将在实时更新时处理")
                         continue
-                
+
                 # 获取该周期第一根分钟K线的开盘价
                 from vnpy.trader.object import TickData
                 temp_tick = TickData(
@@ -4344,21 +5378,21 @@ class ChartWindow(QtWidgets.QWidget):
                     last_price=bar.close_price,
                     gateway_name=bar.gateway_name
                 )
-                
+
                 from vnpy.trader.utility import extract_vt_symbol
                 from vnpy.trader.period_utils import get_period_start
                 _, exchange = extract_vt_symbol(bar.vt_symbol)
-                
+
                 # 获取该K线的周期起始时间（重要：不能直接使用bar.datetime）
                 period_start = get_period_start(bar.datetime, bar.interval, exchange)
                 if period_start is None:
                     # 无法确定周期起始时间，跳过
                     continue
-                
+
                 bar_dt_str = bar.datetime.strftime('%Y-%m-%d %H:%M:%S')
                 period_start_str = period_start.strftime('%Y-%m-%d %H:%M:%S')
                 print(f"[DEBUG] _correct_all_bars_open_price: 开始修正 | bar_dt={bar_dt_str}, period_start={period_start_str}, interval={bar.interval.value}, current_open_price={bar.open_price}, current_close_price={bar.close_price}")
-                
+
                 correct_open_price = self.open_price_helper.get_period_open_price(
                     period_start,  # 使用周期起始时间，而不是bar.datetime
                     bar.interval,
@@ -4367,39 +5401,39 @@ class ChartWindow(QtWidgets.QWidget):
                     minute_bar_generator=self.bg,
                     history_data=self.history_data
                 )
-                
+
                 print(f"[DEBUG] _correct_all_bars_open_price: 获取到的开盘价 | correct_open_price={correct_open_price}, correct_open_price_time={period_start_str}, current_open_price={bar.open_price}, 是否不同={bar.open_price != correct_open_price if correct_open_price else 'N/A'}")
-                
+
                 # 如果无法获取correct_open_price，说明该周期第一根1分钟K线可能不存在
                 # 此时不应该修正，因为current_open_price可能已经是正确的（来自DataManager的合成逻辑）
                 if not correct_open_price or correct_open_price <= 0:
                     print(f"[DEBUG] _correct_all_bars_open_price: ✗ 无法获取开盘价，跳过修正 | bar_dt={bar_dt_str}, correct_open_price={correct_open_price}, 保持current_open_price={bar.open_price}")
                     continue
-                
+
                 # 如果获取到了正确的开盘价，且与当前开盘价不同，则更新
                 if bar.open_price != correct_open_price:
                     old_open_price = bar.open_price
                     price_diff = abs(old_open_price - correct_open_price)
-                    
+
                     # 检查：如果correct_open_price来自该周期内第二根或更后的1分钟K线，
                     # 而current_open_price已经正确，则不应该修正
                     # 这里通过比较差异来判断：如果差异很小（<1.0），可能是数据精度问题，不应该修正
                     # 或者，如果无法找到period_start对应的1分钟K线，说明它不存在，应该保持current_open_price
                     print(f"[DEBUG] _correct_all_bars_open_price: 价格差异 | old_open={old_open_price}, new_open={correct_open_price}, 差异={price_diff}")
-                    
+
                     bar.open_price = correct_open_price
                     self.history_data[i] = bar
                     corrected_count += 1
-                    
+
                     print(f"[DEBUG] _correct_all_bars_open_price: ✓ 执行修正 | bar_dt={bar_dt_str}, old_open={old_open_price} -> new_open={correct_open_price}, 差异={price_diff}")
-                    
+
                     self.main_engine.write_log(
                         f"[开盘价修正] {bar.interval.value}K线({bar.datetime.strftime('%H:%M')}) "
                         f"开盘价已修正: {old_open_price} -> {correct_open_price}"
                     )
                 else:
                     print(f"[DEBUG] _correct_all_bars_open_price: - 无需修正 | bar_dt={bar_dt_str}, open_price={bar.open_price} == correct_open_price={correct_open_price}")
-            
+
             if corrected_count > 0:
                 self.main_engine.write_log(
                     f"[开盘价修正] 共修正了 {corrected_count} 根K线的开盘价"
@@ -4407,23 +5441,23 @@ class ChartWindow(QtWidgets.QWidget):
         except Exception as e:
             error_msg = str(e).replace("{", "{{").replace("}", "}}")
             self.main_engine.write_log(f"[开盘价修正] 批量修正失败: {error_msg}")
-    
+
     def _update_current_bar_open_price(self) -> None:
         """
         更新当前K线的开盘价（使用该周期第一根分钟K线的开盘价）
-        
+
         当从历史数据中标记当前K线时，需要检查并更新开盘价，
         因为历史数据中的开盘价可能不正确（可能是从tick价格生成的）。
         """
         if not hasattr(self, '_current_bar') or self._current_bar is None:
             return
-        
+
         from vnpy.trader.constant import Interval
-        
+
         # 只处理大周期（5分钟、1小时、4小时）
         if self._current_bar.interval == Interval.MINUTE:
             return
-        
+
         try:
             # 获取该周期第一根分钟K线的开盘价
             # 创建一个临时的tick对象用于查询
@@ -4435,7 +5469,7 @@ class ChartWindow(QtWidgets.QWidget):
                 last_price=self._current_bar.close_price,
                 gateway_name=self._current_bar.gateway_name
             )
-            
+
             from vnpy.trader.utility import extract_vt_symbol
             _, exchange = extract_vt_symbol(self._current_bar.vt_symbol)
             correct_open_price = self.open_price_helper.get_period_open_price(
@@ -4446,142 +5480,140 @@ class ChartWindow(QtWidgets.QWidget):
                 minute_bar_generator=self.bg,
                 history_data=self.history_data
             )
-            
+
             # 如果获取到了正确的开盘价，且与当前开盘价不同，则更新
-            if (correct_open_price and correct_open_price > 0 and 
+            if (correct_open_price and correct_open_price > 0 and
                 self._current_bar.open_price != correct_open_price):
                 old_open_price = self._current_bar.open_price
                 self._current_bar.open_price = correct_open_price
-                
+
                 self.main_engine.write_log(
                     f"[开盘价修正] {self._current_bar.interval.value}K线({self._current_bar.datetime.strftime('%H:%M')}) "
                     f"开盘价已修正: {old_open_price} -> {correct_open_price} "
                     f"(从历史数据标记时修正)"
                 )
-                
+
                 # 更新历史数据中的当前K线
                 if self._current_bar_index >= 0 and self._current_bar_index < len(self.history_data):
                     self.history_data[self._current_bar_index] = self._current_bar
-                
+
                 # 更新图表显示
                 if hasattr(self, 'chart') and self.chart:
                     self.chart.update_bar(self._current_bar)
         except Exception as e:
             error_msg = str(e).replace("{", "{{").replace("}", "}}")
             self.main_engine.write_log(f"[开盘价修正] 更新失败: {error_msg}")
-    
+
+    def _remove_current_period_bars_for_alignment(self, interval: "Interval") -> None:
+        """
+        对于1分钟和5分钟周期，删除当前时间周期的K线，确保实时数据对齐
+        
+        问题：
+        1. 如果历史数据的最后一根K线是当前分钟/5分钟的，实时更新时会创建新的当前K线，导致重复或不一致
+        2. 数据补齐时可能会包含未完成的当前周期K线，这些K线数据不准确，需要删除
+        
+        解决：
+        - 删除当前时间周期的K线（1分钟周期：当前分钟；5分钟周期：当前5分钟周期）
+        - 让实时tick创建新的当前K线，确保历史数据和实时数据无缝对齐
+        - 删除最后几根可能是当前时间周期的K线，确保数据准确性
+        - ✅ 对于1分钟周期，保存被删除K线的开盘价，用于后续修正BarGenerator创建的新K线
+        """
+        from datetime import datetime
+        from vnpy.trader.constant import Interval
+        from vnpy.trader.utility import ZoneInfo
+        from tzlocal import get_localzone_name
+        from vnpy.trader.period_utils import get_period_start
+        from vnpy.trader.utility import extract_vt_symbol
+
+        if not self.history_data:
+            return
+
+        try:
+            # 获取当前时间
+            local_tz = ZoneInfo(get_localzone_name())
+            now = datetime.now(local_tz)
+
+            # 获取当前时间所属的周期开始时间
+            _, exchange = extract_vt_symbol(self.history_data[-1].vt_symbol)
+            current_period_start = get_period_start(now, interval, exchange)
+            
+            if not current_period_start:
+                return
+
+            # 从后往前检查，删除所有属于当前时间周期的K线
+            removed_count = 0
+            # ✅ 对于1分钟周期，保存被删除K线的开盘价
+            if interval == Interval.MINUTE:
+                self._removed_minute_bar_open_price = None
+                self._removed_minute_bar_datetime = None
+            
+            while self.history_data:
+                last_bar = self.history_data[-1]
+                last_bar_period_start = get_period_start(last_bar.datetime, interval, exchange)
+                
+                # 如果最后一根K线是当前时间周期的，删除它
+                if last_bar_period_start and last_bar_period_start == current_period_start:
+                    removed_bar = self.history_data.pop()
+                    removed_count += 1
+                    
+                    # ✅ 对于1分钟周期，保存被删除K线的开盘价和datetime
+                    if interval == Interval.MINUTE and removed_bar.open_price > 0:
+                        self._removed_minute_bar_open_price = removed_bar.open_price
+                        self._removed_minute_bar_datetime = removed_bar.datetime.replace(second=0, microsecond=0)
+                        self.main_engine.write_log(
+                            f"[数据对齐] 删除当前1分钟周期的K线 ({removed_bar.datetime.strftime('%H:%M')})，"
+                            f"保存开盘价: {removed_bar.open_price}，等待实时tick创建新的当前K线以确保对齐"
+                        )
+                    else:
+                        self.main_engine.write_log(
+                            f"[数据对齐] 删除当前{interval.value}周期的K线 ({removed_bar.datetime.strftime('%H:%M')})，"
+                            f"等待实时tick创建新的当前K线以确保对齐"
+                        )
+                else:
+                    break
+
+            if removed_count > 0:
+                self.main_engine.write_log(
+                    f"[数据对齐] 共删除了 {removed_count} 根当前{interval.value}周期的K线，"
+                    f"确保实时数据准确对齐"
+                )
+        except Exception as e:
+            error_msg = str(e).replace("{", "{{").replace("}", "}}")
+            self.main_engine.write_log(f"[数据对齐] 删除当前周期K线失败: {error_msg}")
+
     def extend_chart_x_limit(self, move_to_end: bool = False) -> None:
         """扩展图表的x轴限制，允许显示未来空间"""
         # 根据当前周期获取未来空间K线数量
         future_bars = self._get_future_bars()
-        
+
         # 使用ChartWidget的新方法设置未来空间
         self.chart.set_future_bars(future_bars)
-        
+
         # 如果需要移动到扩展后的末尾
         if move_to_end and self.history_data:
             total_bars = len(self.history_data)
             max_x = total_bars + future_bars
             self.chart._right_ix = max_x
             self.chart._update_x_range()
-    
+
     def load_default_symbol(self) -> None:
         """加载默认合约数据"""
         self.symbol_line.setText(self.DEFAULT_SYMBOL)
         self.switch_chart()
-    
+
     def set_symbol(self, vt_symbol: str) -> None:
         """外部设置合约代码"""
         self.symbol_line.setText(vt_symbol)
         self.switch_chart()
-    
-    def process_tick_event(self, event: Event) -> None:
-        """处理Tick事件"""
-        from vnpy.trader.object import TickData
-        from copy import copy
-        
-        tick: TickData = event.data
-        if tick.vt_symbol != self.current_vt_symbol:
-            return
-        
-        # 更新K线生成器
-        if self.bg:
-            self.bg.update_tick(tick)
-    
-    def process_history_data(self, history: list) -> None:
-        """处理历史数据加载完成事件"""
-        from vnpy.trader.object import BarData
-        
-        if not history:
-            self.status_label.setText(_("未加载到数据"))
-            return
-        
-        self.history_data = history
-        self.history_loaded = True
-        
-        # 更新图表
-        self.chart.update_history(history)
-        
-        # 更新滚动条范围
-        if history:
-            first_bar: BarData = history[0]
-            last_bar: BarData = history[-1]
-            self.time_start_label.setText(first_bar.datetime.strftime("%m-%d %H:%M"))
-            self.time_end_label.setText(last_bar.datetime.strftime("%m-%d %H:%M"))
-        
-        # 跳转到最新
-        self.goto_latest()
-        
-        # 更新状态
-        interval_name = self.interval_combo.currentText()
-        self.status_label.setText(
-            _("已加载 {} 根K线 | {} | {}").format(
-                len(history),
-                self.current_vt_symbol,
-                interval_name
-            )
-        )
-    
-    def subscribe_tick(self, vt_symbol: str) -> None:
-        """订阅行情数据"""
-        from vnpy.trader.object import SubscribeRequest
-        from vnpy.trader.utility import extract_vt_symbol
-        
-        try:
-            symbol, exchange = extract_vt_symbol(vt_symbol)
-            contract = self.main_engine.get_contract(vt_symbol)
-            if contract:
-                req = SubscribeRequest(symbol, exchange)
-                self.main_engine.subscribe(req, contract.gateway_name)
-                
-                # 注册tick事件处理（用于价格突破监控）
-                if not hasattr(self, '_tick_event_registered'):
-                    self.event_engine.register(EVENT_TICK, self.process_tick_event)
-                    self._tick_event_registered = True
-        except Exception as e:
-            self.main_engine.write_log(f"订阅行情失败: {e}")
-    
-    def on_bar(self, bar: "BarData") -> None:
-        """K线合成回调"""
-        from copy import copy
-        from vnpy.trader.object import BarData
-        
-        # 更新图表
-        bar_copy: BarData = copy(bar)
-        bar_copy.datetime = bar_copy.datetime.replace(second=0, microsecond=0)
-        self.chart.update_bar(bar_copy)
-        
-        # 保存价格线（自动保存）
-        self.chart.save_price_lines()
-    
+
     def process_order_event(self, event: Event) -> None:
         """处理订单事件，转发给图表的DrawingOrderController"""
         from vnpy.trader.object import OrderData
-        
+
         order: OrderData = event.data
         if self.chart and self.chart.get_drawing_order_controller():
             self.chart.get_drawing_order_controller().update_line_from_order(order)
-    
+
     def toggle_drawing_mode(self) -> None:
         """切换画线下单模式"""
         if not self.chart:
@@ -4604,7 +5636,7 @@ class ChartWindow(QtWidgets.QWidget):
             controller.disable()
             self.drawing_mode_button.setText(_("画线下单"))
             self.drawing_mode_button.setStyleSheet("")
-    
+
     def _on_drawing_mode_changed(self, enabled: bool) -> None:
         """画线下单模式状态变化回调（由ChartWidget调用，例如按下ESC键时）"""
         # 更新按钮状态以反映实际的状态
@@ -4619,11 +5651,11 @@ class ChartWindow(QtWidgets.QWidget):
                 self.drawing_mode_button.setText(_("画线下单"))
                 self.drawing_mode_button.setStyleSheet("")
             self.drawing_mode_button.blockSignals(False)  # 恢复信号
-    
+
     def _on_drawing_click(self, price: float) -> None:
         """处理画线模式下的点击事件（用于画线下单）"""
         from vnpy.chart.order_dialog import OrderDialog
-        
+
         if not self.chart:
             return
 
@@ -4632,7 +5664,7 @@ class ChartWindow(QtWidgets.QWidget):
         pricetick = 1.0  # 默认值（MHImain 的最小变动单位是 1 个点）
         size = 1.0  # 默认值
         price_precision = 0  # 默认整数显示（MHImain）
-        
+
         if vt_symbol:
             contract = self.main_engine.get_contract(vt_symbol)
             if contract:
@@ -4643,7 +5675,7 @@ class ChartWindow(QtWidgets.QWidget):
                 pricetick = max(pricetick, 1.0)
                 size = contract.size  # 合约乘数（一跳的价格数）
                 self.main_engine.write_log(f"[画线下单] 合约信息: {vt_symbol}, pricetick={pricetick}, size={size}")
-                
+
                 # 尝试从 FUTU gateway 查询价格精度
                 gateway_name = contract.gateway_name if hasattr(contract, 'gateway_name') else None
                 if gateway_name:
@@ -4656,41 +5688,41 @@ class ChartWindow(QtWidgets.QWidget):
                             # 但 setup.cfg 配置 packages = vnpy_futu，安装后可通过 vnpy_futu.futu_gateway 访问
                             convert_symbol_vt2futu = None
                             import_error_msgs = []
-                            
+
                             try:
                                 # 方式1：从已安装的包导入（推荐方式，测试文件中使用）
                                 # update_and_run.bat 使用 pip install -e . 安装（可编辑模式）
                                 # 安装后包结构：vnpy_futu/futu_gateway.py（通过setup.cfg配置）
                                 from vnpy_futu.futu_gateway import convert_symbol_vt2futu
-                                self.main_engine.write_log(f"[画线下单] 成功导入convert_symbol_vt2futu: from vnpy_futu.futu_gateway")
+                                self.main_engine.write_log("[画线下单] 成功导入convert_symbol_vt2futu: from vnpy_futu.futu_gateway")
                             except ImportError as e1:
                                 import_error_msgs.append(f"方式1失败: from vnpy_futu.futu_gateway - {str(e1)}")
                                 try:
                                     # 方式2：从源文件路径导入（开发环境，如果方式1失败）
                                     # 源文件结构：vnpy_futu/vnpy_futu/futu_gateway.py
                                     from vnpy_futu.vnpy_futu.futu_gateway import convert_symbol_vt2futu
-                                    self.main_engine.write_log(f"[画线下单] 成功导入convert_symbol_vt2futu: from vnpy_futu.vnpy_futu.futu_gateway")
+                                    self.main_engine.write_log("[画线下单] 成功导入convert_symbol_vt2futu: from vnpy_futu.vnpy_futu.futu_gateway")
                                 except ImportError as e2:
                                     import_error_msgs.append(f"方式2失败: from vnpy_futu.vnpy_futu.futu_gateway - {str(e2)}")
                                     try:
                                         # 方式3：从datafeed模块导入（备用）
                                         from vnpy_futu.datafeed import convert_symbol_vt2futu
-                                        self.main_engine.write_log(f"[画线下单] 成功导入convert_symbol_vt2futu: from vnpy_futu.datafeed")
+                                        self.main_engine.write_log("[画线下单] 成功导入convert_symbol_vt2futu: from vnpy_futu.datafeed")
                                     except ImportError as e3:
                                         import_error_msgs.append(f"方式3失败: from vnpy_futu.datafeed - {str(e3)}")
                                         # 方式4：从gateway对象获取（如果gateway是FutuGateway实例）
                                         if hasattr(gateway, 'convert_symbol_vt2futu'):
                                             convert_symbol_vt2futu = gateway.convert_symbol_vt2futu
-                                            self.main_engine.write_log(f"[画线下单] 从gateway对象获取convert_symbol_vt2futu")
+                                            self.main_engine.write_log("[画线下单] 从gateway对象获取convert_symbol_vt2futu")
                                         else:
                                             # 方式5：尝试从模块对象导入
                                             try:
                                                 import vnpy_futu.futu_gateway as futu_gateway_module
                                                 convert_symbol_vt2futu = futu_gateway_module.convert_symbol_vt2futu
-                                                self.main_engine.write_log(f"[画线下单] 从模块对象获取convert_symbol_vt2futu")
+                                                self.main_engine.write_log("[画线下单] 从模块对象获取convert_symbol_vt2futu")
                                             except Exception as e5:
                                                 import_error_msgs.append(f"方式5失败: 从模块对象导入 - {str(e5)}")
-                            
+
                             if convert_symbol_vt2futu:
                                 from vnpy.trader.constant import Exchange
                                 futu_symbol = convert_symbol_vt2futu(vt_symbol.split('.')[0], Exchange(contract.exchange.value))
@@ -4702,7 +5734,7 @@ class ChartWindow(QtWidgets.QWidget):
                                         if futu_pricetick > 0:
                                             pricetick = futu_pricetick
                                             self.main_engine.write_log(f"[画线下单] 从FUTU API查询到pricetick: {pricetick}")
-                                    
+
                                     # 根据 pricetick 计算价格精度
                                     # 如果 pricetick >= 1.0，显示整数；否则显示相应的小数位数
                                     if pricetick >= 1.0:
@@ -4714,7 +5746,7 @@ class ChartWindow(QtWidgets.QWidget):
                                             price_precision = 0  # 整数
                                         else:
                                             price_precision = min(price_precision, 4)  # 最多4位小数
-                                    
+
                                     self.main_engine.write_log(f"[画线下单] 价格精度: {price_precision} (pricetick={pricetick})")
                             else:
                                 # 所有导入方式都失败
@@ -4749,11 +5781,10 @@ class ChartWindow(QtWidgets.QWidget):
             if controller:
                 controller.disable()
                 controller.enable()  # 重新启用以保持画线模式
-    
+
     def _create_pending_order_line(self, params: dict) -> None:
         """从画线模式创建挂单线（不立即下单，等待价格突破触发）"""
-        from vnpy.trader.utility import extract_vt_symbol
-        
+
         vt_symbol = self.current_vt_symbol
         if not vt_symbol:
             return
@@ -4767,71 +5798,71 @@ class ChartWindow(QtWidgets.QWidget):
         controller = self.chart.get_drawing_order_controller()
         if not controller:
             return
-            
+
         # 将Direction枚举转换为"long"或"short"字符串
         from vnpy.trader.constant import Direction
         direction_str = "long" if params["direction"] == Direction.LONG else "short"
-        
+
         line_id = controller.create_pending_order_line(
             price=params["price"],
             direction=direction_str
         )
-        
+
         # 存储订单参数到挂单线（用于价格突破时下单）
         # 使用 controller 的额外存储来保存订单参数
         if not hasattr(controller, '_pending_order_params'):
             controller._pending_order_params = {}
         if not hasattr(controller, '_pending_line_relations'):
             controller._pending_line_relations = {}  # 挂单线ID -> [止损线ID, 止盈线ID]
-        
+
         controller._pending_order_params[line_id] = {
             "params": params,
             "vt_symbol": vt_symbol,
             "contract": contract
         }
-        
+
         # 初始化关联关系（存储止损/止盈线ID和点数信息）
         controller._pending_line_relations[line_id] = {
             "stop_loss": None,  # {"line_id": str, "points": int}
             "take_profit": None  # {"line_id": str, "points": int}
         }
-        
+
         # 设置挂单参数到价格线对象（持久化到数据库）
         line = self.chart._price_line_manager.get_line(line_id)
         if line:
             # 设置挂单参数
             line.set_order_volume(params["volume"])
             line.set_order_offset(params["offset"].value if hasattr(params["offset"], 'value') else str(params["offset"]))
-            
+
             # 获取价格精度并设置到chart和价格线
             price_precision = params.get("price_precision", 0)
             self.chart._price_precision = price_precision
             line.set_price_precision(price_precision)
-            
+
             # 保存到数据库（PriceLineManager会自动保存）
             # 通过更新价格来触发保存（因为create_line已经保存了基本信息）
             self.chart._price_line_manager.update_line_price(line_id, params["price"])
-        
+
         # 注册到价格突破监控
         # 使用ChartWidget的通用方法，与真实tickdata触发共用逻辑
         if line and self.chart._breakthrough_monitor:
             self.chart._breakthrough_monitor.register_line(
-                line_id, 
-                line, 
+                line_id,
+                line,
                 self.chart._on_price_breakthrough
             )
-        
+
         # 格式化价格显示
         if price_precision == 0:
             price_str = f"{int(params['price'])}"
         else:
             price_str = f"{params['price']:.{price_precision}f}"
-        
+
         self.main_engine.write_log(
             f"创建挂单线: {vt_symbol} {params['direction'].value} "
             f"{params['volume']}@{price_str} (等待价格突破触发)"
         )
-        
+
         # 如果设置了止损，创建止损线
         stop_loss_price = params.get("stop_loss")
         if stop_loss_price is not None and stop_loss_price > 0:
@@ -4850,6 +5881,10 @@ class ChartWindow(QtWidgets.QWidget):
             stop_loss_line = self.chart._price_line_manager.get_line(stop_loss_line_id)
             if stop_loss_line and self.chart._first_plot:
                 self.chart._first_plot.addItem(stop_loss_line)
+                # ✅ 挂单线的止损止盈线在创建后立即将创建时间设置为None，表示"未激活"
+                # 只有在挂单成交后才会激活（设置创建时间），此时才会被触发检查
+                stop_loss_line.set_creation_time_explicit(None)  # 设置为None，表示未激活
+                
                 # 建立关联关系（保存止损线ID和点数）
                 stop_loss_points = params.get("stop_loss_points", 50)
                 controller._pending_line_relations[line_id]["stop_loss"] = {
@@ -4872,12 +5907,12 @@ class ChartWindow(QtWidgets.QWidget):
                 else:
                     price_str = f"{stop_loss_price:.{price_precision}f}"
                     order_price_str = f"{order_price:.{price_precision}f}"
-                
+
                 self.main_engine.write_log(
                     f"创建止损线: {price_str} (关联挂单线: {line_id}, 点数: {stop_loss_points}, "
                     f"订单价格: {order_price_str}, 方向: {direction_str}, size: {contract.size if contract else 'N/A'})"
                 )
-        
+
         # 如果设置了止盈，创建止盈线
         take_profit_price = params.get("take_profit")
         if take_profit_price is not None and take_profit_price > 0:
@@ -4896,6 +5931,10 @@ class ChartWindow(QtWidgets.QWidget):
             take_profit_line = self.chart._price_line_manager.get_line(take_profit_line_id)
             if take_profit_line and self.chart._first_plot:
                 self.chart._first_plot.addItem(take_profit_line)
+                # ✅ 挂单线的止损止盈线在创建后立即将创建时间设置为None，表示"未激活"
+                # 只有在挂单成交后才会激活（设置创建时间），此时才会被触发检查
+                take_profit_line.set_creation_time_explicit(None)  # 设置为None，表示未激活
+                
                 # 建立关联关系（保存止盈线ID和点数）
                 take_profit_points = params.get("take_profit_points", 50)
                 controller._pending_line_relations[line_id]["take_profit"] = {
@@ -4917,27 +5956,27 @@ class ChartWindow(QtWidgets.QWidget):
                 else:
                     price_str = f"{take_profit_price:.{price_precision}f}"
                     order_price_str = f"{order_price:.{price_precision}f}"
-                
+
                 self.main_engine.write_log(
                     f"创建止盈线: {price_str} (关联挂单线: {line_id}, 点数: {take_profit_points}, "
                     f"订单价格: {order_price_str}, 方向: {direction_str}, size: {contract.size if contract else 'N/A'})"
                 )
-    
+
     def _on_price_breakthrough(self, event, controller) -> None:
         """
         处理价格突破事件，触发下单（已废弃，现在使用ChartWidget的通用方法）
-        
+
         注意：此方法保留用于向后兼容，实际逻辑已迁移到ChartWidget.trigger_pending_order_breakthrough
         """
         # 直接调用ChartWidget的通用方法
         # ChartWidget的_on_price_breakthrough会调用trigger_pending_order_breakthrough
         if self.chart:
             self.chart._on_price_breakthrough(event)
-    
+
     def simulate_trade_breakthrough(self) -> None:
         """
         模拟tick突破挂单线，触发挂单成交（用于休市测试）
-        
+
         功能：
         1. 获取所有挂单线（PENDING类型）
         2. 模拟一个tick数据，价格突破挂单线
@@ -4945,30 +5984,30 @@ class ChartWindow(QtWidgets.QWidget):
         4. 下单后会自动更新持仓和浮动盈亏
         """
         self.main_engine.write_log("[模拟成交] 方法被调用")
-        
+
         if not self.chart:
             self.main_engine.write_log("[模拟成交] 图表未初始化，无法模拟成交")
             return
-        
+
         # 获取所有挂单线
         price_line_manager = self.chart._price_line_manager
         if not price_line_manager:
             self.main_engine.write_log("[模拟成交] 价格线管理器未初始化")
             return
-        
+
         all_lines = price_line_manager.get_all_lines()
         self.main_engine.write_log(f"[模拟成交] 找到 {len(all_lines)} 条价格线")
-        
+
         # 筛选出挂单线
         from vnpy.chart.price_line import PriceLineType
         pending_lines = {
-            line_id: line 
-            for line_id, line in all_lines.items() 
+            line_id: line
+            for line_id, line in all_lines.items()
             if line.get_line_type() == PriceLineType.PENDING
         }
-        
+
         self.main_engine.write_log(f"[模拟成交] 找到 {len(pending_lines)} 条挂单线")
-        
+
         if not pending_lines:
             self.main_engine.write_log("[模拟成交] 没有找到挂单线，无法模拟成交")
             QtWidgets.QMessageBox.information(
@@ -4977,7 +6016,7 @@ class ChartWindow(QtWidgets.QWidget):
                 _("当前没有挂单线，请先创建挂单线后再使用模拟成交功能。")
             )
             return
-        
+
         # 获取当前合约信息
         vt_symbol = self.current_vt_symbol
         if not vt_symbol:
@@ -4988,33 +6027,32 @@ class ChartWindow(QtWidgets.QWidget):
                 _("请先选择合约后再使用模拟成交功能。")
             )
             return
-        
+
         # 获取合约信息
         contract = self.main_engine.get_contract(vt_symbol)
         if not contract:
             self.main_engine.write_log(f"合约 {vt_symbol} 未找到，无法模拟成交")
             return
-        
+
         # 获取合约的最小变动单位（pricetick）
         # 按照用户要求，pricetick按照最小1个点设计
         pricetick = contract.pricetick if contract.pricetick > 0 else 1.0
         pricetick = max(pricetick, 1.0)  # 确保至少为1.0（最小1个点）
-        
+
         # 获取当前tick数据（如果有的话，用于获取其他字段）
         current_tick = self.main_engine.get_tick(vt_symbol)
-        
+
         # 遍历所有挂单线，模拟价格突破
         from vnpy.trader.object import TickData
-        from vnpy.trader.constant import Exchange
         from vnpy.trader.utility import extract_vt_symbol
-        
+
         symbol, exchange = extract_vt_symbol(vt_symbol)
-        
+
         triggered_count = 0
         for line_id, line in pending_lines.items():
             line_price = line.get_price()
             direction_str = line.get_direction()
-            
+
             # 将方向字符串转换为标准格式（"long"或"short"）
             # 处理中文"多"/"空"和英文"long"/"short"两种情况
             if direction_str in ["多", "long", "LONG"]:
@@ -5024,19 +6062,19 @@ class ChartWindow(QtWidgets.QWidget):
             else:
                 self.main_engine.write_log(f"模拟成交跳过: 挂单线 {line_id} 方向未知: {direction_str}")
                 continue
-            
+
             # 根据方向模拟突破价格
             # 做多：需要满足 last_price < line_price <= current_price
             # 做空：需要满足 last_price > line_price >= current_price
             # 按照最小1个点设计，使用整数pricetick，所有价格计算使用整数
             pricetick_int = max(int(pricetick), 1)  # 确保至少为1个整数点
-            
+
             # 将挂单价格转换为整数（向下取整，确保计算准确）
             line_price_int = int(line_price)
-            
+
             # 突破幅度：使用多个点（至少3个点），确保突破明显
             breakthrough_points = max(pricetick_int * 3, 3)  # 至少3个点，确保突破明显
-            
+
             # 计算突破价格（使用整数计算）
             if direction == "long":
                 # 做多：模拟价格从挂单价格下方突破到上方
@@ -5044,7 +6082,7 @@ class ChartWindow(QtWidgets.QWidget):
                 # 设置last_price明显低于挂单价格，current_price明显高于挂单价格
                 last_price = line_price_int - breakthrough_points  # 明显低于挂单价格（多个点）
                 current_price = line_price_int + breakthrough_points  # 明显高于挂单价格（多个点）
-                
+
                 # 验证计算
                 if not (last_price < line_price_int <= current_price):
                     self.main_engine.write_log(
@@ -5059,7 +6097,7 @@ class ChartWindow(QtWidgets.QWidget):
                 # 设置last_price明显高于挂单价格，current_price明显低于挂单价格
                 last_price = line_price_int + breakthrough_points  # 明显高于挂单价格（多个点）
                 current_price = line_price_int - breakthrough_points  # 明显低于挂单价格（多个点）
-                
+
                 # 验证计算
                 if not (last_price > line_price_int >= current_price):
                     self.main_engine.write_log(
@@ -5068,7 +6106,7 @@ class ChartWindow(QtWidgets.QWidget):
                         f"last_price={last_price}, current_price={current_price}"
                     )
                     continue
-            
+
             # 验证突破条件（使用整数价格）
             if direction == "long":
                 if not (last_price < line_price_int <= current_price):
@@ -5084,7 +6122,7 @@ class ChartWindow(QtWidgets.QWidget):
                         f"last_price={last_price}, line_price_int={line_price_int}, current_price={current_price}"
                     )
                     continue
-            
+
             # 创建模拟tick数据
             from datetime import datetime
             simulate_tick = TickData(
@@ -5101,35 +6139,35 @@ class ChartWindow(QtWidgets.QWidget):
                 volume=current_tick.volume if current_tick else 0,
                 open_interest=current_tick.open_interest if current_tick else 0,
             )
-            
+
             # 确保挂单线已注册到价格突破监控
             controller = self.chart.get_drawing_order_controller()
             if not controller:
-                self.main_engine.write_log(f"模拟成交失败: 无法获取画线订单控制器")
+                self.main_engine.write_log("模拟成交失败: 无法获取画线订单控制器")
                 continue
-            
+
             # 检查挂单线是否有挂单参数（说明是有效的挂单线）
             # 优先检查价格线对象中的挂单参数（从数据库加载的挂单线参数存储在这里）
             # 如果价格线对象中没有，再检查内存中的_pending_order_params（向后兼容）
             order_volume = line.get_order_volume()
             order_offset = line.get_order_offset()
-            
+
             has_pending_params_in_line = (order_volume is not None and order_offset is not None)
-            
+
             has_pending_params_in_memory = (
-                hasattr(controller, '_pending_order_params') and 
+                hasattr(controller, '_pending_order_params') and
                 line_id in controller._pending_order_params
             )
-            
+
             has_pending_params = has_pending_params_in_line or has_pending_params_in_memory
-            
+
             if not has_pending_params:
                 self.main_engine.write_log(
                     f"模拟成交跳过: 挂单线 {line_id} 没有挂单参数（价格线对象: volume={order_volume}, offset={order_offset}, "
                     f"内存参数: {has_pending_params_in_memory}）。请重新创建挂单或确保挂单参数已正确加载。"
                 )
                 continue
-            
+
             # 如果价格线对象中有参数，记录日志
             if has_pending_params_in_line:
                 self.main_engine.write_log(
@@ -5139,12 +6177,12 @@ class ChartWindow(QtWidgets.QWidget):
                 self.main_engine.write_log(
                     f"模拟成交: 挂单线 {line_id} 从内存获取挂单参数（向后兼容）"
                 )
-            
+
             # 检查挂单线是否已注册到价格突破监控
             if not self.chart._breakthrough_monitor:
-                self.main_engine.write_log(f"模拟成交失败: 价格突破监控未初始化")
+                self.main_engine.write_log("模拟成交失败: 价格突破监控未初始化")
                 continue
-            
+
             # 直接调用ChartWidget的通用触发方法（与真实tickdata触发共用逻辑）
             # 不再通过PriceBreakthroughMonitor，直接调用trigger_pending_order_breakthrough
             direction_display = "多" if direction == "long" else "空"
@@ -5153,7 +6191,7 @@ class ChartWindow(QtWidgets.QWidget):
                 f"准备触发突破 (last_price={last_price:.2f}, current_price={current_price:.2f}, "
                 f"突破幅度={breakthrough_points}个点)"
             )
-            
+
             # 调用ChartWidget的通用触发方法
             # 直接调用方法，如果不存在会抛出AttributeError，我们捕获它
             try:
@@ -5191,7 +6229,7 @@ class ChartWindow(QtWidgets.QWidget):
                 )
                 import traceback
                 self.main_engine.write_log(f"异常堆栈: {traceback.format_exc()}")
-        
+
         if triggered_count > 0:
             self.main_engine.write_log(
                 f"模拟成交完成: 共触发 {triggered_count} 个挂单线，请查看持仓和浮动盈亏"
@@ -5203,11 +6241,11 @@ class ChartWindow(QtWidgets.QWidget):
             )
         else:
             self.main_engine.write_log("模拟成交失败: 未能触发任何挂单线")
-    
+
     def _update_simulate_buttons_state(self) -> None:
         """
         更新模拟功能按钮的状态
-        
+
         规则：
         - 未选择合约时：三个按钮全部disabled
         - 有合约时：三个按钮全部enabled（允许在有tickdata时也使用模拟功能进行测试）
@@ -5218,46 +6256,46 @@ class ChartWindow(QtWidgets.QWidget):
             self.simulate_stop_loss_button.setEnabled(False)
             self.simulate_take_profit_button.setEnabled(False)
             return
-        
+
         # 有合约时，按钮全部启用（允许在有tickdata时也使用模拟功能进行测试）
         self.simulate_trade_button.setEnabled(True)
         self.simulate_stop_loss_button.setEnabled(True)
         self.simulate_take_profit_button.setEnabled(True)
-    
+
     def simulate_stop_loss(self) -> None:
         """
         模拟tick触及止损线后触发平仓
-        
+
         功能：
         1. 获取所有止损线（STOP_LOSS类型）
         2. 创建模拟tick数据，价格触及止损线
         3. 调用ChartWidget的通用触发方法（与真实tickdata触发共用逻辑）
         """
         self.main_engine.write_log("[模拟止损] 方法被调用")
-        
+
         if not self.chart:
             self.main_engine.write_log("[模拟止损] 图表未初始化，无法模拟止损")
             return
-        
+
         # 获取所有价格线
         price_line_manager = self.chart._price_line_manager
         if not price_line_manager:
             self.main_engine.write_log("[模拟止损] 价格线管理器未初始化，无法模拟止损")
             return
-        
+
         all_lines = price_line_manager.get_all_lines()
         self.main_engine.write_log(f"[模拟止损] 找到 {len(all_lines)} 条价格线")
-        
+
         # 筛选出止损线
         from vnpy.chart.price_line import PriceLineType
         stop_loss_lines = {
-            line_id: line 
-            for line_id, line in all_lines.items() 
+            line_id: line
+            for line_id, line in all_lines.items()
             if line.get_line_type() == PriceLineType.STOP_LOSS
         }
-        
+
         self.main_engine.write_log(f"[模拟止损] 找到 {len(stop_loss_lines)} 条止损线")
-        
+
         if not stop_loss_lines:
             self.main_engine.write_log("[模拟止损] 没有找到止损线，无法模拟止损")
             QtWidgets.QMessageBox.information(
@@ -5266,7 +6304,7 @@ class ChartWindow(QtWidgets.QWidget):
                 _("当前没有止损线，请先创建止损线后再使用模拟止损功能。")
             )
             return
-        
+
         # 获取当前合约信息
         vt_symbol = self.current_vt_symbol
         if not vt_symbol:
@@ -5277,32 +6315,31 @@ class ChartWindow(QtWidgets.QWidget):
                 _("请先选择合约后再使用模拟止损功能。")
             )
             return
-        
+
         # 获取合约信息
         contract = self.main_engine.get_contract(vt_symbol)
         if not contract:
             self.main_engine.write_log(f"合约 {vt_symbol} 未找到，无法模拟止损")
             return
-        
+
         # 获取当前tick数据（用于获取其他字段）
         current_tick = self.main_engine.get_tick(vt_symbol)
-        
+
         # 创建模拟tick数据
         from vnpy.trader.object import TickData
-        from vnpy.trader.constant import Exchange
         from vnpy.trader.utility import extract_vt_symbol
         from datetime import datetime
-        
+
         symbol, exchange = extract_vt_symbol(vt_symbol)
         pricetick = contract.pricetick if contract.pricetick > 0 else 1.0
-        
+
         triggered_count = 0
-        
+
         # 遍历所有止损线，创建模拟tick并触发
         for line_id, line in stop_loss_lines.items():
             line_price = line.get_price()
             line_direction_str = line.get_direction()
-            
+
             # 将方向字符串转换为标准格式
             if line_direction_str in ["多", "long", "LONG"]:
                 line_direction = "long"
@@ -5311,7 +6348,7 @@ class ChartWindow(QtWidgets.QWidget):
             else:
                 self.main_engine.write_log(f"模拟止损跳过: 止损线 {line_id} 方向未知: {line_direction_str}")
                 continue
-            
+
             # 创建模拟tick数据，价格触及止损线
             # 多仓止损：价格低于止损线
             # 空仓止损：价格高于止损线
@@ -5321,7 +6358,7 @@ class ChartWindow(QtWidgets.QWidget):
             else:
                 # 空仓止损：价格高于止损线
                 simulate_price = line_price + pricetick
-            
+
             # 创建模拟tick
             simulate_tick = TickData(
                 symbol=symbol,
@@ -5337,7 +6374,7 @@ class ChartWindow(QtWidgets.QWidget):
                 volume=current_tick.volume if current_tick else 0,
                 open_interest=current_tick.open_interest if current_tick else 0,
             )
-            
+
             # 调用ChartWidget的通用触发方法（与真实tickdata触发共用逻辑）
             try:
                 self.main_engine.write_log(
@@ -5358,7 +6395,7 @@ class ChartWindow(QtWidgets.QWidget):
                 self.main_engine.write_log(f"[模拟止损] 异常: {e}")
                 import traceback
                 self.main_engine.write_log(f"[模拟止损] 异常堆栈: {traceback.format_exc()}")
-        
+
         if triggered_count > 0:
             self.main_engine.write_log(
                 f"模拟止损完成: 共触发 {triggered_count} 个止损线，请查看持仓和订单"
@@ -5370,41 +6407,41 @@ class ChartWindow(QtWidgets.QWidget):
             )
         else:
             self.main_engine.write_log("模拟止损失败: 未能触发任何止损线（可能无持仓或持仓为0）")
-    
+
     def simulate_take_profit(self) -> None:
         """
         模拟tick触及止盈线后触发平仓
-        
+
         功能：
         1. 获取所有止盈线（TAKE_PROFIT类型）
         2. 创建模拟tick数据，价格触及止盈线
         3. 调用ChartWidget的通用触发方法（与真实tickdata触发共用逻辑）
         """
         self.main_engine.write_log("[模拟止盈] 方法被调用")
-        
+
         if not self.chart:
             self.main_engine.write_log("[模拟止盈] 图表未初始化，无法模拟止盈")
             return
-        
+
         # 获取所有价格线
         price_line_manager = self.chart._price_line_manager
         if not price_line_manager:
             self.main_engine.write_log("[模拟止盈] 价格线管理器未初始化，无法模拟止盈")
             return
-        
+
         all_lines = price_line_manager.get_all_lines()
         self.main_engine.write_log(f"[模拟止盈] 找到 {len(all_lines)} 条价格线")
-        
+
         # 筛选出止盈线
         from vnpy.chart.price_line import PriceLineType
         take_profit_lines = {
-            line_id: line 
-            for line_id, line in all_lines.items() 
+            line_id: line
+            for line_id, line in all_lines.items()
             if line.get_line_type() == PriceLineType.TAKE_PROFIT
         }
-        
+
         self.main_engine.write_log(f"[模拟止盈] 找到 {len(take_profit_lines)} 条止盈线")
-        
+
         if not take_profit_lines:
             self.main_engine.write_log("[模拟止盈] 没有找到止盈线，无法模拟止盈")
             QtWidgets.QMessageBox.information(
@@ -5413,7 +6450,7 @@ class ChartWindow(QtWidgets.QWidget):
                 _("当前没有止盈线，请先创建止盈线后再使用模拟止盈功能。")
             )
             return
-        
+
         # 获取当前合约信息
         vt_symbol = self.current_vt_symbol
         if not vt_symbol:
@@ -5424,32 +6461,31 @@ class ChartWindow(QtWidgets.QWidget):
                 _("请先选择合约后再使用模拟止盈功能。")
             )
             return
-        
+
         # 获取合约信息
         contract = self.main_engine.get_contract(vt_symbol)
         if not contract:
             self.main_engine.write_log(f"合约 {vt_symbol} 未找到，无法模拟止盈")
             return
-        
+
         # 获取当前tick数据（用于获取其他字段）
         current_tick = self.main_engine.get_tick(vt_symbol)
-        
+
         # 创建模拟tick数据
         from vnpy.trader.object import TickData
-        from vnpy.trader.constant import Exchange
         from vnpy.trader.utility import extract_vt_symbol
         from datetime import datetime
-        
+
         symbol, exchange = extract_vt_symbol(vt_symbol)
         pricetick = contract.pricetick if contract.pricetick > 0 else 1.0
-        
+
         triggered_count = 0
-        
+
         # 遍历所有止盈线，创建模拟tick并触发
         for line_id, line in take_profit_lines.items():
             line_price = line.get_price()
             line_direction_str = line.get_direction()
-            
+
             # 将方向字符串转换为标准格式
             if line_direction_str in ["多", "long", "LONG"]:
                 line_direction = "long"
@@ -5458,7 +6494,7 @@ class ChartWindow(QtWidgets.QWidget):
             else:
                 self.main_engine.write_log(f"模拟止盈跳过: 止盈线 {line_id} 方向未知: {line_direction_str}")
                 continue
-            
+
             # 创建模拟tick数据，价格触及止盈线
             # 多仓止盈：价格高于止盈线
             # 空仓止盈：价格低于止盈线
@@ -5468,7 +6504,7 @@ class ChartWindow(QtWidgets.QWidget):
             else:
                 # 空仓止盈：价格低于止盈线
                 simulate_price = line_price - pricetick
-            
+
             # 创建模拟tick
             simulate_tick = TickData(
                 symbol=symbol,
@@ -5484,7 +6520,7 @@ class ChartWindow(QtWidgets.QWidget):
                 volume=current_tick.volume if current_tick else 0,
                 open_interest=current_tick.open_interest if current_tick else 0,
             )
-            
+
             # 调用ChartWidget的通用触发方法（与真实tickdata触发共用逻辑）
             try:
                 self.main_engine.write_log(
@@ -5505,7 +6541,7 @@ class ChartWindow(QtWidgets.QWidget):
                 self.main_engine.write_log(f"[模拟止盈] 异常: {e}")
                 import traceback
                 self.main_engine.write_log(f"[模拟止盈] 异常堆栈: {traceback.format_exc()}")
-        
+
         if triggered_count > 0:
             self.main_engine.write_log(
                 f"模拟止盈完成: 共触发 {triggered_count} 个止盈线，请查看持仓和订单"
@@ -5517,18 +6553,18 @@ class ChartWindow(QtWidgets.QWidget):
             )
         else:
             self.main_engine.write_log("模拟止盈失败: 未能触发任何止盈线（可能无持仓或持仓为0）")
-    
+
     def show(self) -> None:
         """显示窗口"""
         super().show()
         self.activateWindow()
         self.raise_()
         self.raise_()
-    
+
     def set_simulate_functions_enabled(self, enabled: bool) -> None:
         """
         设置模拟功能按钮的启用/禁用状态。
-        
+
         Args:
             enabled: True表示启用，False表示禁用
         """
@@ -5536,7 +6572,7 @@ class ChartWindow(QtWidgets.QWidget):
         self.simulate_trade_button.setEnabled(enabled)
         self.simulate_stop_loss_button.setEnabled(enabled)
         self.simulate_take_profit_button.setEnabled(enabled)
-        
+
         # 更新按钮样式以反映状态
         if enabled:
             self.simulate_trade_button.setStyleSheet("background-color: #FF9800; color: white; font-weight: bold;")
@@ -5546,19 +6582,88 @@ class ChartWindow(QtWidgets.QWidget):
             self.simulate_trade_button.setStyleSheet("background-color: #CCCCCC; color: #666666; font-weight: normal;")
             self.simulate_stop_loss_button.setStyleSheet("background-color: #CCCCCC; color: #666666; font-weight: normal;")
             self.simulate_take_profit_button.setStyleSheet("background-color: #CCCCCC; color: #666666; font-weight: normal;")
-        
+
         if self.main_engine:
             status_text = _("已启用") if enabled else _("已禁用")
             self.main_engine.write_log(
                 f"[ChartWindow] 模拟功能{status_text}：模拟成交、模拟止损、模拟止盈",
                 "ChartWindow"
             )
-    
+
     def is_simulate_functions_enabled(self) -> bool:
         """
         获取模拟功能按钮的启用/禁用状态。
-        
+
         Returns:
             True表示启用，False表示禁用
         """
         return self._simulate_functions_enabled
+
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        """
+        Phase 5: 窗口关闭时注销事件监听
+
+        确保在窗口关闭时正确注销所有事件监听器，避免内存泄漏。
+
+        注意：
+        - 合约切换时不需要特殊处理，因为 process_tick_event 已经通过过滤
+          current_vt_symbol 来处理，只处理当前显示合约的 tick。
+        - 事件注册使用信号-槽机制（signal_tick.emit），注销时也要使用相同的处理器。
+        """
+        try:
+            # 检查 event_engine 是否已初始化
+            if not self.event_engine:
+                super().closeEvent(event)
+                return
+
+            # 注销 tick 事件监听（使用信号-槽机制，注册的是 signal_tick.emit）
+            try:
+                from vnpy.trader.event import EVENT_TICK
+                self.event_engine.unregister(EVENT_TICK, self.signal_tick.emit)
+                # 断开信号连接
+                self.signal_tick.disconnect(self.process_tick_event)
+                if self.main_engine:
+                    self.main_engine.write_log(
+                        "[ChartWindow] 已注销 EVENT_TICK 事件监听器（signal_tick.emit）",
+                        "ChartWindow"
+                    )
+            except Exception as e:
+                if self.main_engine:
+                    self.main_engine.write_log(
+                        f"[ChartWindow] 注销 EVENT_TICK 失败：{str(e)}",
+                        "ChartWindow"
+                    )
+
+            # 注销订单事件监听（如果已注册）
+            try:
+                from vnpy.trader.event import EVENT_ORDER
+                if hasattr(self, 'process_order_event'):
+                    self.event_engine.unregister(EVENT_ORDER, self.process_order_event)
+                    if self.main_engine:
+                        self.main_engine.write_log(
+                            "[ChartWindow] 已注销 EVENT_ORDER 事件监听器",
+                            "ChartWindow"
+                        )
+            except Exception as e:
+                if self.main_engine:
+                    self.main_engine.write_log(
+                        f"[ChartWindow] 注销 EVENT_ORDER 失败：{str(e)}",
+                        "ChartWindow"
+                    )
+
+            # 记录日志
+            if self.main_engine:
+                self.main_engine.write_log(
+                    "[ChartWindow] 窗口关闭，已注销所有事件监听",
+                    "ChartWindow"
+                )
+        except Exception as e:
+            # 错误处理：记录错误但不阻止窗口关闭
+            if self.main_engine:
+                self.main_engine.write_log(
+                    f"[ChartWindow] 注销事件监听时发生错误：{str(e)}",
+                    "ChartWindow"
+                )
+        finally:
+            # 确保调用父类方法
+            super().closeEvent(event)

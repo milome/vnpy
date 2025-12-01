@@ -64,6 +64,7 @@ class TestChartWidgetTrigger(TestBase, ChartWidgetTriggerMixin):
         self._main_engine.get_gateway = Mock(return_value=None)
         self._main_engine.get_position = Mock(return_value=None)
         self._main_engine.get_all_positions = Mock(return_value=[])
+        self._main_engine.get_all_active_orders = Mock(return_value=[])
         
         self._vt_symbol = "MHI2512.HKFE"
         self._price_line_manager = Mock(spec=PriceLineManager)
@@ -89,6 +90,22 @@ class TestChartWidgetTrigger(TestBase, ChartWidgetTriggerMixin):
         self._take_profit_trigger_lock = Mock()
         self._take_profit_trigger_lock.__enter__ = Mock(return_value=None)
         self._take_profit_trigger_lock.__exit__ = Mock(return_value=None)
+        
+        # 添加 _find_position_by_main_contract_mapping 方法模拟
+        def mock_find_position(main_engine, vt_symbol, direction, contract):
+            """模拟查找持仓方法"""
+            # 使用 get_position 方法查找持仓
+            from vnpy.trader.constant import Direction as Dir
+            from vnpy.trader.object import ContractData
+            if isinstance(contract, Mock):
+                gateway_name = contract.gateway_name
+            else:
+                gateway_name = getattr(contract, 'gateway_name', 'TEST')
+            
+            vt_positionid = f"{gateway_name}.{vt_symbol}.{direction.value}"
+            return main_engine.get_position(vt_positionid)
+        
+        self._find_position_by_main_contract_mapping = mock_find_position
 
     def test_trigger_pending_order_breakthrough_success(self):
         """测试挂单线突破下单成功"""
