@@ -244,7 +244,13 @@ class Datafeed(BaseDatafeed):
 
     def close(self) -> None:
         """关闭连接"""
-        if self.quote_ctx:
-            self.quote_ctx.close()
-            self.inited = False
+        try:
+            if self.quote_ctx:
+                self.quote_ctx.close()
+                self.quote_ctx = None  # Set to None to prevent double close
+                self.inited = False
+                safe_output(print, "Datafeed连接已关闭")
+        except Exception as e:
+            error_msg = str(e)
+            safe_output(print, f"关闭Datafeed连接时出错: {error_msg}")
 

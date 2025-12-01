@@ -300,6 +300,16 @@ class MainEngine:
         # Stop event engine first to prevent new timer event.
         self.event_engine.stop()
 
+        # Close datafeed connection to prevent connection leaks
+        try:
+            from vnpy.trader.datafeed import get_datafeed
+            datafeed = get_datafeed()
+            if datafeed and hasattr(datafeed, 'close'):
+                datafeed.close()
+                self.write_log("Datafeed连接已关闭")
+        except Exception as e:
+            self.write_log(f"关闭Datafeed连接时出错: {e}")
+
         for engine in self.engines.values():
             engine.close()
 

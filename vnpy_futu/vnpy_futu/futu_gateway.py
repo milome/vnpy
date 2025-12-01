@@ -264,6 +264,11 @@ class FutuGateway(BaseGateway):
 
     def connect(self, setting: dict) -> None:
         """连接交易接口"""
+        # If there are existing connections, close them first to prevent connection leaks
+        if self.quote_ctx or self.trade_ctx:
+            self.write_log("检测到已有连接，先关闭旧连接以避免连接泄露")
+            self.close()
+        
         self.host: str = setting["地址"]
         self.port: int = setting["端口"]
         self.market: str = setting["市场"]
@@ -2094,18 +2099,43 @@ class FutuGateway(BaseGateway):
 
     def close(self) -> None:
         """关闭接口"""
-        if self.quote_ctx:
-            self.quote_ctx.close()
+        try:
+            # Close quote context
+            if self.quote_ctx:
+                try:
+                    self.quote_ctx.close()
+                    self.write_log("行情连接已关闭")
+                except Exception as e:
+                    self.write_log(f"关闭行情连接时出错: {e}")
+                finally:
+                    self.quote_ctx = None  # Set to None to prevent double close
 
-        if self.trade_ctx:
-            self.trade_ctx.close()
+            # Close trade context
+            if self.trade_ctx:
+                try:
+                    # Try to unlock trade first (if locked)
+                    try:
+                        if self.password:
+                            self.trade_ctx.unlock_trade(self.password)
+                    except Exception:
+                        pass  # Ignore unlock errors
+                    
+                    self.trade_ctx.close()
+                    self.write_log("交易连接已关闭")
+                except Exception as e:
+                    self.write_log(f"关闭交易连接时出错: {e}")
+                finally:
+                    self.trade_ctx = None  # Set to None to prevent double close
+                    
+        except Exception as e:
+            self.write_log(f"关闭Gateway连接时出错: {e}")
             
-        # 等待线程结束并重置线程对象
+        # Wait for thread to end and reset thread object
         if self.thread and self.thread.is_alive():
-            # 线程会在查询循环中自然结束，因为连接已关闭
-            self.thread.join(timeout=5.0)  # 最多等待5秒
+            # Thread will end naturally as connection is closed
+            self.thread.join(timeout=5.0)  # Wait up to 5 seconds
         
-        # 重置线程对象，为下次连接做准备
+        # Reset thread object for next connection
         self.thread = Thread(target=self.query_data)
 
     def get_tick(self, code) -> TickData:
