@@ -17,6 +17,10 @@ class BarManager:
 
         self._price_ranges: dict[tuple[int, int], tuple[float, float]] = {}
         self._volume_ranges: dict[tuple[int, int], tuple[float, float]] = {}
+        
+        # 存储成交标记：index -> (direction, volume, price)
+        # direction: "long" or "short", volume: 成交数量, price: 成交价格
+        self._trade_markers: dict[int, tuple[str, float, float]] = {}
 
     def update_history(self, history: list[BarData]) -> None:
         """
@@ -172,6 +176,33 @@ class BarManager:
         self._price_ranges.clear()
         self._volume_ranges.clear()
 
+    def add_trade_marker(self, dt: datetime, direction: str, volume: float, price: float) -> None:
+        """
+        添加成交标记到指定时间的K线
+        
+        Args:
+            dt: K线时间
+            direction: 交易方向 ("long" or "short")
+            volume: 成交数量
+            price: 成交价格
+        """
+        ix = self.get_index(dt)
+        if ix is not None:
+            self._trade_markers[ix] = (direction, volume, price)
+    
+    def get_trade_marker(self, ix: float) -> tuple[str, float, float] | None:
+        """
+        获取指定索引的成交标记
+        
+        Args:
+            ix: K线索引
+            
+        Returns:
+            (direction, volume, price) 或 None
+        """
+        ix = to_int(ix)
+        return self._trade_markers.get(ix)
+    
     def clear_all(self) -> None:
         """
         Clear all data in manager.
@@ -179,5 +210,6 @@ class BarManager:
         self._bars.clear()
         self._datetime_index_map.clear()
         self._index_datetime_map.clear()
+        self._trade_markers.clear()
 
         self._clear_cache()

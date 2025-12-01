@@ -1,0 +1,393 @@
+# Implementation Plan - PyQt Drawing Order Feature
+
+## Project: PyQt画线交易功能移植
+
+### Executive Summary
+将 multi-timeframe-webapp 中基于 TradingView Lightweight Charts 实现的画线交易功能移植到 vnpy 的 PyQt + pyqtgraph 图表系统中。包括画线下单、价格线拖拽、双止损保护、自动追踪止损等核心功能。
+
+**总工作量估算**: 约 **19-21 人天**（增加价格突破触发机制）
+
+---
+
+## Phase 1: 基础价格线实现 (3天)
+
+### 1.1 价格线基础架构
+
+**目标**: 建立价格线管理的基础架构，支持显示各种类型的价格线
+
+#### 任务清单
+- [ ] **创建 PriceLineItem 类** (0.5天)
+  - 基于 `pg.InfiniteLine` 封装
+  - 支持水平价格线显示
+  - 实现基础样式配置（颜色、线宽、线型）
+  - 位置: `vnpy/chart/price_line.py`
+
+- [ ] **实现 PriceLineManager 类** (1天)
+  - 管理所有价格线的生命周期
+  - 实现价格线的创建、更新、删除
+  - 支持价格线类型：ENTRY, PENDING, STOP_LOSS, TAKE_PROFIT, PREVIEW
+  - 参考实现: `multi-timeframe-webapp/frontend/src/utils/priceLineManager.ts`
+  - 位置: `vnpy/chart/price_line.py`
+
+- [ ] **集成到 ChartWidget** (0.5天)
+  - 在 ChartWidget 中添加 PriceLineManager 实例
+  - 将价格线添加到对应的 plot
+  - 确保价格线与 K 线正确叠加显示
+
+- [ ] **实现价格线样式配置** (0.5天)
+  - 定义颜色方案（红涨青跌，中国惯例）
+  - 实现线型映射（实线、虚线、点线）
+  - 配置标签显示（价格、类型标识）
+  - 位置: `vnpy/chart/base.py` 或新建 `vnpy/chart/price_line_config.py`
+
+- [ ] **单元测试** (0.5天)
+  - 测试价格线创建和删除
+  - 测试价格线样式配置
+  - 测试价格线管理器状态
+
+**交付物**:
+- `vnpy/chart/price_line.py` - 价格线核心实现
+- 基础价格线显示功能可用
+
+**依赖**: 无
+
+**风险**: 低
+
+---
+
+## Phase 2: 拖拽交互实现 (5天)
+
+### 2.1 可拖拽价格线
+
+**目标**: 实现价格线的拖拽交互，支持实时更新价格和标签
+
+#### 任务清单
+- [ ] **实现 DraggablePriceLine 类** (1.5天)
+  - 继承 `pg.InfiniteLine`，设置 `movable=True`
+  - 实现坐标转换（像素坐标 ↔ 价格）
+  - 实现拖拽开始/进行/结束事件处理
+  - 参考实现: `multi-timeframe-webapp/frontend/src/hooks/usePriceLineDrag.ts`
+  - 位置: `vnpy/chart/price_line.py`
+
+- [ ] **鼠标悬停检测** (1天)
+  - 实现鼠标靠近价格线时的检测逻辑
+  - 改变光标样式（cursor change）
+  - 设置检测阈值（默认 10 像素）
+  - 位置: `vnpy/chart/widget.py` 或新建 `vnpy/chart/price_line_drag.py`
+
+- [ ] **拖拽状态管理** (1天)
+  - 实现拖拽状态跟踪（isDragging, draggingLine）
+  - 保存原始价格用于取消恢复
+  - 实时更新价格线位置和标签
+  - 位置: `vnpy/chart/price_line_drag.py`
+
+- [ ] **ESC 取消/恢复机制** (0.5天)
+  - 监听键盘 ESC 事件
+  - 取消拖拽时恢复原始价格
+  - 清理拖拽状态
+
+- [ ] **双击事件处理** (1天)
+  - 重写 `mouseDoubleClickEvent`
+  - 实现双击挂单线 → 删除整个挂单
+  - 实现双击入场线 → 执行平仓
+  - 实现双击止损/止盈线 → 删除该线
+  - 位置: `vnpy/chart/widget.py`
+
+**交付物**:
+- 可拖拽的价格线功能
+- 双击交互功能
+- 完整的拖拽交互体验
+
+**依赖**: Phase 1
+
+**风险**: 中高（坐标转换和事件处理复杂度较高）
+
+---
+
+## Phase 3: 画线下单功能 (4天)
+
+### 3.1 画线模式管理
+
+**目标**: 实现画线下单模式，支持预览线和下单对话框
+
+#### 任务清单
+- [ ] **实现 DrawingOrderController 类** (1.5天)
+  - 管理画线模式状态（启用/禁用）
+  - 处理画线模式切换
+  - 参考实现: `multi-timeframe-webapp/frontend/src/hooks/useDrawingOrder.ts`
+  - 位置: `vnpy/chart/drawing_order.py`
+
+- [ ] **预览线实现** (1天)
+  - 鼠标移动时显示半透明预览价格线
+  - 实时更新预览线位置
+  - 点击时确定价格并触发下单对话框
+  - 位置: `vnpy/chart/drawing_order.py`
+
+- [ ] **下单对话框** (1天)
+  - 创建 OrderDialog 类（继承 QDialog）
+  - 输入字段：数量、止损、止盈
+  - 按钮：确认、取消
+  - 数据验证（价格、数量范围）
+  - 位置: `vnpy/chart/order_dialog.py`
+
+- [ ] **订单系统集成** (1.5天)
+  - 与 MainEngine 集成
+  - 复用现有委托下单接口（`main_engine.send_order()`）
+  - 默认使用对手价和智能追价策略
+  - 通过 EventEngine 发送订单和处理订单状态更新
+  - 自动创建价格线（挂单线、止损线、止盈线）
+  - 位置: `vnpy/chart/drawing_order.py`
+
+- [ ] **价格突破触发机制** (1天)
+  - 监听 tick data 价格变化（订阅 EVENT_TICK 事件）
+  - 实现价格突破检测逻辑
+  - 入场线：当价格突破入场线时，立即触发委托下单
+  - 止损线：当价格突破止损线时，立即触发平仓委托
+  - 止盈线：当价格突破止盈线时，立即触发平仓委托
+  - 使用对手价和智能追价进行委托
+  - 位置: `vnpy/chart/price_breakthrough.py` 或集成到 `vnpy/chart/drawing_order.py`
+
+**交付物**:
+- 完整的画线下单功能
+- 下单对话框 UI
+- 与 vnpy 订单系统集成
+- 价格突破触发机制
+
+**依赖**: Phase 1, Phase 2
+
+**风险**: 中（需要与 vnpy 订单系统正确集成，价格突破检测需要实时性保证）
+
+---
+
+## Phase 4: 高级功能实现 (5天)
+
+### 4.1 双止损保护
+
+**目标**: 实现拖拽止损线时的双止损保护机制
+
+#### 任务清单
+- [ ] **实现 DualStopLossController 类** (1.5天)
+  - 创建影子止损线（半透明保护线）
+  - 实现滞后跟随逻辑（影子线以30%速度跟随主线）
+  - 显示信息面板（原止损、保护线、新止损三个价位）
+  - 参考实现: `multi-timeframe-webapp/frontend/src/hooks/useDualStopLoss.ts`
+  - 位置: `vnpy/chart/dual_stop_loss.py`
+
+- [ ] **自动追踪止损** (0.5天)
+  - 实现 AutoTrailingStopLossController 类
+  - 拖拽挂单线时自动更新止损线
+  - 可配置偏移（默认50点）
+  - 开关控制（启用/禁用）
+  - 参考实现: `multi-timeframe-webapp/frontend/src/hooks/useAutoTrailingStopLoss.ts`
+  - 位置: `vnpy/chart/auto_trailing_stop_loss.py`
+
+- [ ] **从入场线创建止损/止盈** (1.5天)
+  - 实现 EntryLineDragController 类
+  - 根据拖拽方向自动判断创建止损还是止盈
+  - 最小拖拽距离检测（小于15px视为点击，防止误触发）
+  - 拖拽过程中显示预览线
+  - 参考实现: `multi-timeframe-webapp/frontend/src/hooks/useEntryLineDrag.ts`
+  - 位置: `vnpy/chart/entry_line_drag.py`
+
+- [ ] **4小时K线叠加显示** (1.5天)
+  - 创建 FourHourOverlayItem 类（继承 ChartItem）
+  - 在1分钟K线上用画线方式显示4小时K线框体和影线
+  - 支持香港期货交易所特殊4小时周期（17:15-21:15等）
+  - 实现 HKFE 交易时段计算
+  - 参考实现: `multi-timeframe-webapp/frontend/src/utils/fourHourCandleRenderer.ts`
+  - 位置: `vnpy/chart/four_hour_overlay.py`
+
+**交付物**:
+- 双止损保护功能
+- 自动追踪止损功能
+- 从入场线创建止损/止盈功能
+- 4小时K线叠加显示
+
+**依赖**: Phase 1, Phase 2, Phase 3
+
+**风险**: 中（业务逻辑较复杂）
+
+---
+
+## Phase 5: 测试与优化 (3天)
+
+### 5.1 功能测试
+
+**目标**: 确保所有功能正常工作，处理边界情况
+
+#### 任务清单
+- [ ] **单元测试** (1天)
+  - 价格线管理器测试
+  - 拖拽交互测试
+  - 画线下单流程测试
+  - 双止损保护逻辑测试
+  - 位置: `tests/test_chart_price_line.py`
+
+- [ ] **集成测试** (0.5天)
+  - 与 MainEngine 集成测试
+  - 订单系统集成测试
+  - 事件系统集成测试
+
+- [ ] **UI测试** (0.5天)
+  - 交互流程测试
+  - 边界情况测试（极端价格、大量价格线等）
+  - 性能测试（大量K线数据下的渲染性能）
+
+- [ ] **性能优化** (0.5天)
+  - 优化价格线渲染性能
+  - 优化坐标转换计算
+  - 优化事件处理性能
+  - 使用 QPicture 缓存优化
+
+- [ ] **代码审查与重构** (0.5天)
+  - 代码风格检查（ruff）
+  - 类型检查（mypy）
+  - 文档完善
+  - 代码重构（如有必要）
+
+**交付物**:
+- 完整的测试覆盖
+- 性能优化
+- 代码质量保证
+
+**依赖**: Phase 1-4
+
+**风险**: 低
+
+---
+
+## 实施优先级
+
+### 核心功能（必须实现）
+1. ✅ Phase 1: 基础价格线
+2. ✅ Phase 2: 拖拽交互
+3. ✅ Phase 3: 画线下单
+
+### 增强功能（重要）
+4. ✅ Phase 4: 高级功能（双止损、自动追踪等）
+
+### 质量保证（必需）
+5. ✅ Phase 5: 测试与优化
+
+---
+
+## 技术要点
+
+### 关键实现细节
+
+1. **坐标转换**
+   - pyqtgraph 使用 `mapSceneToView()` / `mapViewToScene()` 进行坐标转换
+   - 需要正确处理 Y 轴方向（pyqtgraph Y 轴从下往上）
+
+2. **事件处理**
+   - 使用 Qt Signal/Slot 机制处理事件
+   - 鼠标事件：`mousePressEvent`, `mouseMoveEvent`, `mouseReleaseEvent`
+   - 键盘事件：`keyPressEvent` 处理 ESC
+
+3. **价格线样式**
+   - 使用 `pg.mkPen()` 创建画笔
+   - 支持颜色、线宽、线型（Solid/Dashed/Dotted）
+   - 标签使用 `label` 和 `labelOpts` 参数
+
+4. **委托下单机制**
+   - **复用现有接口**: 使用 `main_engine.send_order()` 方法
+   - **价格策略**: 默认使用对手价和智能追价
+   - **触发机制**: 
+     - 入场线：当 tick data 价格突破入场线时，立即触发委托下单
+     - 止损线：当 tick data 价格突破止损线时，立即触发平仓委托
+     - 止盈线：当 tick data 价格突破止盈线时，立即触发平仓委托
+   - **实现方式**:
+     - 订阅 `EVENT_TICK` 事件监听实时价格
+     - 实现价格突破检测逻辑（向上突破/向下突破）
+     - 突破时调用 `main_engine.send_order()` 发送委托
+     - 使用 `OrderType` 设置为对手价或智能追价
+
+5. **性能优化**
+   - 使用 `setClipToView(True)` 只渲染可见区域
+   - 使用 QPicture 缓存减少重绘
+   - 避免频繁的坐标转换计算
+   - 价格突破检测需要高效实现，避免延迟
+
+### 参考文件
+
+**TradingView 实现参考**:
+- `multi-timeframe-webapp/frontend/src/utils/priceLineManager.ts` - 价格线管理
+- `multi-timeframe-webapp/frontend/src/hooks/useDrawingOrder.ts` - 画线下单
+- `multi-timeframe-webapp/frontend/src/hooks/usePriceLineDrag.ts` - 价格线拖拽
+- `multi-timeframe-webapp/frontend/src/hooks/useDualStopLoss.ts` - 双止损保护
+- `multi-timeframe-webapp/frontend/src/hooks/useAutoTrailingStopLoss.ts` - 自动追踪止损
+- `multi-timeframe-webapp/frontend/src/hooks/useEntryLineDrag.ts` - 入场线拖拽
+
+**vnpy 现有代码参考**:
+- `vnpy/chart/widget.py` - ChartWidget 主控件
+- `vnpy/chart/item.py` - ChartItem 基类
+- `vnpy/chart/manager.py` - BarManager 数据管理
+
+---
+
+## 里程碑
+
+| 里程碑 | 阶段 | 预计完成时间 | 交付物 |
+|--------|------|------------|--------|
+| M1 | Phase 1 完成 | 第3天 | 基础价格线显示 |
+| M2 | Phase 2 完成 | 第8天 | 拖拽交互功能 |
+| M3 | Phase 3 完成 | 第13天 | 画线下单功能（含价格突破触发） |
+| M4 | Phase 4 完成 | 第18天 | 高级功能 |
+| M5 | Phase 5 完成 | 第21天 | 完整功能交付 |
+
+---
+
+## 风险与应对
+
+### 技术风险
+
+1. **坐标转换复杂度**
+   - **风险**: pyqtgraph 坐标系统与 TradingView 不同
+   - **应对**: 仔细测试坐标转换逻辑，编写单元测试
+
+2. **拖拽交互实现难度**
+   - **风险**: pyqtgraph InfiniteLine 的拖拽需要自定义实现
+   - **应对**: 参考 pyqtgraph 文档和示例，逐步实现
+
+3. **性能问题**
+   - **风险**: 大量价格线可能影响渲染性能
+   - **应对**: 使用缓存机制，优化渲染逻辑
+
+### 集成风险
+
+1. **与 vnpy 订单系统集成**
+   - **风险**: 需要正确理解 vnpy 的事件系统和订单流程
+   - **应对**: 仔细阅读 vnpy 文档，参考现有模块实现
+
+2. **价格突破检测实时性**
+   - **风险**: tick data 处理延迟可能导致错过最佳入场/出场时机
+   - **应对**: 
+     - 优化价格突破检测算法
+     - 确保事件处理在独立线程中，避免阻塞
+     - 考虑使用价格缓冲区减少漏单风险
+
+---
+
+## 后续优化方向
+
+1. **功能增强**
+   - 支持更多价格线类型
+   - 支持价格线分组管理
+   - 支持价格线模板保存/加载
+
+2. **用户体验**
+   - 快捷键支持
+   - 右键菜单
+   - 价格线动画效果
+
+3. **性能优化**
+   - 虚拟化渲染（只渲染可见价格线）
+   - 多线程数据处理
+
+---
+
+**文档版本**: 1.0  
+**创建日期**: 2025-01-15  
+**最后更新**: 2025-01-15  
+**维护者**: vnpy 开发团队
+

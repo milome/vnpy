@@ -1,0 +1,250 @@
+# Project Constitution
+
+## Project Overview
+
+This is a PyQt drawing-based trading feature implementation for vnpy chart module. The goal is to port the drawing order functionality from multi-timeframe-webapp (React/TypeScript) to vnpy's PyQt6/pyqtgraph-based chart system.
+
+This feature will enable users to draw price lines on K-line charts and place orders directly through interactive drawing, including support for dual stop-loss protection, auto-trailing stop-loss, and drag-to-adjust price lines.
+
+## Technology Stack
+
+- **Python Version**: 3.10, 3.11, 3.12, 3.13 (recommend 3.13)
+- **UI Framework**: PyQt6/PySide6 (via `vnpy.trader.ui`)
+- **Charting Library**: pyqtgraph
+- **Architecture**: Event-driven (vnpy EventEngine)
+- **Code Quality Tools**: ruff (linting), mypy (type checking)
+
+## Code Style and Standards
+
+### General Principles
+
+- Follow existing code patterns and conventions in vnpy codebase
+- Write clear, self-documenting code with comprehensive docstrings
+- Maintain consistency with `vnpy/chart/` module architecture
+- Use event-driven design patterns (EventEngine for component communication)
+- Avoid over-engineering; keep solutions simple and focused
+- Only add complexity when directly needed for the current task
+
+### Naming Conventions
+
+Following vnpy project standards (from `docs/community/info/contribution.md`):
+
+- **Class attributes, methods, parameters, variables**: Use lowercase with underscores
+  - Example: `self._price_line_manager`, `def add_price_line()`, `bar_data: BarData`
+- **Class names**: Use CamelCase
+  - Example: `class PriceLineManager:`, `class DraggablePriceLine:`
+- **Constants**: Use UPPERCASE with underscores
+  - Example: `DEFAULT_STOP_LOSS_OFFSET = 50`, `PRICE_LINE_COLORS = {...}`
+
+### Code Organization
+
+- **Module structure**: Follow `vnpy/chart/` existing patterns
+  - `widget.py`: Main ChartWidget class
+  - `item.py`: ChartItem subclasses (CandleItem, VolumeItem, etc.)
+  - `manager.py`: Data management (BarManager)
+  - New files should follow similar patterns:
+    - `price_line.py`: Price line management classes
+    - `drawing_order.py`: Drawing order mode and interaction handlers
+- **Import ordering**: 
+  1. Standard library imports
+  2. Third-party imports (pyqtgraph, PyQt6)
+  3. vnpy imports (from vnpy.trader.*)
+  4. Local imports (from .base, .manager, etc.)
+- **Type hints**: Required for all function parameters and return types (mypy strict mode)
+
+### Code Format
+
+- **PEP 8 compliance**: Use autopep8 or ruff for formatting
+- **Docstrings**: Required for all classes and functions (triple-quoted strings)
+  - Class docstrings: Brief description of purpose
+  - Method docstrings: Description, parameters, return values
+- **Line length**: Follow project standard (typically 88-100 characters)
+
+## Development Practices
+
+### Testing
+
+- **Testing framework**: pytest (if unit tests are needed)
+- **Test file location**: `tests/` directory at project root or module-specific test files
+- **Test coverage requirements**: Focus on critical business logic (price line calculations, order creation)
+- **When to write tests**: For complex algorithms, price calculations, and state management logic
+
+### Error Handling
+
+- **Error handling patterns**: Use try-except blocks with specific exception types
+- **Logging conventions**: Use `loguru` logger (vnpy standard)
+  ```python
+  from loguru import logger
+  logger.error("Failed to create price line", exc_info=True)
+  ```
+- **Error message formatting**: Clear, actionable error messages in Chinese (primary) or English
+
+### Thread Safety
+
+- **Qt Signal/Slot**: Use Qt signals for thread-safe UI updates
+- **Event Engine**: All trading operations should go through EventEngine
+- **UI updates**: Always use `QtCore.QMetaObject.invokeMethod()` or signals for cross-thread UI updates
+
+### Security
+
+- **Input validation**: Validate all user inputs (price, quantity, stop-loss values)
+- **Order validation**: Ensure orders meet exchange requirements before submission
+- **Data validation**: Validate BarData and price line data before processing
+
+## Git Workflow
+
+### Branching Strategy
+
+- **Branch naming convention**: `feature/pyqt-drawing-order`, `fix/price-line-drag`
+- **Main branches**: 
+  - `dev`: Development branch
+  - `master`: Production branch
+- **Workflow**: Create feature branch from `dev`, submit PR to `dev`
+
+### Commit Messages
+
+- **Format**: 
+  ```
+  [type] Brief description
+  
+  Detailed explanation if needed
+  ```
+- **Types**: `feat`, `fix`, `refactor`, `docs`, `test`
+- **Guidelines**: 
+  - Use Chinese for feature descriptions
+  - Be specific about what changed
+  - Reference issue numbers if applicable
+
+## AI Assistant Guidelines
+
+### What to do
+
+- Read existing `vnpy/chart/` code before proposing changes
+- Follow the existing patterns in ChartWidget, ChartItem, BarManager
+- Maintain consistency with vnpy's event-driven architecture
+- Use vnpy's standard data objects (BarData, OrderRequest, etc.)
+- Ask for clarification when requirements are ambiguous
+- Run `ruff check .` and `mypy vnpy` after making changes
+- Preserve existing functionality while adding new features
+
+### What NOT to do
+
+- Don't add features beyond what was requested
+- Don't refactor code that isn't part of the task
+- Don't add comments or documentation to unchanged code
+- Don't create unnecessary abstractions
+- Don't break existing chart functionality
+- Don't introduce dependencies outside vnpy's standard stack
+
+## Project-Specific Rules
+
+### Architecture Patterns
+
+- **Event-driven design**: Use EventEngine for order submission and data updates
+- **Component composition**: Extend existing ChartWidget and ChartItem classes
+- **State management**: Use class attributes with Qt signals for reactive updates
+- **Separation of concerns**:
+  - UI layer: ChartWidget, price line visual elements
+  - Business logic: Price line manager, order creation logic
+  - Data layer: BarManager (existing), order data management
+
+### Integration with vnpy
+
+- **Order submission**: Use `main_engine.send_order()` via EventEngine
+- **Data objects**: Use `vnpy.trader.object` classes (OrderRequest, BarData, etc.)
+- **Event types**: Use existing event types or define new ones in `vnpy.event`
+- **Configuration**: Use `vnpy.trader.setting.SETTINGS` for user preferences
+
+### Performance Considerations
+
+- **Rendering optimization**: Leverage pyqtgraph's efficient rendering (setClipToView, downsampling)
+- **Memory management**: Clean up price line objects when removed
+- **Event handling**: Minimize event handler complexity to avoid UI blocking
+- **Coordinate conversion**: Cache coordinate-to-price conversions when possible
+
+### pyqtgraph Specific Guidelines
+
+- **Graphics objects**: Inherit from `pg.GraphicsObject` or use `pg.InfiniteLine` for price lines
+- **Coordinate systems**: Use `mapSceneToView()` and `mapViewToScene()` for coordinate conversion
+- **Mouse events**: Override `mousePressEvent`, `mouseMoveEvent`, `mouseReleaseEvent` for interactions
+- **Signals**: Use pyqtgraph's signal system for plot updates
+- **Z-ordering**: Use `setZValue()` to control rendering order
+
+### Drawing Order Feature Requirements
+
+- **Price line types**: ENTRY, PENDING, STOP_LOSS, TAKE_PROFIT, PREVIEW
+- **Line styles**: Solid for entry, dashed for stop-loss/take-profit, dotted for preview
+- **Colors**: Red for sell, green for buy (following vnpy conventions)
+- **Drag interaction**: Support dragging PENDING, STOP_LOSS, TAKE_PROFIT lines
+- **Double-click actions**: Delete on double-click (PENDING, STOP_LOSS, TAKE_PROFIT), close position (ENTRY)
+- **Mode switching**: Toggle drawing order mode on/off
+- **Order dialog**: Show order configuration dialog after price line placement
+
+## Dependencies
+
+### Adding New Dependencies
+
+- **Approval process**: Only use dependencies already in vnpy's dependency list
+- **Evaluation criteria**: 
+  - Must be compatible with Python 3.10-3.13
+  - Must have MIT or compatible license
+  - Must not conflict with existing dependencies
+- **Preferred alternatives**: Use existing vnpy utilities when possible
+
+### Dependency Constraints
+
+- **License requirements**: MIT or compatible (vnpy uses MIT)
+- **Size considerations**: Avoid large dependencies that would bloat the framework
+- **Current dependencies**: pyqtgraph, PySide6, loguru (all already in vnpy)
+
+## Documentation
+
+### Code Documentation
+
+- **When to add comments**: 
+  - Complex algorithms (price line drag calculations, coordinate conversions)
+  - Non-obvious implementation details
+  - Workarounds for pyqtgraph limitations
+- **Documentation format**: 
+  - Use docstrings for all public methods
+  - Use inline comments for complex logic
+  - Use type hints for clarity
+
+### API Documentation
+
+- **Public API**: Document all public methods in new classes
+- **Integration points**: Document how to integrate with ChartWidget
+- **Event documentation**: Document any new event types or signals
+
+## Notes
+
+### Key Implementation Considerations
+
+1. **Coordinate System**: pyqtgraph uses scene coordinates, need proper conversion to/from price values
+2. **Event Handling**: Qt mouse events vs pyqtgraph's event system - choose appropriate approach
+3. **State Management**: Price line state (position, drag state) needs careful management
+4. **Integration**: Must work seamlessly with existing ChartWidget without breaking current functionality
+5. **Performance**: Price line rendering should not impact chart scrolling/zooming performance
+
+### Reference Implementation
+
+- **Source**: `multi-timeframe-webapp/frontend/src/hooks/useDrawingOrder.ts`
+- **Key files to reference**:
+  - `priceLineManager.ts`: Price line management logic
+  - `usePriceLineDrag.ts`: Drag interaction implementation
+  - `useDualStopLoss.ts`: Dual stop-loss protection logic
+  - `useAutoTrailingStopLoss.ts`: Auto-trailing stop-loss logic
+
+### Migration Notes
+
+- React hooks pattern → Python class methods with Qt signals
+- TypeScript types → Python type hints
+- React state → Class attributes with Qt property notifications
+- Callback functions → Qt signals/slots or event handlers
+
+---
+
+**Document Version**: 1.0  
+**Last Updated**: 2025-01-15  
+**Maintainer**: vnpy development team
+

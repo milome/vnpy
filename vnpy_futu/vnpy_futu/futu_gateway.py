@@ -228,6 +228,12 @@ class FutuGateway(BaseGateway):
         self.main_contract_mapping: Dict[str, str] = {}
         self.main_contract_check_interval: int = 60  # 主力合约检查间隔（秒）
         self.main_contract_check_count: int = 0  # 主力合约检查计数器
+        self.main_contract_initialized: Set[str] = set()  # 记录已进行过初始化检查的主力合约
+        
+        # ✅ 性能优化：tick数据缓存（用于下单时的价格计算）
+        # 缓存格式：symbol -> (tick_data, timestamp)
+        # TTL: 100ms（确保数据新鲜度）
+        self._tick_cache: Dict[str, Tuple[TickData, float]] = {}
         
         # 撤单频率限制（避免触发API限制：每30秒最多20次）
         self.cancel_times: List[float] = []  # 记录撤单时间戳
@@ -510,10 +516,12 @@ class FutuGateway(BaseGateway):
             try:
                 # 构造富途格式的合约代码
                 futu_symbol = convert_symbol_vt2futu(main_symbol, exchange)
+                self.write_log(f"[主力合约检查] 开始检查 {main_symbol} (富途代码: {futu_symbol})")
                 
                 # 解析当前实际合约
                 actual_code = self._resolve_main_contract(main_symbol, futu_symbol)
                 if not actual_code:
+                    self.write_log(f"[主力合约检查] ⚠️ 无法解析 {main_symbol} 的实际合约代码，跳过检查")
                     continue
                 
                 # 从富途格式提取实际合约代码（如 "HK.MHI2511" -> "MHI2511"）
@@ -522,16 +530,29 @@ class FutuGateway(BaseGateway):
                 else:
                     actual_symbol = actual_code
                 
+                self.write_log(f"[主力合约检查] {main_symbol} 当前实际合约: {actual_symbol}")
+                
                 # 获取缓存中的旧映射
                 old_actual_symbol = self.main_contract_mapping.get(main_symbol)
                 
-                # 如果是首次查询
-                if old_actual_symbol is None:
-                    self.main_contract_mapping[main_symbol] = actual_symbol
-                    self.write_log(f"初始化主力合约映射: {main_symbol} -> {actual_symbol}")
+                # 如果是首次查询（连接初始化时）或尚未进行过初始化检查
+                # 注意：即使 main_contract_mapping 在订阅时被预初始化了，我们仍然需要检查提前切换
+                if main_symbol not in self.main_contract_initialized:
+                    # 更新映射（如果还没有的话）
+                    if old_actual_symbol is None:
+                        self.main_contract_mapping[main_symbol] = actual_symbol
+                        self.write_log(f"[主力合约检查] 初始化主力合约映射: {main_symbol} -> {actual_symbol}")
+                    else:
+                        self.write_log(f"[主力合约检查] 主力合约映射已存在: {main_symbol} -> {old_actual_symbol}，当前实际合约: {actual_symbol}")
                     
-                    # 首次初始化时也检查是否提前切换，如果是则立即提示用户
+                    # 标记为已初始化
+                    self.main_contract_initialized.add(main_symbol)
+                    
+                    # 连接初始化时检查是否提前切换（即使当前主力合约没发生切换，但如果日期早于当前主力合约的日期，仍然判定提前切换）
+                    # 这样的检查只在初始化时做一次
                     is_early_switch = self._is_early_switch(actual_symbol)
+                    self.write_log(f"[主力合约检查] 初始化时提前切换检查结果: {is_early_switch} (合约: {actual_symbol})")
+                    
                     if is_early_switch:
                         self.write_log(f"⚠️ 检测到当前主力合约{actual_symbol}是提前切换状态！")
                         
@@ -546,8 +567,10 @@ class FutuGateway(BaseGateway):
                             is_early_switch=True
                         )
                         
+                        self.write_log(f"[主力合约检查] 触发提前切换事件: {main_symbol} -> {actual_symbol}")
                         # 触发主力合约切换事件，通知UI显示提前切换提示
                         self.on_main_contract_switch(switch_data)
+                        self.write_log(f"[主力合约检查] 事件已发送: EVENT_MAIN_CONTRACT_SWITCH")
                     
                     continue
                 
@@ -560,6 +583,8 @@ class FutuGateway(BaseGateway):
                     
                     # 判断是否提前切换（当前月份 < 新合约月份）
                     is_early_switch = self._is_early_switch(actual_symbol)
+                    self.write_log(f"[主力合约检查] 提前切换检查结果: {is_early_switch} (合约: {actual_symbol})")
+                    
                     if is_early_switch:
                         self.write_log(f"⚠️ 检测到提前切换！当前日期早于新主力合约{actual_symbol}的月份")
                     
@@ -574,14 +599,21 @@ class FutuGateway(BaseGateway):
                         is_early_switch=is_early_switch
                     )
                     
+                    self.write_log(f"[主力合约检查] 触发切换事件: {main_symbol} {old_actual_symbol} -> {actual_symbol} (提前切换: {is_early_switch})")
                     # 触发主力合约切换事件
                     self.on_main_contract_switch(switch_data)
+                    self.write_log(f"[主力合约检查] 事件已发送: EVENT_MAIN_CONTRACT_SWITCH")
                     
                     # 更新tick订阅：订阅新的实际合约
                     self._handle_main_contract_switch(main_symbol, exchange, old_actual_symbol, actual_symbol)
-                    
+                else:
+                    # 未发生切换，不检查提前切换（只在初始化时检查一次）
+                    self.write_log(f"[主力合约检查] {main_symbol} 未发生切换，当前合约: {actual_symbol}")
+            
             except Exception as e:
+                import traceback
                 self.write_log(f"检查主力合约{main_symbol}切换时发生异常: {str(e)}")
+                self.write_log(f"异常堆栈: {traceback.format_exc()}")
     
     def _is_early_switch(self, actual_symbol: str) -> bool:
         """
@@ -599,10 +631,12 @@ class FutuGateway(BaseGateway):
         try:
             # 提取合约年月代码（最后4位数字，格式YYMM）
             if len(actual_symbol) < 4:
+                self.write_log(f"[提前切换检查] 合约代码长度不足: {actual_symbol}")
                 return False
             
             year_month_code = actual_symbol[-4:]
             if not year_month_code.isdigit():
+                self.write_log(f"[提前切换检查] 合约代码格式错误（最后4位不是数字）: {actual_symbol}")
                 return False
             
             # 解析合约年月
@@ -614,16 +648,23 @@ class FutuGateway(BaseGateway):
             current_year = now.year
             current_month = now.month
             
+            self.write_log(f"[提前切换检查] 合约: {actual_symbol}, 合约年月: {contract_year}-{contract_month:02d}, 当前年月: {current_year}-{current_month:02d}")
+            
             # 比较：如果当前年月 < 合约年月，说明是提前切换
             if current_year < contract_year:
+                self.write_log(f"[提前切换检查] ✅ 提前切换: 当前年份 {current_year} < 合约年份 {contract_year}")
                 return True
             elif current_year == contract_year and current_month < contract_month:
+                self.write_log(f"[提前切换检查] ✅ 提前切换: 当前月份 {current_month} < 合约月份 {contract_month}")
                 return True
             
+            self.write_log(f"[提前切换检查] ❌ 正常切换: 当前年月 >= 合约年月")
             return False
             
         except Exception as e:
             self.write_log(f"判断提前切换异常: {str(e)}")
+            import traceback
+            self.write_log(f"异常堆栈: {traceback.format_exc()}")
             return False
     
     def _handle_main_contract_switch(self, main_symbol: str, exchange: Exchange, 
@@ -1520,14 +1561,31 @@ class FutuGateway(BaseGateway):
         # 转换合约代码
         futu_symbol: str = convert_symbol_vt2futu(req.symbol, req.exchange)
 
-        # 处理主力合约：MHImain需要转换为实际月份合约
+        # ✅ 性能优化：处理主力合约时，先检查缓存，避免不必要的函数调用
         if req.symbol.endswith("main") and req.exchange == Exchange.HKFE:
-            actual_symbol = self._resolve_main_contract(req.symbol, futu_symbol)
-            if actual_symbol:
-                self.write_log(f"主力合约 {req.symbol} 转换为实际合约 {actual_symbol}")
-                futu_symbol = actual_symbol
+            # 先检查缓存
+            if hasattr(self, 'main_contract_mapping') and req.symbol in self.main_contract_mapping:
+                cached_actual_symbol = self.main_contract_mapping[req.symbol]
+                if cached_actual_symbol:
+                    actual_symbol = f"HK.{cached_actual_symbol}"
+                    self.write_log(f"主力合约 {req.symbol} 转换为实际合约 {actual_symbol} (缓存)")
+                    futu_symbol = actual_symbol
+                else:
+                    # 缓存未命中，调用解析函数
+                    actual_symbol = self._resolve_main_contract(req.symbol, futu_symbol)
+                    if actual_symbol:
+                        self.write_log(f"主力合约 {req.symbol} 转换为实际合约 {actual_symbol}")
+                        futu_symbol = actual_symbol
+                    else:
+                        self.write_log(f"警告：无法解析主力合约 {req.symbol}，使用原代码")
             else:
-                self.write_log(f"警告：无法解析主力合约 {req.symbol}，使用原代码")
+                # 缓存未命中，调用解析函数
+                actual_symbol = self._resolve_main_contract(req.symbol, futu_symbol)
+                if actual_symbol:
+                    self.write_log(f"主力合约 {req.symbol} 转换为实际合约 {actual_symbol}")
+                    futu_symbol = actual_symbol
+                else:
+                    self.write_log(f"警告：无法解析主力合约 {req.symbol}，使用原代码")
 
         self.write_log(f"转换后的富途合约代码: {futu_symbol}")
         self.write_log(f"当前市场设置: {self.market}")
@@ -2088,10 +2146,22 @@ class FutuGateway(BaseGateway):
         Returns:
             TickData对象，如果找不到则返回None
         """
+        # ✅ 性能优化：添加tick缓存，避免重复查询
+        cache_key = f"{symbol}.{exchange.value}"
+        current_time = time()
+        
+        # 检查缓存（100ms有效期）
+        if cache_key in self._tick_cache:
+            tick, timestamp = self._tick_cache[cache_key]
+            if current_time - timestamp < 0.1:  # 100ms缓存有效期
+                return tick  # 缓存命中
+        
         # 1. 首先尝试使用原始symbol查找
         futu_code = convert_symbol_vt2futu(symbol, exchange)
         tick = self.ticks.get(futu_code)
         if tick and tick.last_price > 0:
+            # 更新缓存
+            self._tick_cache[cache_key] = (tick, current_time)
             return tick
         
         # 1.5 富途API返回的行情数据使用"HK.xxx"格式而非"HK_FUTURE.xxx"
@@ -2105,8 +2175,17 @@ class FutuGateway(BaseGateway):
         # 2. 如果symbol是主力合约（以"main"结尾），尝试解析并查找实际合约的tick数据
         if symbol.endswith("main"):
             try:
-                # 解析主力合约
-                actual_code = self._resolve_main_contract(symbol, futu_code)
+                # ✅ 性能优化：先检查缓存，避免调用_resolve_main_contract
+                if hasattr(self, 'main_contract_mapping') and symbol in self.main_contract_mapping:
+                    cached_actual_symbol = self.main_contract_mapping[symbol]
+                    if cached_actual_symbol:
+                        actual_code = f"HK.{cached_actual_symbol}"
+                    else:
+                        actual_code = None
+                else:
+                    # 缓存未命中，调用解析函数
+                    actual_code = self._resolve_main_contract(symbol, futu_code)
+                
                 if actual_code:
                     # 尝试使用解析出的实际合约代码查找tick
                     tick = self.ticks.get(actual_code)
@@ -2348,6 +2427,25 @@ class FutuGateway(BaseGateway):
                 datetime=generate_datetime(row["create_time"]),
                 gateway_name=self.gateway_name,
             )
+            
+            # 提取交易费用信息（如果富途API返回了费用字段）
+            # 富途API可能返回的费用相关字段：commission（佣金）、fee（费用）、cost（成本）等
+            if trade.extra is None:
+                trade.extra = {}
+            
+            # 尝试从返回数据中提取费用信息
+            fee_fields = ["commission", "fee", "cost", "手续费", "佣金", "费用"]
+            for field in fee_fields:
+                if field in row:
+                    try:
+                        trade.extra[field] = float(row[field])
+                    except (ValueError, TypeError):
+                        pass
+            
+            # 如果找到了费用信息，记录日志
+            if trade.extra:
+                fee_info = ", ".join([f"{k}={v}" for k, v in trade.extra.items()])
+                self.write_log(f"成交{tradeid}费用信息: {fee_info}")
 
             self.on_trade(trade)
             
