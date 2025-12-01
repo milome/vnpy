@@ -381,17 +381,45 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
         if reply == QtWidgets.QMessageBox.StandardButton.Yes:
-            for widget in self.widgets.values():
-                widget.close()
-
-            for monitor in self.monitors.values():
-                monitor.save_setting()
-
-            self.save_window_setting("custom")
-
-            self.main_engine.close()
-
-            event.accept()
+            try:
+                # 关闭所有子窗口
+                for widget in self.widgets.values():
+                    try:
+                        widget.close()
+                    except Exception:
+                        pass  # 静默忽略错误
+                
+                # 保存所有monitor的设置
+                for monitor in self.monitors.values():
+                    try:
+                        monitor.save_setting()
+                    except Exception:
+                        pass  # 静默忽略错误
+                
+                # 保存窗口设置
+                try:
+                    self.save_window_setting("custom")
+                except Exception:
+                    pass  # 静默忽略错误
+                
+                # 关闭主引擎（这会关闭所有gateway、datafeed、数据库连接）
+                try:
+                    self.main_engine.close()
+                except Exception as e:
+                    # 即使关闭失败，也记录日志（如果可能）
+                    try:
+                        self.main_engine.write_log(f"关闭主引擎时出错: {e}")
+                    except Exception:
+                        pass  # 如果write_log也失败，静默忽略
+                
+                event.accept()
+            except Exception as e:
+                # 即使出现异常，也尝试接受关闭事件
+                try:
+                    self.main_engine.write_log(f"关闭窗口时出错: {e}")
+                except Exception:
+                    pass
+                event.accept()  # 确保窗口能够关闭
         else:
             event.ignore()
 

@@ -2,6 +2,7 @@ import smtplib
 import os
 import time
 import traceback
+import atexit
 from abc import ABC, abstractmethod
 from email.message import EmailMessage
 from queue import Empty, Queue
@@ -93,9 +94,15 @@ class MainEngine:
         self.engines: dict[str, BaseEngine] = {}
         self.apps: dict[str, BaseApp] = {}
         self.exchanges: list[Exchange] = []
+        
+        # 标记是否已关闭，避免重复关闭
+        self._closed = False
 
         os.chdir(TRADER_DIR)    # Change working directory
         self.init_engines()     # Initialize function engines
+        
+        # 注册atexit清理函数，确保程序意外退出时也能清理资源
+        atexit.register(self._cleanup_on_exit)
 
     def add_engine(self, engine_class: type[EngineType]) -> EngineType:
         """
@@ -297,8 +304,45 @@ class MainEngine:
         Make sure every gateway and app is closed properly before
         programme exit.
         """
+        # 标记已关闭，避免重复关闭
+        if hasattr(self, '_closed') and self._closed:
+            return
+        self._closed = True
+        
         # Stop event engine first to prevent new timer event.
-        self.event_engine.stop()
+        try:
+            self.event_engine.stop()
+        except Exception as e:
+            try:
+                self.write_log(f"停止事件引擎时出错: {e}")
+            except Exception:
+                pass  # 如果write_log也失败，静默忽略
+
+        # Close all gateway connections to prevent connection leaks
+        for gateway_name, gateway in self.gateways.items():
+            try:
+                if gateway and hasattr(gateway, 'close'):
+                    gateway.close()
+                    try:
+                        self.write_log(f"Gateway连接已关闭: {gateway_name}")
+                    except Exception:
+                        pass
+            except Exception as e:
+                try:
+                    self.write_log(f"关闭Gateway连接时出错 ({gateway_name}): {e}")
+                except Exception:
+                    pass  # 如果write_log也失败，静默忽略
+
+        # Close all engine connections
+        for engine_name, engine in self.engines.items():
+            try:
+                if engine and hasattr(engine, 'close'):
+                    engine.close()
+            except Exception as e:
+                try:
+                    self.write_log(f"关闭Engine连接时出错 ({engine_name}): {e}")
+                except Exception:
+                    pass  # 如果write_log也失败，静默忽略
 
         # Close datafeed connection to prevent connection leaks
         try:
@@ -306,15 +350,87 @@ class MainEngine:
             datafeed = get_datafeed()
             if datafeed and hasattr(datafeed, 'close'):
                 datafeed.close()
-                self.write_log("Datafeed连接已关闭")
+                try:
+                    self.write_log("Datafeed连接已关闭")
+                except Exception:
+                    pass
         except Exception as e:
-            self.write_log(f"关闭Datafeed连接时出错: {e}")
+            try:
+                self.write_log(f"关闭Datafeed连接时出错: {e}")
+            except Exception:
+                pass  # 如果write_log也失败，静默忽略
 
-        for engine in self.engines.values():
-            engine.close()
-
-        for gateway in self.gateways.values():
-            gateway.close()
+        # Close database connection if it has a close method
+        try:
+            from vnpy.trader.database import get_database
+            database = get_database()
+            if database and hasattr(database, 'close'):
+                database.close()
+                try:
+                    self.write_log("数据库连接已关闭")
+                except Exception:
+                    pass
+        except Exception as e:
+            try:
+                self.write_log(f"关闭数据库连接时出错: {e}")
+            except Exception:
+                pass  # 如果write_log也失败，静默忽略
+    
+    def _cleanup_on_exit(self) -> None:
+        """
+        程序退出时的清理函数（由atexit注册调用）。
+        确保即使程序意外退出，也能清理所有资源。
+        """
+        # 如果已经正常关闭，不再重复清理
+        if hasattr(self, '_closed') and self._closed:
+            return
+        
+        # 静默清理，避免在退出时产生异常
+        try:
+            # 停止事件引擎
+            if hasattr(self, 'event_engine') and self.event_engine:
+                try:
+                    self.event_engine.stop()
+                except Exception:
+                    pass
+            
+            # 关闭所有gateway连接
+            if hasattr(self, 'gateways'):
+                for gateway_name, gateway in self.gateways.items():
+                    try:
+                        if gateway and hasattr(gateway, 'close'):
+                            gateway.close()
+                    except Exception:
+                        pass  # 静默忽略错误
+            
+            # 关闭所有engine连接
+            if hasattr(self, 'engines'):
+                for engine_name, engine in self.engines.items():
+                    try:
+                        if engine and hasattr(engine, 'close'):
+                            engine.close()
+                    except Exception:
+                        pass  # 静默忽略错误
+            
+            # 关闭datafeed连接
+            try:
+                from vnpy.trader.datafeed import get_datafeed
+                datafeed = get_datafeed()
+                if datafeed and hasattr(datafeed, 'close'):
+                    datafeed.close()
+            except Exception:
+                pass  # 静默忽略错误
+            
+            # 关闭数据库连接
+            try:
+                from vnpy.trader.database import get_database
+                database = get_database()
+                if database and hasattr(database, 'close'):
+                    database.close()
+            except Exception:
+                pass  # 静默忽略错误
+        except Exception:
+            pass  # 静默忽略所有错误，确保程序能够正常退出
 
 
 class LogEngine(BaseEngine):

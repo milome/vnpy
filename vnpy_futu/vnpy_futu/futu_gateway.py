@@ -1152,6 +1152,16 @@ class FutuGateway(BaseGateway):
 
     def connect_quote(self) -> None:
         """连接行情服务端"""
+        # 先关闭旧连接，避免连接泄露
+        if self.quote_ctx:
+            try:
+                self.quote_ctx.close()
+                self.write_log("已关闭旧的行情连接")
+            except Exception as e:
+                self.write_log(f"关闭旧行情连接时出错: {e}")
+            finally:
+                self.quote_ctx = None
+        
         self.quote_ctx: OpenQuoteContext = OpenQuoteContext(self.host, self.port)
 
         class QuoteHandler(StockQuoteHandlerBase):
@@ -1190,6 +1200,22 @@ class FutuGateway(BaseGateway):
 
     def connect_trade(self) -> None:
         """连接交易服务端"""
+        # 先关闭旧连接，避免连接泄露
+        if self.trade_ctx:
+            try:
+                # 尝试解锁交易接口
+                try:
+                    if self.password:
+                        self.trade_ctx.unlock_trade(self.password)
+                except Exception:
+                    pass  # 忽略解锁错误
+                self.trade_ctx.close()
+                self.write_log("已关闭旧的交易连接")
+            except Exception as e:
+                self.write_log(f"关闭旧交易连接时出错: {e}")
+            finally:
+                self.trade_ctx = None
+        
         if self.market == "HK":
             self.trade_ctx = OpenSecTradeContext(filter_trdmarket=TrdMarket.HK, host=self.host, port=self.port,)
         elif self.market == "US":

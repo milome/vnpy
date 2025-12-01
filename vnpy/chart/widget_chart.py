@@ -84,6 +84,10 @@ class ChartWidgetChartMixin(ChartWidgetMixinBase):
         """
         if not self._first_plot:
             return
+        
+        # 如果正在拖动Y轴，跳过自动更新，避免覆盖手动拖动
+        if hasattr(self, '_axis_drag_state') and self._axis_drag_state.get('is_dragging'):
+            return
 
         view: pg.ViewBox = self._first_plot.getViewBox()
         view_range: list = view.viewRange()

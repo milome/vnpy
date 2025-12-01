@@ -20,6 +20,8 @@ from vnpy.trader.utility import ZoneInfo
 from vnpy.trader.setting import SETTINGS
 from vnpy.trader.locale import _
 
+from .rate_limiter import get_futu_rate_limiter
+
 # 时区设置
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -109,6 +111,17 @@ class Datafeed(BaseDatafeed):
         """
         初始化数据服务连接
         """
+        # 先关闭旧连接，避免连接泄露
+        if self.quote_ctx:
+            try:
+                self.quote_ctx.close()
+                safe_output(output, "已关闭旧的Datafeed连接")
+            except Exception as e:
+                safe_output(output, f"关闭旧Datafeed连接时出错: {str(e)}")
+            finally:
+                self.quote_ctx = None
+                self.inited = False
+        
         try:
             self.quote_ctx = OpenQuoteContext(host=self.host, port=self.port)
             self.inited = True
@@ -162,6 +175,10 @@ class Datafeed(BaseDatafeed):
             start_date = req.start.replace(tzinfo=None).strftime("%Y-%m-%d")
             end_date = req.end.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
 
+            # 使用Rate Limiter限制API调用频率
+            rate_limiter = get_futu_rate_limiter()
+            rate_limiter.acquire(tokens=1, wait=True)
+
             # 请求历史K线数据
             ret, history_df, page_req_key = self.quote_ctx.request_history_kline(
                 code=futu_symbol,
@@ -179,6 +196,10 @@ class Datafeed(BaseDatafeed):
 
             # 处理分页数据
             while page_req_key is not None:
+                # 使用Rate Limiter限制API调用频率
+                rate_limiter = get_futu_rate_limiter()
+                rate_limiter.acquire(tokens=1, wait=True)
+                
                 ret, data, page_req_key = self.quote_ctx.request_history_kline(
                     code=futu_symbol,
                     start=start_date,
@@ -239,7 +260,7 @@ class Datafeed(BaseDatafeed):
         查询历史Tick数据
         注意：富途API暂不支持历史Tick数据查询，此方法返回空列表
         """
-        safe_output(output, "富途数据服务暂不支持历史Tick数据查询")
+        safe_output(output, _("富途数据服务暂不支持历史Tick数据查询"))
         return []
 
     def close(self) -> None:

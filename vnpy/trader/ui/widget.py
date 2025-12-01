@@ -2729,10 +2729,11 @@ class ChartWindow(QtWidgets.QWidget):
                         if tick_second > 0:
                             # 该分钟已经开始，BarGenerator创建K线时用的不是第一个tick，需要修正
                             need_correct = True
-                            self.main_engine.write_log(
-                                f"[实时K线] 检测到该分钟已开始({tick.datetime.strftime('%H:%M:%S')})，"
-                                f"需要修正开盘价（BarGenerator使用的不是第一个tick）"
-                            )
+                            # 暂时注释掉日志，减少日志输出
+                            # self.main_engine.write_log(
+                            #     f"[实时K线] 检测到该分钟已开始({tick.datetime.strftime('%H:%M:%S')})，"
+                            #     f"需要修正开盘价（BarGenerator使用的不是第一个tick）"
+                            # )
                         else:
                             # 可能是该分钟的第一个tick，但仍然检查是否有更准确的参照物
                             # （例如历史数据中的K线，可能是从更完整的tick数据生成的）
@@ -2837,16 +2838,20 @@ class ChartWindow(QtWidgets.QWidget):
                                             first_tick = ticks[0]
                                             if first_tick.last_price > 0:
                                                 correct_open_price = first_tick.last_price
-                                                self.main_engine.write_log(
-                                                    f"[实时K线] 1分钟K线({bar_minute_start.strftime('%H:%M')}) "
-                                                    f"从数据库tick数据获取开盘价: {correct_open_price} "
-                                                    f"(参照物：该分钟第一个tick，时间: {first_tick.datetime.strftime('%H:%M:%S')})"
-                                                )
+                                                # 暂时注释掉日志，减少日志输出
+                                                # self.main_engine.write_log(
+                                                #     f"[实时K线] 1分钟K线({bar_minute_start.strftime('%H:%M')}) "
+                                                #     f"从数据库tick数据获取开盘价: {correct_open_price} "
+                                                #     f"(参照物：该分钟第一个tick，时间: {first_tick.datetime.strftime('%H:%M:%S')})"
+                                                # )
+                                                pass  # 确保代码块不为空
                                     except Exception as e:
                                         # 数据库查询tick失败，继续尝试datafeed
                                         pass
                                     
                                     # 方法4.2：如果数据库没有，尝试从datafeed查询该分钟的tick数据
+                                    # 注意：FUTU datafeed的query_tick_history会返回空列表（不会发API请求）
+                                    # 其他支持tick数据查询的datafeed可以正常使用
                                     if not correct_open_price:
                                         try:
                                             datafeed = None
@@ -2882,11 +2887,12 @@ class ChartWindow(QtWidgets.QWidget):
                                                     first_tick = ticks[0]
                                                     if first_tick.last_price > 0:
                                                         correct_open_price = first_tick.last_price
-                                                        self.main_engine.write_log(
-                                                            f"[实时K线] 1分钟K线({bar_minute_start.strftime('%H:%M')}) "
-                                                            f"从datafeed tick数据获取开盘价: {correct_open_price} "
-                                                            f"(参照物：该分钟第一个tick，时间: {first_tick.datetime.strftime('%H:%M:%S')})"
-                                                        )
+                                                        # 暂时注释掉日志，减少日志输出
+                                                        # self.main_engine.write_log(
+                                                        #     f"[实时K线] 1分钟K线({bar_minute_start.strftime('%H:%M')}) "
+                                                        #     f"从datafeed tick数据获取开盘价: {correct_open_price} "
+                                                        #     f"(参照物：该分钟第一个tick，时间: {first_tick.datetime.strftime('%H:%M:%S')})"
+                                                        # )
                                         except Exception as e:
                                             # datafeed查询失败，忽略
                                             pass
@@ -2906,17 +2912,21 @@ class ChartWindow(QtWidgets.QWidget):
                                 )
                             else:
                                 # 开盘价相同，说明BarGenerator的开盘价是正确的（可能是第一个tick）
-                                self.main_engine.write_log(
-                                    f"[实时K线] 1分钟K线({bar_minute_start.strftime('%H:%M')}) "
-                                    f"开盘价验证正确: {bar.open_price} (与参照物一致)"
-                                )
+                                # 暂时注释掉日志，减少日志输出
+                                # self.main_engine.write_log(
+                                #     f"[实时K线] 1分钟K线({bar_minute_start.strftime('%H:%M')}) "
+                                #     f"开盘价验证正确: {bar.open_price} (与参照物一致)"
+                                # )
+                                pass
                         elif need_correct:
                             # 需要修正但找不到参照物，记录警告
-                            self.main_engine.write_log(
-                                f"[实时K线] 1分钟K线({bar_minute_start.strftime('%H:%M')}) "
-                                f"无法获取参照物修正开盘价，使用BarGenerator的开盘价: {bar.open_price} "
-                                f"(可能不准确，因为该分钟已开始: {tick.datetime.strftime('%H:%M:%S')})"
-                            )
+                            # 暂时注释掉日志，减少日志输出
+                            # self.main_engine.write_log(
+                            #     f"[实时K线] 1分钟K线({bar_minute_start.strftime('%H:%M')}) "
+                            #     f"无法获取参照物修正开盘价，使用BarGenerator的开盘价: {bar.open_price} "
+                            #     f"(可能不准确，因为该分钟已开始: {tick.datetime.strftime('%H:%M:%S')})"
+                            # )
+                            pass
                         
                         # 更新图表显示（BarManager会自动处理新bar的添加和已有bar的更新）
                         # 这会实时更新最后一根K线的显示（如果bar已存在）或添加新K线（如果bar不存在）
@@ -3414,58 +3424,72 @@ class ChartWindow(QtWidgets.QWidget):
             )
             raise Exception(_("未配置数据服务"))
         
-        # 初始化数据服务
-        if not datafeed.init(output=self.main_engine.write_log):
+        # 使用 try-finally 确保连接总是被关闭，避免连接泄漏
+        try:
+            # 初始化数据服务
+            if not datafeed.init(output=self.main_engine.write_log):
+                self.main_engine.write_log(
+                    "[ChartWindow] 数据服务初始化失败，请检查数据服务是否正常运行",
+                    "ChartWindow"
+                )
+                raise Exception(_("数据服务初始化失败"))
+            
+            # 创建历史数据请求
+            req = HistoryRequest(
+                symbol=symbol,
+                exchange=exchange,
+                interval=Interval.MINUTE,
+                start=start,
+                end=end
+            )
+            
+            # 查询历史数据
+            bars = datafeed.query_bar_history(req, output=self.main_engine.write_log)
+            
+            if not bars:
+                self.main_engine.write_log(
+                    f"[ChartWindow] 未获取到1分钟数据，可能数据服务不支持该合约或时间范围内无数据",
+                    "ChartWindow"
+                )
+                raise Exception(_("未获取到数据"))
+            
             self.main_engine.write_log(
-                "[ChartWindow] 数据服务初始化失败，请检查数据服务是否正常运行",
+                f"[ChartWindow] 成功获取 {len(bars)} 条1分钟K线数据",
                 "ChartWindow"
             )
-            raise Exception(_("数据服务初始化失败"))
-        
-        # 创建历史数据请求
-        req = HistoryRequest(
-            symbol=symbol,
-            exchange=exchange,
-            interval=Interval.MINUTE,
-            start=start,
-            end=end
-        )
-        
-        # 查询历史数据
-        bars = datafeed.query_bar_history(req, output=self.main_engine.write_log)
-        
-        if not bars:
-            self.main_engine.write_log(
-                f"[ChartWindow] 未获取到1分钟数据，可能数据服务不支持该合约或时间范围内无数据",
-                "ChartWindow"
-            )
-            raise Exception(_("未获取到数据"))
-        
-        self.main_engine.write_log(
-            f"[ChartWindow] 成功获取 {len(bars)} 条1分钟K线数据",
-            "ChartWindow"
-        )
-        
-        # 保存到数据库
-        if database.save_bar_data(bars):
-            self.main_engine.write_log(
-                f"[ChartWindow] 已保存 {len(bars)} 条1分钟K线数据到数据库",
-                "ChartWindow"
-            )
-        else:
-            self.main_engine.write_log(
-                "[ChartWindow] 保存数据到数据库失败",
-                "ChartWindow"
-            )
-            raise Exception(_("保存数据到数据库失败"))
-        
-        # ✅ 自动聚合大周期K线数据（5分钟、1小时、4小时）
-        # 复用DataManager的聚合逻辑，确保严格按照港期时间边界划分规则（period_utils.py）进行聚合
-        self._aggregate_larger_intervals_using_datamanager(symbol, exchange)
-        
-        # 关闭数据服务
-        if hasattr(datafeed, 'close'):
-            datafeed.close()
+            
+            # 保存到数据库
+            if database.save_bar_data(bars):
+                self.main_engine.write_log(
+                    f"[ChartWindow] 已保存 {len(bars)} 条1分钟K线数据到数据库",
+                    "ChartWindow"
+                )
+            else:
+                self.main_engine.write_log(
+                    "[ChartWindow] 保存数据到数据库失败",
+                    "ChartWindow"
+                )
+                raise Exception(_("保存数据到数据库失败"))
+            
+            # ✅ 自动聚合大周期K线数据（5分钟、1小时、4小时）
+            # 复用DataManager的聚合逻辑，确保严格按照港期时间边界划分规则（period_utils.py）进行聚合
+            self._aggregate_larger_intervals_using_datamanager(symbol, exchange)
+        finally:
+            # 确保关闭数据服务连接，避免连接泄漏
+            # 即使发生异常也要关闭连接，防止连接数超过限制
+            try:
+                if hasattr(datafeed, 'close'):
+                    datafeed.close()
+                    self.main_engine.write_log(
+                        "[ChartWindow] 已关闭数据服务连接",
+                        "ChartWindow"
+                    )
+            except Exception as e:
+                # 关闭连接时出错，记录日志但不抛出异常
+                self.main_engine.write_log(
+                    f"[ChartWindow] 关闭数据服务连接时出错: {str(e)}",
+                    "ChartWindow"
+                )
     
     def _aggregate_larger_intervals_using_datamanager(
         self,

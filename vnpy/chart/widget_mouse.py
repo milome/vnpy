@@ -57,16 +57,6 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
         # 检查鼠标是否在右侧坐标轴区域（基于widget坐标）
         axis_start_x = widget_width - axis_width
         
-        # 添加调试日志（仅当需要排查问题时启用）
-        # if widget_pos.x() >= axis_start_x - 10:  # 在坐标轴附近10像素内时记录日志
-        #     if hasattr(self, '_main_engine') and self._main_engine:
-        #         self._main_engine.write_log(
-        #             f"[ChartWidget] 检查坐标轴区域: 鼠标widget_pos={widget_pos}, "
-        #             f"widget_width={widget_width}, axis_start_x={axis_start_x}, "
-        #             f"axis_width={axis_width}, 在坐标轴区域={widget_pos.x() >= axis_start_x}",
-        #             "ChartWidget"
-        #         )
-        
         # 如果鼠标不在坐标轴区域，直接返回
         if widget_pos.x() < axis_start_x:
             return False, None
@@ -92,8 +82,15 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                 if right_axis:
                     try:
                         axis_rect = right_axis.sceneBoundingRect()
-                        if axis_rect.isValid() and axis_rect.contains(scene_pos):
-                            return True, plot
+                        if axis_rect.isValid():
+                            # 检查鼠标是否在坐标轴矩形内，或者非常接近坐标轴
+                            # 允许一些容差，因为坐标轴可能很窄
+                            if axis_rect.contains(scene_pos):
+                                return True, plot
+                            # 如果鼠标在坐标轴附近（X坐标在坐标轴矩形内，Y坐标在plot范围内）
+                            elif (axis_rect.left() <= scene_pos.x() <= axis_rect.right() and
+                                  vb_rect.top() <= scene_pos.y() <= vb_rect.bottom()):
+                                return True, plot
                     except Exception:
                         pass
                 
@@ -277,16 +274,20 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                                 new_y_min = y_min + price_delta
                                 new_y_max = y_max + price_delta
                                 
-                                # 添加调试日志
-                                # if hasattr(self, '_main_engine') and self._main_engine:
-                                #     self._main_engine.write_log(
-                                #         f"[ChartWidget] 拖拽坐标轴: dy={total_dy_pixels:.1f}px, "
-                                #         f"price_delta={price_delta:.2f}, "
-                                #         f"y_range=[{new_y_min:.2f}, {new_y_max:.2f}]",
-                                #         "ChartWidget"
-                                #     )
+                                # 添加调试日志（帮助诊断问题）
+                                if hasattr(self, '_main_engine') and self._main_engine:
+                                    direction = "向上" if total_dy_pixels > 0 else "向下"
+                                    self._main_engine.write_log(
+                                        f"[ChartWidget] 拖拽坐标轴: {direction}, dy={total_dy_pixels:.1f}px, "
+                                        f"price_delta={price_delta:.2f}, "
+                                        f"y_range=[{new_y_min:.2f}, {new_y_max:.2f}], "
+                                        f"start_pos={start_pos.y()}, current_pos={current_pos.y()}",
+                                        "ChartWidget"
+                                    )
                                 
                                 # 设置新的Y轴范围（仅对当前plot）
+                                # 使用 disableAutoRange 来防止自动范围调整覆盖手动设置
+                                view_box.disableAutoRange(axis='y')
                                 view_box.setYRange(new_y_min, new_y_max, padding=0)
             
             event.accept()
