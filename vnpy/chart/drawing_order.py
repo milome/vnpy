@@ -1091,6 +1091,18 @@ class DrawingOrderController:
                                         f"[DrawingOrderController] 已设置止损线 {stop_loss_line_id} 的手数: {entry_volume}（从入场线 {new_line_id} 获取）",
                                         "DrawingOrderController"
                                     )
+                            else:
+                                # 如果入场线手数为0，尝试从原挂单线获取订单手数
+                                pending_line = self._price_line_manager.get_line(line_id)
+                                if pending_line:
+                                    pending_order_volume = pending_line.get_order_volume()
+                                    if pending_order_volume is not None and pending_order_volume > 0:
+                                        stop_loss_line.set_volume(pending_order_volume)
+                                        if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+                                            self._widget._main_engine.write_log(
+                                                f"[DrawingOrderController] 已设置止损线 {stop_loss_line_id} 的手数: {pending_order_volume}（从原挂单线 {line_id} 获取）",
+                                                "DrawingOrderController"
+                                            )
                         
                         # 保存关联关系到数据库
                         if hasattr(self._widget, '_price_line_database') and self._widget._price_line_database:
@@ -1142,6 +1154,18 @@ class DrawingOrderController:
                                         f"[DrawingOrderController] 已设置止盈线 {take_profit_line_id} 的手数: {entry_volume}（从入场线 {new_line_id} 获取）",
                                         "DrawingOrderController"
                                     )
+                            else:
+                                # 如果入场线手数为0，尝试从原挂单线获取订单手数
+                                pending_line = self._price_line_manager.get_line(line_id)
+                                if pending_line:
+                                    pending_order_volume = pending_line.get_order_volume()
+                                    if pending_order_volume is not None and pending_order_volume > 0:
+                                        take_profit_line.set_volume(pending_order_volume)
+                                        if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+                                            self._widget._main_engine.write_log(
+                                                f"[DrawingOrderController] 已设置止盈线 {take_profit_line_id} 的手数: {pending_order_volume}（从原挂单线 {line_id} 获取）",
+                                                "DrawingOrderController"
+                                            )
                         
                         # 保存关联关系到数据库
                         if hasattr(self._widget, '_price_line_database') and self._widget._price_line_database:

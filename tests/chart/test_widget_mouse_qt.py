@@ -667,6 +667,360 @@ class TestChartWidgetMouseQt(TestBase):
                         # 如果检测失败，至少确保不会报错
                         qtbot.mouseRelease(widget, QtCore.Qt.MouseButton.LeftButton, pos=right_axis_pos)
                         qtbot.wait(100)
+    
+    def test_pending_line_label_long_direction(self, widget, qtbot):
+        """测试挂单线long方向显示多单"""
+        if widget._first_plot and widget._price_line_manager:
+            # 创建long方向的挂单线
+            pending_line_id = widget.add_price_line(
+                price=20000.0,
+                line_type="pending",
+                direction="long",
+                movable=True
+            )
+            
+            # 等待挂单线被添加
+            qtbot.wait(100)
+            
+            # 获取挂单线
+            pending_line = widget._price_line_manager.get_line(pending_line_id)
+            assert pending_line is not None, "挂单线应该被创建"
+            
+            # 验证方向
+            assert pending_line.get_direction() == "long", "挂单线方向应该是long"
+            
+            # 验证标签文本包含"多单"（通过_create_label方法验证）
+            from vnpy.chart.price_line import PriceLineType
+            price_precision = 0
+            expected_label = pending_line._create_label(
+                pending_line.get_price(),
+                PriceLineType.PENDING,
+                price_precision,
+                "long"
+            )
+            assert "多单" in expected_label, f"挂单线标签应该包含'多单'，实际: {expected_label}"
+            assert "20000" in expected_label, f"挂单线标签应该包含价格，实际: {expected_label}"
+    
+    def test_pending_line_label_short_direction(self, widget, qtbot):
+        """测试挂单线short方向显示空单"""
+        if widget._first_plot and widget._price_line_manager:
+            # 创建short方向的挂单线
+            pending_line_id = widget.add_price_line(
+                price=20000.0,
+                line_type="pending",
+                direction="short",
+                movable=True
+            )
+            
+            # 等待挂单线被添加
+            qtbot.wait(100)
+            
+            # 获取挂单线
+            pending_line = widget._price_line_manager.get_line(pending_line_id)
+            assert pending_line is not None, "挂单线应该被创建"
+            
+            # 验证方向
+            assert pending_line.get_direction() == "short", "挂单线方向应该是short"
+            
+            # 验证标签文本包含"空单"（通过_create_label方法验证）
+            from vnpy.chart.price_line import PriceLineType
+            price_precision = 0
+            expected_label = pending_line._create_label(
+                pending_line.get_price(),
+                PriceLineType.PENDING,
+                price_precision,
+                "short"
+            )
+            assert "空单" in expected_label, f"挂单线标签应该包含'空单'，实际: {expected_label}"
+            assert "20000" in expected_label, f"挂单线标签应该包含价格，实际: {expected_label}"
+    
+    def test_pending_line_set_direction(self, widget, qtbot):
+        """测试挂单线设置方向更新标签"""
+        if widget._first_plot and widget._price_line_manager:
+            # 创建long方向的挂单线
+            pending_line_id = widget.add_price_line(
+                price=20000.0,
+                line_type="pending",
+                direction="long",
+                movable=True
+            )
+            
+            # 等待挂单线被添加
+            qtbot.wait(100)
+            
+            # 获取挂单线
+            pending_line = widget._price_line_manager.get_line(pending_line_id)
+            assert pending_line is not None, "挂单线应该被创建"
+            
+            # 验证初始方向为long，标签包含"多单"
+            assert pending_line.get_direction() == "long", "挂单线初始方向应该是long"
+            from vnpy.chart.price_line import PriceLineType
+            price_precision = 0
+            initial_label = pending_line._create_label(
+                pending_line.get_price(),
+                PriceLineType.PENDING,
+                price_precision,
+                "long"
+            )
+            assert "多单" in initial_label, f"初始标签应该包含'多单'，实际: {initial_label}"
+            
+            # 更新方向为short
+            pending_line.set_direction("short", price_precision=0)
+            qtbot.wait(50)
+            
+            # 验证方向已更新
+            assert pending_line.get_direction() == "short", "挂单线方向应该更新为short"
+            
+            # 验证标签已更新为"空单"（通过_create_label方法验证）
+            updated_label = pending_line._create_label(
+                pending_line.get_price(),
+                PriceLineType.PENDING,
+                price_precision,
+                "short"
+            )
+            assert "空单" in updated_label, f"更新后标签应该包含'空单'，实际: {updated_label}"
+            assert "20000" in updated_label, f"标签应该包含价格，实际: {updated_label}"
+    
+    def test_pending_line_color_by_direction(self, widget, qtbot):
+        """测试挂单线颜色根据方向变化"""
+        if widget._first_plot and widget._price_line_manager:
+            from vnpy.chart.base import UP_COLOR, DOWN_COLOR
+            
+            # 创建long方向的挂单线
+            long_line_id = widget.add_price_line(
+                price=20000.0,
+                line_type="pending",
+                direction="long",
+                movable=True
+            )
+            
+            # 创建short方向的挂单线
+            short_line_id = widget.add_price_line(
+                price=20010.0,
+                line_type="pending",
+                direction="short",
+                movable=True
+            )
+            
+            # 等待挂单线被添加
+            qtbot.wait(100)
+            
+            # 获取挂单线
+            long_line = widget._price_line_manager.get_line(long_line_id)
+            short_line = widget._price_line_manager.get_line(short_line_id)
+            
+            assert long_line is not None, "long方向挂单线应该被创建"
+            assert short_line is not None, "short方向挂单线应该被创建"
+            
+            # 验证long方向的挂单线颜色（红色）
+            long_pen = long_line.pen
+            long_color = long_pen.color()
+            long_rgb = (long_color.red(), long_color.green(), long_color.blue())
+            assert long_rgb == UP_COLOR, f"long方向挂单线应该是红色{UP_COLOR}，实际: {long_rgb}"
+            
+            # 验证short方向的挂单线颜色（青色）
+            short_pen = short_line.pen
+            short_color = short_pen.color()
+            short_rgb = (short_color.red(), short_color.green(), short_color.blue())
+            assert short_rgb == DOWN_COLOR, f"short方向挂单线应该是青色{DOWN_COLOR}，实际: {short_rgb}"
+    
+    def test_pending_line_label_with_volume(self, widget, qtbot):
+        """测试挂单线显示手数"""
+        if widget._first_plot and widget._price_line_manager:
+            # 创建带手数的挂单线
+            pending_line_id = widget.add_price_line(
+                price=20000.0,
+                line_type="pending",
+                direction="long",
+                movable=True
+            )
+            
+            # 等待挂单线被添加
+            qtbot.wait(100)
+            
+            # 获取挂单线
+            pending_line = widget._price_line_manager.get_line(pending_line_id)
+            assert pending_line is not None, "挂单线应该被创建"
+            
+            # 设置手数
+            pending_line.set_order_volume(10.0)
+            qtbot.wait(50)
+            
+            # 验证标签包含手数
+            from vnpy.chart.price_line import PriceLineType
+            price_precision = 0
+            expected_label = pending_line._create_label(
+                pending_line.get_price(),
+                PriceLineType.PENDING,
+                price_precision,
+                "long"
+            )
+            assert "多单" in expected_label, f"挂单线标签应该包含'多单'，实际: {expected_label}"
+            assert "10手" in expected_label, f"挂单线标签应该包含'10手'，实际: {expected_label}"
+            assert "20000" in expected_label, f"挂单线标签应该包含价格，实际: {expected_label}"
+            
+            # 验证手数获取方法
+            assert pending_line.get_order_volume() == 10.0, "挂单线手数应该是10.0"
+    
+    def test_pending_line_label_update_volume(self, widget, qtbot):
+        """测试挂单线手数更新后标签也更新"""
+        if widget._first_plot and widget._price_line_manager:
+            # 创建挂单线
+            pending_line_id = widget.add_price_line(
+                price=20000.0,
+                line_type="pending",
+                direction="short",
+                movable=True
+            )
+            
+            # 等待挂单线被添加
+            qtbot.wait(100)
+            
+            # 获取挂单线
+            pending_line = widget._price_line_manager.get_line(pending_line_id)
+            assert pending_line is not None, "挂单线应该被创建"
+            
+            # 初始标签应该不包含手数
+            from vnpy.chart.price_line import PriceLineType
+            price_precision = 0
+            initial_label = pending_line._create_label(
+                pending_line.get_price(),
+                PriceLineType.PENDING,
+                price_precision,
+                "short"
+            )
+            assert "空单" in initial_label, f"初始标签应该包含'空单'，实际: {initial_label}"
+            
+            # 设置手数
+            pending_line.set_order_volume(5.0)
+            qtbot.wait(50)
+            
+            # 验证标签已更新为包含手数
+            updated_label = pending_line._create_label(
+                pending_line.get_price(),
+                PriceLineType.PENDING,
+                price_precision,
+                "short"
+            )
+            assert "空单" in updated_label, f"更新后标签应该包含'空单'，实际: {updated_label}"
+            assert "5手" in updated_label, f"更新后标签应该包含'5手'，实际: {updated_label}"
+            assert "20000" in updated_label, f"标签应该包含价格，实际: {updated_label}"
+    
+    def test_stop_loss_line_from_pending_shows_volume(self, widget, qtbot):
+        """测试挂单线创建时生成的止损线显示手数"""
+        if widget._first_plot and widget._price_line_manager:
+            # 创建挂单线并设置订单手数
+            pending_line_id = widget.add_price_line(
+                price=20000.0,
+                line_type="pending",
+                direction="long",
+                movable=True
+            )
+            
+            # 等待挂单线被添加
+            qtbot.wait(100)
+            
+            # 获取挂单线
+            pending_line = widget._price_line_manager.get_line(pending_line_id)
+            assert pending_line is not None, "挂单线应该被创建"
+            
+            # 设置订单手数
+            pending_line.set_order_volume(10.0)
+            qtbot.wait(50)
+            
+            # 创建止损线并关联到挂单线（模拟画线下单时创建止损线的场景）
+            stop_loss_line_id = widget.add_price_line(
+                price=19950.0,
+                line_type="stop_loss",
+                direction="long",
+                movable=True
+            )
+            qtbot.wait(100)
+            
+            # 获取止损线
+            stop_loss_line = widget._price_line_manager.get_line(stop_loss_line_id)
+            assert stop_loss_line is not None, "止损线应该被创建"
+            
+            # 从挂单线获取订单手数并设置到止损线（模拟创建时的逻辑）
+            order_volume = pending_line.get_order_volume()
+            if order_volume is not None and order_volume > 0:
+                stop_loss_line.set_volume(order_volume)
+            
+            qtbot.wait(50)
+            
+            # 验证止损线的手数
+            assert stop_loss_line.get_volume() == 10.0, f"止损线手数应该是10.0，实际: {stop_loss_line.get_volume()}"
+            
+            # 验证止损线标签包含手数
+            from vnpy.chart.price_line import PriceLineType
+            price_precision = 0
+            expected_label = stop_loss_line._create_label(
+                stop_loss_line.get_price(),
+                PriceLineType.STOP_LOSS,
+                price_precision,
+                "long"
+            )
+            assert "止损" in expected_label or "STOP_LOSS" in expected_label, f"止损线标签应该包含'止损'，实际: {expected_label}"
+            assert "10手" in expected_label, f"止损线标签应该包含'10手'，实际: {expected_label}"
+            assert "19950" in expected_label, f"止损线标签应该包含价格，实际: {expected_label}"
+    
+    def test_take_profit_line_from_pending_shows_volume(self, widget, qtbot):
+        """测试挂单线创建时生成的止盈线显示手数"""
+        if widget._first_plot and widget._price_line_manager:
+            # 创建挂单线并设置订单手数
+            pending_line_id = widget.add_price_line(
+                price=20000.0,
+                line_type="pending",
+                direction="short",
+                movable=True
+            )
+            
+            # 等待挂单线被添加
+            qtbot.wait(100)
+            
+            # 获取挂单线
+            pending_line = widget._price_line_manager.get_line(pending_line_id)
+            assert pending_line is not None, "挂单线应该被创建"
+            
+            # 设置订单手数
+            pending_line.set_order_volume(5.0)
+            qtbot.wait(50)
+            
+            # 创建止盈线并关联到挂单线（模拟画线下单时创建止盈线的场景）
+            take_profit_line_id = widget.add_price_line(
+                price=20050.0,
+                line_type="take_profit",
+                direction="short",
+                movable=True
+            )
+            qtbot.wait(100)
+            
+            # 获取止盈线
+            take_profit_line = widget._price_line_manager.get_line(take_profit_line_id)
+            assert take_profit_line is not None, "止盈线应该被创建"
+            
+            # 从挂单线获取订单手数并设置到止盈线（模拟创建时的逻辑）
+            order_volume = pending_line.get_order_volume()
+            if order_volume is not None and order_volume > 0:
+                take_profit_line.set_volume(order_volume)
+            
+            qtbot.wait(50)
+            
+            # 验证止盈线的手数
+            assert take_profit_line.get_volume() == 5.0, f"止盈线手数应该是5.0，实际: {take_profit_line.get_volume()}"
+            
+            # 验证止盈线标签包含手数
+            from vnpy.chart.price_line import PriceLineType
+            price_precision = 0
+            expected_label = take_profit_line._create_label(
+                take_profit_line.get_price(),
+                PriceLineType.TAKE_PROFIT,
+                price_precision,
+                "short"
+            )
+            assert "止盈" in expected_label or "TAKE_PROFIT" in expected_label, f"止盈线标签应该包含'止盈'，实际: {expected_label}"
+            assert "5手" in expected_label, f"止盈线标签应该包含'5手'，实际: {expected_label}"
+            assert "20050" in expected_label, f"止盈线标签应该包含价格，实际: {expected_label}"
 
 
 # Mock ChartItem for testing

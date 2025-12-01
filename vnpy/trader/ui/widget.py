@@ -2922,9 +2922,16 @@ class ChartWindow(QtWidgets.QWidget):
                         data = self._fill_missing_bars(
                             data, symbol, exchange, interval_enum, start, end, database
                         )
-                    elif not data:
-                        # 对于其他周期（如1分钟），如果数据库中没有数据，提示用户
-                        self.write_log(f"数据库中没有{interval_enum.value}数据，请先在DataManager中下载数据")
+                    elif interval_enum == Interval.MINUTE and not data:
+                        # 对于1分钟数据，如果数据库中没有数据，尝试从FUTU API获取
+                        self.main_engine.write_log(f"数据库中没有{interval_enum.value}数据，尝试从FUTU API获取...")
+                        data = self._fetch_bars_from_futu(
+                            symbol, exchange, interval_enum, start, end
+                        )
+                        if data:
+                            self.main_engine.write_log(f"从FUTU API获取了 {len(data)} 根{interval_enum.value}K线")
+                        else:
+                            self.main_engine.write_log(f"无法从FUTU API获取{interval_enum.value}数据，请先在DataManager中下载数据")
                 
                 # 对于1小时数据，如果从CSV加载，需要检测并补齐gap（这个主要是用于CSV到当前时间的gap，不是历史数据的gap）
                 if data and interval_enum == Interval.HOUR and data_source == self.DATA_SOURCE_CSV:
@@ -3869,13 +3876,19 @@ class ChartWindow(QtWidgets.QWidget):
         if interval_enum == Interval.MINUTE:
             # 1分钟周期：使用BarGenerator从tick合成K线
             if self.bg:
+                # 更新BarGenerator（这会自动创建或更新bg.bar）
                 self.bg.update_tick(tick)
                 
-                # 实时更新当前K线
+                # 实时更新当前K线（每次tick都更新，确保实时显示）
+                # 注意：bg.bar在第一个有效tick时会被创建，之后每次tick都会更新
                 if self.bg.bar:
                     from vnpy.trader.object import BarData
+                    # 创建当前K线的副本用于实时更新（避免修改原始bar对象）
                     bar: BarData = copy(self.bg.bar)
+                    # 规范化datetime（去掉秒和微秒，确保与历史数据一致）
                     bar.datetime = bar.datetime.replace(second=0, microsecond=0)
+                    # 更新图表显示（BarManager会自动处理新bar的添加和已有bar的更新）
+                    # 这会实时更新最后一根K线的显示（如果bar已存在）或添加新K线（如果bar不存在）
                     self.chart.update_bar(bar)
         else:
             # 5分钟、1小时、4小时周期：使用tick数据直接更新当前未完成的K线
@@ -4209,6 +4222,10 @@ class ChartWindow(QtWidgets.QWidget):
         
         # 确保滚动条在最右边
         self.time_slider.setValue(100)
+        
+        # 订阅实时行情数据（用于实时更新K线）
+        if self.current_vt_symbol:
+            self.subscribe_tick(self.current_vt_symbol)
     
     def _mark_current_bar(self, history: list, interval: "Interval") -> None:
         """
@@ -4839,6 +4856,11 @@ class ChartWindow(QtWidgets.QWidget):
                     "line_id": stop_loss_line_id,
                     "points": stop_loss_points
                 }
+                # 从挂单线获取订单手数并设置到止损线
+                if line:
+                    order_volume = line.get_order_volume()
+                    if order_volume is not None and order_volume > 0:
+                        stop_loss_line.set_volume(order_volume)
                 # 添加详细日志
                 direction_str = params["direction"].value if hasattr(params["direction"], "value") else str(params["direction"])
                 order_price = params.get("price", 0)
@@ -4880,6 +4902,11 @@ class ChartWindow(QtWidgets.QWidget):
                     "line_id": take_profit_line_id,
                     "points": take_profit_points
                 }
+                # 从挂单线获取订单手数并设置到止盈线
+                if line:
+                    order_volume = line.get_order_volume()
+                    if order_volume is not None and order_volume > 0:
+                        take_profit_line.set_volume(order_volume)
                 # 添加详细日志
                 order_price = params.get("price", 0)
                 # 格式化价格显示

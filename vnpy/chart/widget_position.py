@@ -1532,31 +1532,31 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
         
         # 删除没有持仓的入场线及其关联的止损止盈线
         # 先打印数据库状态（用于调试）
-        if hasattr(self, '_price_line_database') and self._price_line_database and hasattr(self, '_main_engine') and self._main_engine:
-            debug_info = self._price_line_database.debug_print_all_lines_and_relations(vt_symbol=self._vt_symbol)
-            self._main_engine.write_log(
-                f"[ChartWidget] 删除入场线前，数据库状态:\n{debug_info}",
-                "ChartWidget"
-            )
+        # if hasattr(self, '_price_line_database') and self._price_line_database and hasattr(self, '_main_engine') and self._main_engine:
+        #     debug_info = self._price_line_database.debug_print_all_lines_and_relations(vt_symbol=self._vt_symbol)
+        #     self._main_engine.write_log(
+        #         f"[ChartWidget] 删除入场线前，数据库状态:\n{debug_info}",
+        #         "ChartWidget"
+        #     )
         
         # 添加详细日志
-        if hasattr(self, '_main_engine') and self._main_engine:
-            self._main_engine.write_log(
-                f"[ChartWidget] 准备删除入场线: lines_to_delete数量={len(lines_to_delete)}, "
-                f"持仓方向={position_direction}, 持仓数量={position.volume}, 持仓映射={list(position_map.items()) if position_map else []}",
-                "ChartWidget"
-            )
-            if lines_to_delete:
-                for line_id, line_direction in lines_to_delete:
-                    self._main_engine.write_log(
-                        f"[ChartWidget] 待删除入场线: {line_id}, 方向={line_direction}",
-                        "ChartWidget"
-                    )
-            else:
-                self._main_engine.write_log(
-                    f"[ChartWidget] 警告: lines_to_delete为空，没有入场线需要删除",
-                    "ChartWidget"
-                )
+        # if hasattr(self, '_main_engine') and self._main_engine:
+        #     self._main_engine.write_log(
+        #         f"[ChartWidget] 准备删除入场线: lines_to_delete数量={len(lines_to_delete)}, "
+        #         f"持仓方向={position_direction}, 持仓数量={position.volume}, 持仓映射={list(position_map.items()) if position_map else []}",
+        #         "ChartWidget"
+        #     )
+        #     if lines_to_delete:
+        #         for line_id, line_direction in lines_to_delete:
+        #             self._main_engine.write_log(
+        #                 f"[ChartWidget] 待删除入场线: {line_id}, 方向={line_direction}",
+        #                 "ChartWidget"
+        #             )
+        #     else:
+        #         self._main_engine.write_log(
+        #             f"[ChartWidget] 警告: lines_to_delete为空，没有入场线需要删除",
+        #             "ChartWidget"
+        #         )
         
         deleted_count = 0
         deleted_entry_count = 0
@@ -1698,12 +1698,12 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                     )
         
         # 删除后再次打印数据库状态（用于调试）
-        if hasattr(self, '_price_line_database') and self._price_line_database and hasattr(self, '_main_engine') and self._main_engine:
-            debug_info = self._price_line_database.debug_print_all_lines_and_relations(vt_symbol=self._vt_symbol)
-            self._main_engine.write_log(
-                f"[ChartWidget] 删除入场线后，数据库状态:\n{debug_info}",
-                "ChartWidget"
-            )
+        # if hasattr(self, '_price_line_database') and self._price_line_database and hasattr(self, '_main_engine') and self._main_engine:
+        #     debug_info = self._price_line_database.debug_print_all_lines_and_relations(vt_symbol=self._vt_symbol)
+        #     self._main_engine.write_log(
+        #         f"[ChartWidget] 删除入场线后，数据库状态:\n{debug_info}",
+        #         "ChartWidget"
+        #     )
         
         if hasattr(self, '_main_engine') and self._main_engine:
             self._main_engine.write_log(

@@ -80,6 +80,41 @@
 - 测试鼠标悬停在底部时间轴区域时光标样式变化
 - 验证悬停检测功能
 
+### 18. 挂单线long方向显示多单 (`test_pending_line_label_long_direction`)
+- 测试创建long方向的挂单线
+- 验证标签显示"多单"和价格信息
+
+### 19. 挂单线short方向显示空单 (`test_pending_line_label_short_direction`)
+- 测试创建short方向的挂单线
+- 验证标签显示"空单"和价格信息
+
+### 20. 挂单线设置方向更新标签 (`test_pending_line_set_direction`)
+- 测试动态更新挂单线的方向
+- 验证标签从"多单"更新为"空单"或反之
+
+### 21. 挂单线颜色根据方向变化 (`test_pending_line_color_by_direction`)
+- 测试挂单线颜色根据方向自动设置
+- 验证long方向为红色，short方向为青色
+
+### 22. 挂单线显示手数 (`test_pending_line_label_with_volume`)
+- 测试挂单线显示订单手数
+- 验证标签格式：`多单 20000 10手` 或 `空单 20000 10手`
+- 验证手数获取方法
+
+### 23. 挂单线手数更新后标签更新 (`test_pending_line_label_update_volume`)
+- 测试挂单线手数更新后标签自动更新
+- 验证从无手数到有手数的标签变化
+
+### 24. 挂单线创建时生成的止损线显示手数 (`test_stop_loss_line_from_pending_shows_volume`)
+- 测试挂单线创建时生成的止损线显示手数
+- 验证从挂单线获取订单手数并设置到止损线
+- 验证止损线标签包含手数信息
+
+### 25. 挂单线创建时生成的止盈线显示手数 (`test_take_profit_line_from_pending_shows_volume`)
+- 测试挂单线创建时生成的止盈线显示手数
+- 验证从挂单线获取订单手数并设置到止盈线
+- 验证止盈线标签包含手数信息
+
 ## 使用方法
 
 ### 运行所有测试
@@ -138,6 +173,14 @@ tests/chart/test_widget_mouse_qt.py::TestChartWidgetMouseQt::test_mouse_drag_rig
 tests/chart/test_widget_mouse_qt.py::TestChartWidgetMouseQt::test_mouse_hover_right_axis_cursor PASSED
 tests/chart/test_widget_mouse_qt.py::TestChartWidgetMouseQt::test_mouse_drag_right_axis_continuous PASSED
 tests/chart/test_widget_mouse_qt.py::TestChartWidgetMouseQt::test_mouse_drag_right_axis_multiple_plots PASSED
+tests/chart/test_widget_mouse_qt.py::TestChartWidgetMouseQt::test_pending_line_label_long_direction PASSED
+tests/chart/test_widget_mouse_qt.py::TestChartWidgetMouseQt::test_pending_line_label_short_direction PASSED
+tests/chart/test_widget_mouse_qt.py::TestChartWidgetMouseQt::test_pending_line_set_direction PASSED
+tests/chart/test_widget_mouse_qt.py::TestChartWidgetMouseQt::test_pending_line_color_by_direction PASSED
+tests/chart/test_widget_mouse_qt.py::TestChartWidgetMouseQt::test_pending_line_label_with_volume PASSED
+tests/chart/test_widget_mouse_qt.py::TestChartWidgetMouseQt::test_pending_line_label_update_volume PASSED
+tests/chart/test_widget_mouse_qt.py::TestChartWidgetMouseQt::test_stop_loss_line_from_pending_shows_volume PASSED
+tests/chart/test_widget_mouse_qt.py::TestChartWidgetMouseQt::test_take_profit_line_from_pending_shows_volume PASSED
 ```
 
 ## 相关修复

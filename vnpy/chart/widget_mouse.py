@@ -1451,6 +1451,9 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
         from vnpy.trader.constant import Direction
         is_long = (direction == Direction.LONG)
         
+        # 从挂单线获取订单手数
+        pending_line_volume = dragging_line.get_order_volume()
+        
         # 更新止损线
         stop_loss_info = relations.get("stop_loss")
         if stop_loss_info:
@@ -1467,6 +1470,9 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                     # 获取价格精度
                     price_precision = getattr(self, '_price_precision', 0)
                     stop_loss_line.set_price(new_stop_loss_price, price_precision)
+                    # 从挂单线获取订单手数并设置到止损线
+                    if pending_line_volume is not None and pending_line_volume > 0:
+                        stop_loss_line.set_volume(pending_line_volume)
         
         # 更新止盈线
         take_profit_info = relations.get("take_profit")
@@ -1484,6 +1490,9 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                     # 获取价格精度
                     price_precision = getattr(self, '_price_precision', 0)
                     take_profit_line.set_price(new_take_profit_price, price_precision)
+                    # 从挂单线获取订单手数并设置到止盈线
+                    if pending_line_volume is not None and pending_line_volume > 0:
+                        take_profit_line.set_volume(pending_line_volume)
     
     def _update_related_lines_on_drag_end(self, dragging_line, final_price: float) -> None:
         """

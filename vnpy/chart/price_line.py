@@ -223,6 +223,24 @@ class PriceLineItem(pg.InfiniteLine):
             else:
                 return f"{type_name} {price_str}"
         
+        # 对于挂单线，显示方向（多单/空单）和手数
+        if line_type == PriceLineType.PENDING:
+            direction_text = "多单" if direction == "long" else "空单"
+            # 获取挂单线的订单手数（从实例属性获取）
+            order_volume = getattr(self, '_order_volume', None)
+            
+            if price_precision == 0:
+                price_str = str(int(price))
+            else:
+                price_str = f"{price:.{price_precision}f}"
+            
+            # 如果有手数，显示手数信息
+            if order_volume is not None and order_volume > 0:
+                volume_str = f"{int(order_volume)}手" if order_volume == int(order_volume) else f"{order_volume:.1f}手"
+                return f"{direction_text} {price_str} {volume_str}"
+            else:
+                return f"{direction_text} {price_str}"
+        
         # 其他类型的价格线，正常显示
         # 根据精度格式化价格（0表示整数，MHImain默认显示整数）
         if price_precision == 0:
@@ -262,6 +280,26 @@ class PriceLineItem(pg.InfiniteLine):
     def get_direction(self) -> str:
         """Get trading direction."""
         return self._direction
+    
+    def set_direction(self, direction: str, price_precision: int = 0) -> None:
+        """
+        设置交易方向并更新标签（主要用于挂单线显示方向）。
+        
+        Args:
+            direction: 交易方向 ("long" 或 "short")
+            price_precision: 价格精度（用于更新标签）
+        """
+        self._direction = direction
+        # 更新标签显示（挂单线需要显示方向）
+        if self._line_type == PriceLineType.PENDING:
+            label_text = self._create_label(self._price, self._line_type, price_precision, self._direction)
+            if self.label is not None:
+                self.label.setText(label_text)
+            # 更新画笔颜色以反映方向变化
+            pen = self._create_pen(self._line_type, direction)
+            self.setPen(pen)
+            if self.label is not None:
+                self.label.setColor(pen.color())
 
     def get_original_price(self) -> float:
         """Get original price (before drag)."""
@@ -304,8 +342,14 @@ class PriceLineItem(pg.InfiniteLine):
         return getattr(self, '_order_volume', None)
     
     def set_order_volume(self, volume: float) -> None:
-        """设置挂单线的订单手数（仅PENDING类型）"""
+        """设置挂单线的订单手数（仅PENDING类型）并更新标签"""
         self._order_volume = volume
+        # 更新标签显示（挂单线需要显示手数）
+        if self._line_type == PriceLineType.PENDING:
+            price_precision = 0  # 默认整数显示
+            label_text = self._create_label(self._price, self._line_type, price_precision, self._direction)
+            if self.label is not None:
+                self.label.setText(label_text)
     
     def get_order_offset(self) -> Optional[str]:
         """获取挂单线的开平类型（仅PENDING类型，返回"OPEN"或"CLOSE"）"""
