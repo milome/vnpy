@@ -269,7 +269,9 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                                 
                                 # 计算价格移动量：拖动距离转换为价格范围
                                 # 向上拖动时，价格范围向上移动（最小值增加，最大值增加）
-                                price_delta = (total_dy_pixels / plot_height) * y_range
+                                # 增加灵敏度系数（3倍），使拖拽更容易控制
+                                sensitivity = 3.0  # 灵敏度系数，值越大拖拽越快
+                                price_delta = (total_dy_pixels / plot_height) * y_range * sensitivity
                                 
                                 # 更新Y轴范围（基于初始范围计算，避免累积误差）
                                 new_y_min = y_min + price_delta
@@ -286,12 +288,9 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                                         "ChartWidget"
                                     )
                                 
-                                # 确保禁用自动范围更新
-                                view_box.disableAutoRange(axis='y')
-                                # 设置新的Y轴范围（仅对当前plot）
-                                # 使用 disableAutoRange 来防止自动范围调整覆盖手动设置
-                                view_box.disableAutoRange(axis='y')
-                                view_box.setYRange(new_y_min, new_y_max, padding=0)
+                                # 使用plot.setRange设置Y轴范围（与X轴拖拽保持一致的方式）
+                                # 直接对PlotItem设置范围，而不是对ViewBox设置
+                                target_plot.setRange(yRange=(new_y_min, new_y_max), padding=0)
             
             event.accept()
             return
@@ -513,6 +512,29 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                 view_box.disableAutoRange(axis='y')
                 # 标记Y轴已被手动设置
                 self._axis_drag_state['y_axis_manually_set'] = True
+                
+                # 放宽Y轴限制，允许无限制拖拽（类似X轴有未来空间的概念）
+                # 在拖拽时移除Y轴限制，允许用户自由拖拽到任何位置
+                if hasattr(self, '_item_plot_map') and target_plot in self._item_plot_map.values():
+                    # 找到对应的item
+                    for item, plot in self._item_plot_map.items():
+                        if plot == target_plot:
+                            # 获取当前的limits，只保留X轴限制，移除Y轴限制
+                            # 通过设置一个非常大的值来实现无限制
+                            # 或者不设置yMin和yMax参数
+                            import sys
+                            max_float = sys.float_info.max
+                            min_float = -sys.float_info.max
+                            
+                            # 获取当前X轴限制（如果有）
+                            view_box = target_plot.getViewBox()
+                            if view_box:
+                                # 设置Y轴为无限制（使用非常大的值）
+                                target_plot.setLimits(
+                                    yMin=min_float,  # 无最小值限制
+                                    yMax=max_float   # 无最大值限制
+                                )
+                            break
                 
                 # 添加调试日志
                 if hasattr(self, '_main_engine') and self._main_engine:
@@ -942,10 +964,63 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
         """
         Handle double click event for price line actions.
         
+        - Double click Y axis: Reset Y axis range to data range
         - Double click pending line: Delete entire pending order
         - Double click entry line: Close position
         - Double click stop loss/take profit line: Delete the line
         """
+        # 初始化坐标轴拖拽状态
+        self._init_axis_drag_state()
+        
+        # 检查是否双击了右侧坐标轴区域（Y轴）
+        is_on_axis, target_plot = self._is_mouse_on_right_axis(event)
+        if is_on_axis and target_plot:
+            import pyqtgraph as pg
+            view_box = target_plot.getViewBox()
+            if view_box:
+                # 双击Y轴：重置Y轴范围到数据范围
+                # 获取当前X轴范围
+                view_range = view_box.viewRange()
+                if view_range:
+                    min_ix = max(0, int(view_range[0][0]))
+                    max_ix = min(self._manager.get_count(), int(view_range[0][1]))
+                    
+                    # 获取数据范围
+                    if hasattr(self, '_item_plot_map'):
+                        for item, plot in self._item_plot_map.items():
+                            if plot == target_plot:
+                                y_range = item.get_y_range(min_ix, max_ix)
+                                y_min, y_max = y_range
+                                
+                                # 重置Y轴范围到数据范围
+                                target_plot.setRange(yRange=y_range, padding=0)
+                                
+                                # 清除手动设置标志，允许自动更新
+                                if hasattr(self, '_axis_drag_state'):
+                                    self._axis_drag_state['y_axis_manually_set'] = False
+                                
+                                # 恢复自动范围更新
+                                view_box.enableAutoRange(axis='y')
+                                
+                                # 恢复Y轴限制到数据范围
+                                target_plot.setLimits(
+                                    yMin=y_min,
+                                    yMax=y_max
+                                )
+                                
+                                # 添加日志
+                                if hasattr(self, '_main_engine') and self._main_engine:
+                                    self._main_engine.write_log(
+                                        f"[ChartWidget] 双击Y轴：重置Y轴范围到数据范围 [{y_min:.2f}, {y_max:.2f}]",
+                                        "ChartWidget"
+                                    )
+                                
+                                event.accept()
+                                return
+                
+                event.accept()
+                return
+        
         if not self._price_line_drag_handler or not self._first_plot:
             super().mouseDoubleClickEvent(event)
             return

@@ -89,6 +89,12 @@ class ChartWidgetChartMixin(ChartWidgetMixinBase):
         if hasattr(self, '_axis_drag_state') and self._axis_drag_state.get('is_dragging'):
             return
         
+        # 如果正在拖动X轴，且Y轴已被手动设置，跳过自动更新
+        # 这样可以防止拖拽X轴时改变Y轴位置
+        if hasattr(self, '_axis_drag_state') and self._axis_drag_state.get('is_dragging_x_axis'):
+            if hasattr(self, '_axis_drag_state') and self._axis_drag_state.get('y_axis_manually_set'):
+                return
+        
         view: pg.ViewBox = self._first_plot.getViewBox()
         
         # 如果Y轴已被手动设置（用户拖拽过），跳过自动更新
