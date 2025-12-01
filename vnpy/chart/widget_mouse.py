@@ -30,7 +30,8 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                 'start_pos': None,
                 'start_y_range': None,
                 'start_x_range': None,  # 开始拖拽时的X轴范围
-                'target_plot': None
+                'target_plot': None,
+                'y_axis_manually_set': False  # Y轴是否被手动设置（拖拽后保持禁用自动更新）
             }
     
     def _is_mouse_on_right_axis(self, event: QtGui.QMouseEvent) -> tuple[bool, 'pg.PlotItem | None']:
@@ -285,6 +286,8 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                                         "ChartWidget"
                                     )
                                 
+                                # 确保禁用自动范围更新
+                                view_box.disableAutoRange(axis='y')
                                 # 设置新的Y轴范围（仅对当前plot）
                                 # 使用 disableAutoRange 来防止自动范围调整覆盖手动设置
                                 view_box.disableAutoRange(axis='y')
@@ -506,6 +509,11 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                 if view_range:
                     self._axis_drag_state['start_y_range'] = view_range[1]
                 
+                # 禁用Y轴自动范围更新，防止拖拽时被自动重置
+                view_box.disableAutoRange(axis='y')
+                # 标记Y轴已被手动设置
+                self._axis_drag_state['y_axis_manually_set'] = True
+                
                 # 添加调试日志
                 if hasattr(self, '_main_engine') and self._main_engine:
                     self._main_engine.write_log(
@@ -665,7 +673,15 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
             self._axis_drag_state['is_dragging'] = False
             self._axis_drag_state['start_pos'] = None
             self._axis_drag_state['start_y_range'] = None
+            target_plot = self._axis_drag_state['target_plot']
             self._axis_drag_state['target_plot'] = None
+            
+            # 保持禁用自动范围更新，因为用户已经手动设置了范围
+            # 这样用户手动拖拽的范围不会被自动重置
+            if target_plot:
+                view_box = target_plot.getViewBox()
+                if view_box:
+                    view_box.disableAutoRange(axis='y')
             
             # 恢复鼠标光标
             self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)

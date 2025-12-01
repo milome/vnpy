@@ -84,12 +84,20 @@ class ChartWidgetChartMixin(ChartWidgetMixinBase):
         """
         if not self._first_plot:
             return
-        
+
         # 如果正在拖动Y轴，跳过自动更新，避免覆盖手动拖动
         if hasattr(self, '_axis_drag_state') and self._axis_drag_state.get('is_dragging'):
             return
-
+        
         view: pg.ViewBox = self._first_plot.getViewBox()
+        
+        # 如果Y轴已被手动设置（用户拖拽过），跳过自动更新
+        # 这样可以保持用户手动设置的范围
+        if hasattr(self, '_axis_drag_state') and self._axis_drag_state.get('y_axis_manually_set'):
+            # 检查ViewBox是否禁用了自动范围，如果是，则跳过自动更新
+            if view and not view.autoRangeEnabled()[1]:  # [1] 是Y轴的自动范围状态
+                return
+
         view_range: list = view.viewRange()
 
         min_ix: int = max(0, int(view_range[0][0]))
