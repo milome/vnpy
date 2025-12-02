@@ -184,7 +184,24 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
                 offset=offset
             )
             
-            # 发送订单（下单前不查询活动订单，保证性能）
+            # 发送订单前打印当前活动订单（用于调试）
+            all_active_orders = main_engine.get_all_active_orders()
+            symbol_active_orders = [
+                order for order in all_active_orders
+                if order.vt_symbol == vt_symbol
+            ]
+            
+            if symbol_active_orders and main_engine:
+                order_info = ", ".join([
+                    f"{order.direction.value} {order.volume}@{order.price:.1f} (ID:{order.vt_orderid[-4:]}, 状态:{order.status.value})"
+                    for order in symbol_active_orders
+                ])
+                main_engine.write_log(
+                    f"[挂单触发] 当前 {vt_symbol} 活动订单: {order_info}",
+                    "ChartWidget"
+                )
+            
+            # 发送订单
             vt_orderid = None
             try:
                 vt_orderid = main_engine.send_order(req, contract.gateway_name)
@@ -285,15 +302,25 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
                 if main_engine:
                     main_engine.write_log(error_msg, "ChartWidget")
             
-            # 无论下单成功或失败，都移除内存中的挂单参数并取消注册价格突破监控
-            # 因为价格已经突破，不应该再次触发
-            # 注意：价格线对象中的挂单参数保留在数据库中，但触发后不再使用
-            if controller and hasattr(controller, '_pending_order_params'):
-                if line_id in controller._pending_order_params:
-                    del controller._pending_order_params[line_id]
-            # 取消注册价格突破监控（已触发，无论成功或失败）
-            if self._breakthrough_monitor:
-                self._breakthrough_monitor.unregister_line(line_id)
+            # ⚠️ 关键修复：只有下单成功才移除监控，失败时保持监控以便重新触发
+            if vt_orderid:
+                # 下单成功：移除内存中的挂单参数并取消注册价格突破监控
+                # 因为价格已经突破且订单已发送，不应该再次触发
+                if controller and hasattr(controller, '_pending_order_params'):
+                    if line_id in controller._pending_order_params:
+                        del controller._pending_order_params[line_id]
+                # 取消注册价格突破监控（订单已发送）
+                if self._breakthrough_monitor:
+                    self._breakthrough_monitor.unregister_line(line_id)
+            else:
+                # 下单失败：保持监控，允许用户移动挂单线重新触发
+                # 注意：虽然保持监控，但价格如果一直在突破位置，不会重复触发
+                # 用户需要移动挂单线到新位置，或者等待价格回落再突破
+                if main_engine:
+                    main_engine.write_log(
+                        f"[ChartWidget] 挂单触发失败，保持监控状态 (挂单线: {line_id})",
+                        "ChartWidget"
+                    )
             
             return vt_orderid is not None
     
