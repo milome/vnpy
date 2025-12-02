@@ -2411,12 +2411,18 @@ class ChartWindow(QtWidgets.QWidget):
                     datafeed = self.main_engine.get_datafeed()
                     if datafeed is not None:
                         self._cached_datafeed = datafeed
+                        self.main_engine.write_log(
+                            f"[ChartWindow-{id(self)}] 使用 MainEngine 的 Datafeed 实例"
+                        )
                         return datafeed
                 except Exception:
                     pass
             
             # 优先级2：使用缓存的实例
             if self._cached_datafeed is not None:
+                self.main_engine.write_log(
+                    f"[ChartWindow-{id(self)}] 使用缓存的 Datafeed 实例"
+                )
                 return self._cached_datafeed
             
             # Priority 3: Create new instance as last resort
@@ -2425,8 +2431,7 @@ class ChartWindow(QtWidgets.QWidget):
                 # Connection count approaching limit, skip creating new instance
                 if self.main_engine:
                     self.main_engine.write_log(
-                        "[ChartWindow] 连接数接近限制，跳过创建新Datafeed实例",
-                        "ChartWindow"
+                        f"[ChartWindow-{id(self)}] ⚠️ 连接数接近限制，跳过创建新Datafeed实例"
                     )
                 return None
             
@@ -2436,6 +2441,10 @@ class ChartWindow(QtWidgets.QWidget):
                 if datafeed and hasattr(datafeed, 'init'):
                     if datafeed.init(output=self.main_engine.write_log):
                         self._cached_datafeed = datafeed
+                        # 关键日志：记录新连接创建
+                        self.main_engine.write_log(
+                            f"[ChartWindow-{id(self)}] ⚠️ 创建了新的 Datafeed 实例"
+                        )
                         # Log connection count change
                         self._log_connection_count()
                         return datafeed
@@ -2443,8 +2452,7 @@ class ChartWindow(QtWidgets.QWidget):
                 # 记录错误但不抛出异常
                 if self.main_engine:
                     self.main_engine.write_log(
-                        f"[ChartWindow] 创建Datafeed实例失败: {e}",
-                        "ChartWindow"
+                        f"[ChartWindow-{id(self)}] 创建Datafeed实例失败: {e}"
                     )
             
             return None
