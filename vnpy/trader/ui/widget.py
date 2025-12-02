@@ -3211,11 +3211,12 @@ class ChartWindow(QtWidgets.QWidget):
             all_lines = self.chart._price_line_manager.get_all_lines()
             from vnpy.chart.price_line import PriceLineType
 
-            # 处理止损线
+            # 优化：只处理已激活的止损线（提前过滤，避免日志刷屏）
             stop_loss_lines = {
                 line_id: line
                 for line_id, line in all_lines.items()
-                if line.get_line_type() == PriceLineType.STOP_LOSS
+                if (line.get_line_type() == PriceLineType.STOP_LOSS and
+                    hasattr(line, 'is_activated') and line.is_activated())
             }
             for line_id, line in stop_loss_lines.items():
                 try:
@@ -3228,11 +3229,12 @@ class ChartWindow(QtWidgets.QWidget):
                             "ChartWindow"
                         )
 
-            # 处理止盈线
+            # 优化：只处理已激活的止盈线（提前过滤，避免日志刷屏）
             take_profit_lines = {
                 line_id: line
                 for line_id, line in all_lines.items()
-                if line.get_line_type() == PriceLineType.TAKE_PROFIT
+                if (line.get_line_type() == PriceLineType.TAKE_PROFIT and
+                    hasattr(line, 'is_activated') and line.is_activated())
             }
             for line_id, line in take_profit_lines.items():
                 try:
