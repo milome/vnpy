@@ -2386,12 +2386,15 @@ class ChartWindow(QtWidgets.QWidget):
         for key in expired_keys:
             del self._open_price_cache[key]
     
-    def _get_datafeed(self):
+    def _get_datafeed(self, show_error_dialog: bool = False):
         """
         Get global singleton Datafeed instance.
         
         使用全局单例 DatafeedManager，确保整个程序只有一个 Datafeed 连接。
         这解决了多个 ChartWindow 创建重复连接导致超过 128 连接限制的问题。
+        
+        Args:
+            show_error_dialog: 是否在首次失败时显示错误对话框
         
         Returns:
             Datafeed instance if available, None otherwise
@@ -2400,7 +2403,10 @@ class ChartWindow(QtWidgets.QWidget):
             from vnpy.trader.datafeed_manager import get_global_datafeed
             
             # 使用全局单例 Datafeed
-            datafeed = get_global_datafeed(write_log=self.main_engine.write_log)
+            datafeed = get_global_datafeed(
+                write_log=self.main_engine.write_log,
+                show_error_dialog=show_error_dialog
+            )
             
             return datafeed
             
@@ -3639,11 +3645,11 @@ class ChartWindow(QtWidgets.QWidget):
         # 获取数据服务
         datafeed = get_datafeed()
         if not datafeed:
+            # Datafeed 不可用已在 DatafeedManager 中显示错误对话框
             self.main_engine.write_log(
-                "[ChartWindow] 未配置数据服务，无法下载数据。请先在设置中配置数据服务（如富途futu）",
-                "ChartWindow"
+                "[数据加载] Datafeed 服务不可用，无法下载数据"
             )
-            raise Exception(_("未配置数据服务"))
+            raise Exception(_("Datafeed 服务不可用"))
         
         # 使用 try-finally 确保连接总是被关闭，避免连接泄漏
         try:
@@ -4791,26 +4797,14 @@ class ChartWindow(QtWidgets.QWidget):
         from vnpy.trader.object import HistoryRequest
 
         try:
-            # 使用全局单例 Datafeed（如果失败是致命错误，不应创建临时连接）
+            # 使用全局单例 Datafeed
             datafeed = self._get_datafeed()
             
             if datafeed is None:
-                # 全局 Datafeed 创建失败是致命错误
-                error_msg = (
-                    "全局 Datafeed 服务不可用！\n\n"
-                    "可能原因：\n"
-                    "1. 未配置数据服务（请在设置中配置 Datafeed）\n"
-                    "2. Datafeed 初始化失败（请检查连接）\n"
-                    "3. 富途牛牛未启动或 OpenD 服务未开启\n\n"
-                    "这是系统级错误，无法进行数据补齐。"
-                )
-                self.main_engine.write_log(f"[数据补齐] ❌ 致命错误：{error_msg}")
-                
-                # 弹窗通知用户（致命错误）
-                QtWidgets.QMessageBox.critical(
-                    self,
-                    "Datafeed 服务不可用",
-                    error_msg
+                # 全局 Datafeed 不可用 - 数据补齐失败，但不阻止查看已有数据
+                self.main_engine.write_log(
+                    "[数据补齐] Datafeed 服务不可用，无法补齐数据缺口。"
+                    "已有数据仍可查看。"
                 )
                 return []
 

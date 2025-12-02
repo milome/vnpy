@@ -44,21 +44,28 @@ class DatafeedManager:
         self._datafeed: Optional[BaseDatafeed] = None
         self._access_lock: RLock = RLock()
         self._init_count: int = 0  # 跟踪初始化次数
+        self._init_failed: bool = False  # 标记初始化是否失败过
+        self._error_shown: bool = False  # 标记是否已显示过错误弹窗
         
         # 注册程序退出时的清理函数
         atexit.register(self._cleanup)
     
-    def get_datafeed(self, write_log=None) -> Optional[BaseDatafeed]:
+    def get_datafeed(self, write_log=None, show_error_dialog=False) -> Optional[BaseDatafeed]:
         """
         获取全局 Datafeed 实例
         
         Args:
             write_log: 日志输出函数（可选）
+            show_error_dialog: 是否显示错误对话框（仅首次失败时显示一次）
             
         Returns:
             Datafeed 实例，如果创建/初始化失败则返回 None
         """
         with self._access_lock:
+            # 如果已经失败过，直接返回 None（不重复尝试或弹窗）
+            if self._init_failed:
+                return None
+            
             # 如果已有实例，直接返回
             if self._datafeed is not None:
                 if write_log:
@@ -72,8 +79,19 @@ class DatafeedManager:
                 self._datafeed = get_datafeed()
                 
                 if self._datafeed is None:
+                    error_msg = "[DatafeedManager] ❌ 未配置 Datafeed 服务"
                     if write_log:
-                        write_log("[DatafeedManager] 未配置 Datafeed，无法创建实例")
+                        write_log(error_msg)
+                    
+                    self._init_failed = True
+                    
+                    # 首次失败时显示错误对话框
+                    if show_error_dialog and not self._error_shown:
+                        self._show_error_dialog("未配置 Datafeed 服务", 
+                            "系统未配置数据服务。\n\n"
+                            "请在设置中配置 Datafeed（如富途 Futu、米筐 RQData 等）")
+                        self._error_shown = True
+                    
                     return None
                 
                 # 初始化 Datafeed
@@ -87,9 +105,24 @@ class DatafeedManager:
                             )
                         return self._datafeed
                     else:
+                        error_msg = "[DatafeedManager] ❌ Datafeed 初始化失败"
                         if write_log:
-                            write_log("[DatafeedManager] Datafeed 初始化失败")
+                            write_log(error_msg)
+                        
                         self._datafeed = None
+                        self._init_failed = True
+                        
+                        # 首次失败时显示错误对话框
+                        if show_error_dialog and not self._error_shown:
+                            self._show_error_dialog("Datafeed 初始化失败", 
+                                "Datafeed 服务初始化失败。\n\n"
+                                "可能原因：\n"
+                                "• 富途牛牛未启动\n"
+                                "• OpenD 服务未开启\n"
+                                "• 网络连接问题\n\n"
+                                "请检查数据服务连接。")
+                            self._error_shown = True
+                        
                         return None
                 else:
                     # 没有 init 方法，直接使用
@@ -98,10 +131,31 @@ class DatafeedManager:
                     return self._datafeed
                     
             except Exception as e:
+                error_msg = f"[DatafeedManager] ❌ 创建 Datafeed 失败: {e}"
                 if write_log:
-                    write_log(f"[DatafeedManager] 创建 Datafeed 失败: {e}")
+                    write_log(error_msg)
+                
                 self._datafeed = None
+                self._init_failed = True
+                
+                # 首次失败时显示错误对话框
+                if show_error_dialog and not self._error_shown:
+                    self._show_error_dialog("Datafeed 创建失败", 
+                        f"创建 Datafeed 服务失败。\n\n"
+                        f"错误信息：{str(e)}\n\n"
+                        f"请检查系统配置和日志。")
+                    self._error_shown = True
+                
                 return None
+    
+    def _show_error_dialog(self, title: str, message: str) -> None:
+        """显示错误对话框（需要 Qt 环境）"""
+        try:
+            from vnpy.trader.ui import QtWidgets
+            QtWidgets.QMessageBox.critical(None, title, message)
+        except Exception:
+            # 如果 Qt 环境不可用，只打印到控制台
+            print(f"[DatafeedManager] 错误: {title} - {message}")
     
     def is_connected(self) -> bool:
         """
@@ -158,17 +212,18 @@ class DatafeedManager:
 _datafeed_manager = DatafeedManager()
 
 
-def get_global_datafeed(write_log=None) -> Optional[BaseDatafeed]:
+def get_global_datafeed(write_log=None, show_error_dialog=False) -> Optional[BaseDatafeed]:
     """
     获取全局单例 Datafeed 实例（便捷函数）
     
     Args:
         write_log: 日志输出函数（可选）
+        show_error_dialog: 是否显示错误对话框（仅首次失败时显示一次）
         
     Returns:
         Datafeed 实例，如果创建/初始化失败则返回 None
     """
-    return _datafeed_manager.get_datafeed(write_log)
+    return _datafeed_manager.get_datafeed(write_log, show_error_dialog)
 
 
 def is_datafeed_connected() -> bool:
