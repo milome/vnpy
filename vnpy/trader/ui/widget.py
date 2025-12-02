@@ -3642,32 +3642,22 @@ class ChartWindow(QtWidgets.QWidget):
         """
         from vnpy.trader.object import HistoryRequest
         from vnpy.trader.constant import Interval
-        from vnpy.trader.datafeed import get_datafeed
         
         self.main_engine.write_log(
-            f"[ChartWindow] 开始下载1分钟数据: {symbol}.{exchange.value} "
-            f"从 {start.strftime('%Y-%m-%d %H:%M')} 到 {end.strftime('%Y-%m-%d %H:%M')}",
-            "ChartWindow"
+            f"[数据加载] 开始下载1分钟数据: {symbol}.{exchange.value} "
+            f"从 {start.strftime('%Y-%m-%d %H:%M')} 到 {end.strftime('%Y-%m-%d %H:%M')}"
         )
         
-        # 获取数据服务
-        datafeed = get_datafeed()
+        # 使用全局单例 Datafeed（核心功能，失败时显示错误）
+        datafeed = self._get_datafeed(show_error_dialog=True)
         if not datafeed:
-            # Datafeed 不可用已在 DatafeedManager 中显示错误对话框
             self.main_engine.write_log(
                 "[数据加载] Datafeed 服务不可用，无法下载数据"
             )
             raise Exception(_("Datafeed 服务不可用"))
         
-        # 使用 try-finally 确保连接总是被关闭，避免连接泄漏
+        # 使用全局单例，不需要关闭连接
         try:
-            # 初始化数据服务
-            if not datafeed.init(output=self.main_engine.write_log):
-                self.main_engine.write_log(
-                    "[ChartWindow] 数据服务初始化失败，请检查数据服务是否正常运行",
-                    "ChartWindow"
-                )
-                raise Exception(_("数据服务初始化失败"))
             
             # 创建历史数据请求
             req = HistoryRequest(
@@ -3709,19 +3699,14 @@ class ChartWindow(QtWidgets.QWidget):
             # ✅ 自动聚合大周期K线数据（5分钟、1小时、4小时）
             # 复用DataManager的聚合逻辑，确保严格按照港期时间边界划分规则（period_utils.py）进行聚合
             self._aggregate_larger_intervals_using_datamanager(symbol, exchange)
-        finally:
-            # 确保关闭数据服务连接，避免连接泄漏
-            # 即使发生异常也要关闭连接，防止连接数超过限制
-            try:
-                if hasattr(datafeed, 'close'):
-                    datafeed.close()
-                    self.main_engine.write_log("[数据加载] 已关闭Datafeed连接")
-            except Exception as e:
-                # 关闭连接时出错，记录日志但不抛出异常
-                self.main_engine.write_log(
-                    f"[ChartWindow] 关闭数据服务连接时出错: {str(e)}",
-                    "ChartWindow"
-                )
+        except Exception as e:
+            # 数据加载失败，记录日志并重新抛出
+            error_msg = str(e).replace("{", "{{").replace("}", "}}")
+            self.main_engine.write_log(f"[数据加载] 加载失败: {error_msg}")
+            raise
+        
+        # 注意：不需要在 finally 中关闭 datafeed
+        # 因为使用的是全局单例，由 DatafeedManager 管理生命周期
     
     def _aggregate_larger_intervals_using_datamanager(
         self,
