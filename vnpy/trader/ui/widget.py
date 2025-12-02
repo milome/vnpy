@@ -2386,7 +2386,7 @@ class ChartWindow(QtWidgets.QWidget):
         for key in expired_keys:
             del self._open_price_cache[key]
     
-    def _get_datafeed(self, show_error_dialog: bool = False):
+    def _get_datafeed(self, show_error_dialog: bool = False, check_health: bool = False):
         """
         Get global singleton Datafeed instance.
         
@@ -2395,12 +2395,20 @@ class ChartWindow(QtWidgets.QWidget):
         
         Args:
             show_error_dialog: 是否在首次失败时显示错误对话框
+            check_health: 是否检查连接健康状态（用于运行时断开检测）
         
         Returns:
             Datafeed instance if available, None otherwise
         """
         try:
-            from vnpy.trader.datafeed_manager import get_global_datafeed
+            from vnpy.trader.datafeed_manager import get_global_datafeed, _datafeed_manager
+            
+            # 如果需要检查健康状态（运行时断开检测）
+            if check_health:
+                _datafeed_manager.check_connection_health(
+                    write_log=self.main_engine.write_log,
+                    show_error_dialog=show_error_dialog
+                )
             
             # 使用全局单例 Datafeed
             datafeed = get_global_datafeed(
@@ -4797,8 +4805,11 @@ class ChartWindow(QtWidgets.QWidget):
         from vnpy.trader.object import HistoryRequest
 
         try:
-            # 使用全局单例 Datafeed
-            datafeed = self._get_datafeed()
+            # 使用全局单例 Datafeed（检查健康状态，运行时断开会提示并尝试重连）
+            datafeed = self._get_datafeed(
+                show_error_dialog=False,  # 不在这里弹窗，由 check_health 处理
+                check_health=True  # 检查连接健康状态
+            )
             
             if datafeed is None:
                 # 全局 Datafeed 不可用 - 数据补齐失败，但不阻止查看已有数据
