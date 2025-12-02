@@ -2502,20 +2502,19 @@ class ChartWindow(QtWidgets.QWidget):
                             f"当前: {datafeed_count}/{futu_limit}"
                         )
                         if self.main_engine:
-                            self.main_engine.write_log(warning_msg, "ChartWindow")
+                            self.main_engine.write_log(warning_msg)
                     else:
                         info_msg = (
                             f"[ChartWindow] 连接数统计 - "
                             f"Datafeed: {datafeed_count}, Database: {database_count}"
                         )
                         if self.main_engine:
-                            self.main_engine.write_log(info_msg, "ChartWindow")
+                            self.main_engine.write_log(info_msg)
         except Exception as e:
             # 记录连接数失败，不影响主流程
             if self.main_engine:
                 self.main_engine.write_log(
-                    f"[ChartWindow] 记录连接数失败: {e}",
-                    "ChartWindow"
+                    f"[ChartWindow] 记录连接数失败: {e}"
                 )
     
     def _check_connection_count_before_create(self) -> bool:
@@ -6953,14 +6952,12 @@ class ChartWindow(QtWidgets.QWidget):
                         self._cached_datafeed.close()
                         if self.main_engine:
                             self.main_engine.write_log(
-                                "[ChartWindow] 已关闭Datafeed连接",
-                                "ChartWindow"
+                                "[ChartWindow] 已关闭缓存的Datafeed连接"
                             )
                 except Exception as e:
                     if self.main_engine:
                         self.main_engine.write_log(
-                            f"[ChartWindow] 关闭Datafeed连接失败: {e}",
-                            "ChartWindow"
+                            f"[ChartWindow] 关闭缓存的Datafeed连接失败: {e}"
                         )
                 finally:
                     self._cached_datafeed = None
@@ -6968,8 +6965,7 @@ class ChartWindow(QtWidgets.QWidget):
             self._open_price_cache.clear()
             if self.main_engine:
                 self.main_engine.write_log(
-                    "[ChartWindow] 已清空开盘价缓存",
-                    "ChartWindow"
+                    "[ChartWindow] 已清空开盘价缓存"
                 )
             
             # Ensure parent class method is called

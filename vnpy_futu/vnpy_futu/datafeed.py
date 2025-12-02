@@ -270,7 +270,7 @@ class Datafeed(BaseDatafeed):
                 self.quote_ctx.close()
                 self.quote_ctx = None  # Set to None to prevent double close
                 self.inited = False
-                safe_output(print, "Datafeed连接已关闭")
+                safe_output(print, "[FutuDatafeed] Futu OpenAPI连接已关闭")
         except Exception as e:
             error_msg = str(e)
             safe_output(print, f"关闭Datafeed连接时出错: {error_msg}")
