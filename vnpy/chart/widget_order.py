@@ -36,19 +36,22 @@ class ChartWidgetOrderMixin(ChartWidgetMixinBase):
                 is_duplicate = True
                 # 对于"全部成交"状态，即使去重已标记，也要继续处理以确保挂单线被删除
                 if order.status == Status.ALLTRADED:
-                    if hasattr(self, '_main_engine') and self._main_engine:
-                        self._main_engine.write_log(
-                            f"[ChartWidget] 订单更新事件已处理，但ALLTRADED状态需要强制处理以确保挂单线被删除: {order.vt_orderid}",
-                            "ChartWidget"
-                        )
+                    # 注释重复处理日志，减少日志输出
+                    # if hasattr(self, '_main_engine') and self._main_engine:
+                    #     self._main_engine.write_log(
+                    #         f"[ChartWidget] 订单更新事件已处理，但ALLTRADED状态需要强制处理以确保挂单线被删除: {order.vt_orderid}",
+                    #         "ChartWidget"
+                    #     )
                     # 继续处理，不return
+                    pass
                 else:
                     # 已处理过，跳过（非ALLTRADED状态）
-                    if hasattr(self, '_main_engine') and self._main_engine:
-                        self._main_engine.write_log(
-                            f"[ChartWidget] 订单更新事件已处理，跳过重复处理: {order.vt_orderid} status={order.status.value}",
-                            "ChartWidget"
-                        )
+                    # 注释重复处理日志，减少日志输出
+                    # if hasattr(self, '_main_engine') and self._main_engine:
+                    #     self._main_engine.write_log(
+                    #         f"[ChartWidget] 订单更新事件已处理，跳过重复处理: {order.vt_orderid} status={order.status.value}",
+                    #         "ChartWidget"
+                    #     )
                     return
         
         # 标记为已处理
@@ -425,19 +428,22 @@ class ChartWidgetOrderMixin(ChartWidgetMixinBase):
                 
                 # 对于ALLTRADED状态，即使去重已标记，也要继续处理以确保挂单线被删除和入场线被创建
                 if order.status == Status.ALLTRADED:
-                    if hasattr(self, '_main_engine') and self._main_engine:
-                        self._main_engine.write_log(
-                            f"[ChartWidget] _process_order_update: 订单更新事件已处理，但ALLTRADED状态需要继续处理: {order.vt_orderid}",
-                            "ChartWidget"
-                        )
+                    # 注释重复处理日志，减少日志输出
+                    # if hasattr(self, '_main_engine') and self._main_engine:
+                    #     self._main_engine.write_log(
+                    #         f"[ChartWidget] _process_order_update: 订单更新事件已处理，但ALLTRADED状态需要继续处理: {order.vt_orderid}",
+                    #         "ChartWidget"
+                    #     )
                     # 继续处理，不return，确保调用 update_line_from_order
+                    pass
                 else:
                     # 已处理过，跳过（非ALLTRADED状态）
-                    if hasattr(self, '_main_engine') and self._main_engine:
-                        self._main_engine.write_log(
-                            f"[ChartWidget] _process_order_update: 订单更新事件已处理，跳过重复处理: {order.vt_orderid} status={order.status.value}",
-                            "ChartWidget"
-                        )
+                    # 注释重复处理日志，减少日志输出
+                    # if hasattr(self, '_main_engine') and self._main_engine:
+                    #     self._main_engine.write_log(
+                    #         f"[ChartWidget] _process_order_update: 订单更新事件已处理，跳过重复处理: {order.vt_orderid} status={order.status.value}",
+                    #         "ChartWidget"
+                    #     )
                     return
         
         # 标记为已处理

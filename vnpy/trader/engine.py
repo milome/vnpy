@@ -726,11 +726,12 @@ class OmsEngine(BaseEngine):
             # If we have a recent calculation and gateway PnL differs significantly, preserve calculated PnL
             if has_recent_calculation and abs(gateway_pnl - calculated_pnl) > 1e-6:
                 self.positions[position.vt_positionid].pnl = calculated_pnl
-                self.main_engine.write_log(
-                    f"[OmsEngine] process_position_event: preserved calculated pnl={calculated_pnl} for {position.vt_positionid} "
-                    f"(gateway pushed pnl={gateway_pnl}, time_since_calc={current_time - last_emit_time:.1f}s)",
-                    "OmsEngine"
-                )
+                # 注释保留计算盈亏日志，减少日志输出（每秒触发多次）
+                # self.main_engine.write_log(
+                #     f"[OmsEngine] process_position_event: preserved calculated pnl={calculated_pnl} for {position.vt_positionid} "
+                #     f"(gateway pushed pnl={gateway_pnl}, time_since_calc={current_time - last_emit_time:.1f}s)",
+                #     "OmsEngine"
+                # )
 
         if self.position_view_debug:
             self.main_engine.write_log(
@@ -1167,11 +1168,11 @@ class OmsEngine(BaseEngine):
                     )
                 continue
             
-            # Log that we found a matching position and tick
-            self.main_engine.write_log(
-                f"[OmsEngine] _refresh_symbol_positions: processing position {vt_positionid} (symbol={position.vt_symbol}, volume={position.volume}, price={position.price}) with tick {tick.vt_symbol} (last={tick.last_price})",
-                "OmsEngine"
-            )
+            # 注释持仓处理日志，减少日志输出（持仓刷新每秒触发，日志过于频繁）
+            # self.main_engine.write_log(
+            #     f"[OmsEngine] _refresh_symbol_positions: processing position {vt_positionid} (symbol={position.vt_symbol}, volume={position.volume}, price={position.price}) with tick {tick.vt_symbol} (last={tick.last_price})",
+            #     "OmsEngine"
+            # )
 
             # Get contract size
             contract: ContractData | None = self.contracts.get(position.vt_symbol)
@@ -1210,11 +1211,11 @@ class OmsEngine(BaseEngine):
 
             self.last_view_emit[vt_positionid] = time.time()
 
-            # Always log before emitting
-            self.main_engine.write_log(
-                f"[OmsEngine] _refresh_symbol_positions: updating position {vt_positionid} pnl={pnl}, calling _emit_position_view",
-                "OmsEngine"
-            )
+            # 注释持仓更新日志，减少日志输出（每秒触发多次，日志过于频繁）
+            # self.main_engine.write_log(
+            #     f"[OmsEngine] _refresh_symbol_positions: updating position {vt_positionid} pnl={pnl}, calling _emit_position_view",
+            #     "OmsEngine"
+            # )
 
             if self.position_view_debug:
                 self.main_engine.write_log(
