@@ -6966,7 +6966,7 @@ class ChartWindow(QtWidgets.QWidget):
                         self._cached_datafeed.close()
                         if self.main_engine:
                             self.main_engine.write_log(
-                                "[ChartWindow] 已关闭缓存的Datafeed连接"
+                                f"[ChartWindow] 已关闭缓存的Datafeed连接 (ChartWindow ID: {id(self)})"
                             )
                 except Exception as e:
                     if self.main_engine:
