@@ -4827,28 +4827,33 @@ class ChartWindow(QtWidgets.QWidget):
         """
         from vnpy.trader.object import HistoryRequest
 
+        datafeed = None
+        should_close_datafeed = False  # 标记是否需要关闭datafeed
+        
         try:
-            # 尝试从main_engine获取datafeed
-            datafeed = None
+            # 优先使用 _get_datafeed() 方法（支持缓存和复用）
+            datafeed = self._get_datafeed()
+            
+            if datafeed is None:
+                # 降级：尝试从main_engine获取datafeed
+                if hasattr(self.main_engine, 'get_datafeed'):
+                    datafeed = self.main_engine.get_datafeed()
 
-            # 尝试获取已连接的datafeed
-            if hasattr(self.main_engine, 'get_datafeed'):
-                datafeed = self.main_engine.get_datafeed()
-
-            # 如果没有现成的datafeed，尝试创建FUTU datafeed
+            # 最后手段：创建临时的FUTU datafeed（必须关闭）
             if datafeed is None:
                 try:
                     from vnpy_futu.datafeed import Datafeed as FutuDatafeed
                     datafeed = FutuDatafeed()
+                    should_close_datafeed = True  # 标记需要关闭
                     if not datafeed.init(output=self.main_engine.write_log):
-                        self.main_engine.write_log("[FUTU API] 无法初始化FUTU数据服务，请确保富途牛牛已启动")
+                        self.main_engine.write_log("[数据补齐] 无法初始化FUTU数据服务")
                         return []
                 except ImportError:
-                    self.main_engine.write_log("[FUTU API] 未安装vnpy_futu模块")
+                    self.main_engine.write_log("[数据补齐] 未安装vnpy_futu模块")
                     return []
                 except Exception as e:
                     error_msg = str(e).replace("{", "{{").replace("}", "}}")
-                    self.main_engine.write_log(f"[FUTU API] 初始化失败: {error_msg}")
+                    self.main_engine.write_log(f"[数据补齐] 初始化Datafeed失败: {error_msg}")
                     return []
 
             # 创建历史数据请求
@@ -4864,16 +4869,25 @@ class ChartWindow(QtWidgets.QWidget):
             bars = datafeed.query_bar_history(req, output=self.main_engine.write_log)
 
             if bars:
-                self.main_engine.write_log(f"[FUTU API] 成功获取 {len(bars)} 根K线数据")
+                self.main_engine.write_log(f"[数据补齐] 从Datafeed获取了 {len(bars)} 根K线数据")
             else:
-                self.main_engine.write_log("[FUTU API] 未获取到数据")
+                self.main_engine.write_log("[数据补齐] Datafeed未返回数据")
 
             return bars
 
         except Exception as e:
             error_msg = str(e).replace("{", "{{").replace("}", "}}")
-            self.main_engine.write_log(f"[FUTU API] 获取数据失败: {error_msg}")
+            self.main_engine.write_log(f"[数据补齐] 从Datafeed获取数据失败: {error_msg}")
             return []
+        finally:
+            # ✅ 关键修复：如果创建了临时的datafeed，必须关闭
+            if should_close_datafeed and datafeed is not None:
+                try:
+                    if hasattr(datafeed, 'close'):
+                        datafeed.close()
+                        self.main_engine.write_log("[数据补齐] 已关闭临时Datafeed连接")
+                except Exception as e:
+                    self.main_engine.write_log(f"[数据补齐] 关闭临时Datafeed连接失败: {e}")
 
     def _synthesize_bars_from_minute(
         self,
