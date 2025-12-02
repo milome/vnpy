@@ -948,9 +948,43 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                 elif line_type in (PriceLineType.STOP_LOSS, PriceLineType.TAKE_PROFIT):
                     # 如果拖拽的是止损/止盈线，更新保存的点数
                     self._update_points_on_line_drag(dragging_line, final_price, line_type)
-                    # ✅ 拖拽结束后，更新创建时间（用于防止拖拽后立即触发）
+                    
+                    # ✅ 拖拽结束后，根据关联类型决定是否激活
                     if dragging_line:
-                        dragging_line.set_creation_time()
+                        # 获取拖拽线的ID
+                        dragged_line_id = None
+                        if self._price_line_manager:
+                            all_lines = self._price_line_manager.get_all_lines()
+                            for lid, line in all_lines.items():
+                                if line == dragging_line:
+                                    dragged_line_id = lid
+                                    break
+                        
+                        # 判断是否关联挂单线
+                        is_pending_related = False
+                        if dragged_line_id and self._drawing_order_controller:
+                            if hasattr(self._drawing_order_controller, '_pending_line_relations'):
+                                # 遍历所有挂单线的关联关系
+                                for pending_id, relations in self._drawing_order_controller._pending_line_relations.items():
+                                    stop_loss_info = relations.get("stop_loss")
+                                    take_profit_info = relations.get("take_profit")
+                                    
+                                    if (stop_loss_info and stop_loss_info.get("line_id") == dragged_line_id) or \
+                                       (take_profit_info and take_profit_info.get("line_id") == dragged_line_id):
+                                        is_pending_related = True
+                                        break
+                        
+                        # 根据关联类型决定是否激活
+                        if is_pending_related:
+                            # 挂单关联的止损止盈线：保持未激活状态
+                            # 不修改 creation_time（保持 None 或原值）
+                            # 等待挂单成交后再激活
+                            pass
+                        else:
+                            # 入场线关联或独立的止损止盈线：拖拽后激活
+                            # 无论是刚创建的（已激活）还是之前创建的，
+                            # 拖拽后都重新设置 creation_time（防止拖拽后立即触发）
+                            dragging_line.set_creation_time()
             
             event.accept()
             return
