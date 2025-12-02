@@ -184,26 +184,34 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
                 offset=offset
             )
             
-            # 发送订单前打印当前活动订单（用于调试）
-            all_active_orders = main_engine.get_all_active_orders()
-            symbol_active_orders = [
-                order for order in all_active_orders
-                if order.vt_symbol == vt_symbol
-            ]
-            
-            if symbol_active_orders and main_engine:
-                order_info = ", ".join([
-                    f"{order.direction.value} {order.volume}@{order.price:.1f} (ID:{order.vt_orderid[-4:]}, 状态:{order.status.value})"
-                    for order in symbol_active_orders
-                ])
-                main_engine.write_log(
-                    f"[挂单触发] 当前 {vt_symbol} 活动订单: {order_info}",
-                    "ChartWidget"
-                )
-            
             # 发送订单
             vt_orderid = None
             try:
+                # 发送订单前打印当前活动订单（用于调试）
+                try:
+                    all_active_orders = main_engine.get_all_active_orders()
+                    symbol_active_orders = [
+                        order for order in all_active_orders
+                        if order.vt_symbol == vt_symbol
+                    ]
+                    
+                    if symbol_active_orders:
+                        order_info = ", ".join([
+                            f"{order.direction.value} {order.volume}@{order.price:.1f} (ID:{order.vt_orderid[-4:]}, 状态:{order.status.value})"
+                            for order in symbol_active_orders
+                        ])
+                        main_engine.write_log(
+                            f"[挂单触发] 当前 {vt_symbol} 活动订单: {order_info}",
+                            "ChartWidget"
+                        )
+                except Exception as log_error:
+                    # 打印活动订单失败不应该阻止下单
+                    if main_engine:
+                        main_engine.write_log(
+                            f"[ChartWidget] 查询活动订单失败: {str(log_error)}",
+                            "ChartWidget"
+                        )
+                
                 vt_orderid = main_engine.send_order(req, contract.gateway_name)
                 if vt_orderid:
                     if main_engine:
