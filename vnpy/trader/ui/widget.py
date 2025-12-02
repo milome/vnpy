@@ -2277,8 +2277,17 @@ class ChartWindow(QtWidgets.QWidget):
         # 数据缺口状态
         self._has_data_gap: bool = False
         self._gap_info: str = ""
+        
+        # Query cache for open prices (reduces database and Datafeed queries)
+        # Format: (symbol: str, datetime: datetime) -> (open_price: float, timestamp: float)
+        self._open_price_cache: dict[tuple[str, datetime], tuple[float, float]] = {}
+        self._cache_ttl: int = 60  # Cache TTL: 60 seconds
+        self._cache_max_size: int = 1000  # Maximum cache size: 1000 entries
+        
+        # 注意：不再需要 _cached_datafeed，因为使用全局单例 DatafeedManager
+        # Datafeed 连接现在由 DatafeedManager 管理，程序退出时自动关闭
 
-        # Phase 5: 性能监控（可选，通过配置开启）
+        # Performance monitoring (optional, enabled via configuration)
         from vnpy.trader.setting import SETTINGS
         self._perf_monitoring_enabled: bool = SETTINGS.get("chart.performance_monitoring", False)
         self._perf_stats: dict = {
@@ -2317,9 +2326,209 @@ class ChartWindow(QtWidgets.QWidget):
         # 默认加载合约数据（必须在init_ui()之后调用，因为需要symbol_line组件）
         self.load_default_symbol()
 
+    def _get_cached_open_price(self, symbol: str, bar_datetime: datetime) -> float | None:
+        """
+        Get cached open price for a symbol and bar datetime.
+        
+        This method implements a TTL-based cache (60 seconds) to reduce
+        redundant database and Datafeed queries for open prices.
+        
+        Args:
+            symbol: Contract symbol
+            bar_datetime: Bar datetime
+            
+        Returns:
+            Cached open price if available and not expired, None otherwise
+        """
+        cache_key = (symbol, bar_datetime)
+        if cache_key in self._open_price_cache:
+            price, timestamp = self._open_price_cache[cache_key]
+            current_time = time.time()
+            if current_time - timestamp < self._cache_ttl:
+                return price  # ✅ 缓存有效
+            else:
+                # 缓存过期，删除
+                del self._open_price_cache[cache_key]
+        return None
+    
+    def _set_cached_open_price(self, symbol: str, bar_datetime: datetime, price: float) -> None:
+        """
+        Set cached open price for a symbol and bar datetime.
+        
+        This method automatically cleans up expired cache entries when
+        the cache size exceeds the limit (1000 entries).
+        
+        Args:
+            symbol: Contract symbol
+            bar_datetime: Bar datetime
+            price: Open price to cache
+        """
+        cache_key = (symbol, bar_datetime)
+        self._open_price_cache[cache_key] = (price, time.time())
+        
+        # 如果缓存大小超过限制，清理过期缓存
+        if len(self._open_price_cache) > self._cache_max_size:
+            self._clean_expired_cache()
+    
+    def _clean_expired_cache(self) -> None:
+        """
+        Clean up expired cache entries.
+        
+        Removes all cache entries that have exceeded the TTL (60 seconds).
+        This method is called automatically when the cache size exceeds
+        the maximum limit (1000 entries).
+        """
+        current_time = time.time()
+        expired_keys = [
+            key for key, (_, timestamp) in self._open_price_cache.items()
+            if current_time - timestamp >= self._cache_ttl
+        ]
+        for key in expired_keys:
+            del self._open_price_cache[key]
+    
+    def _get_datafeed(self, show_error_dialog: bool = False, check_health: bool = False):
+        """
+        Get global singleton Datafeed instance.
+        
+        使用全局单例 DatafeedManager，确保整个程序只有一个 Datafeed 连接。
+        这解决了多个 ChartWindow 创建重复连接导致超过 128 连接限制的问题。
+        
+        Args:
+            show_error_dialog: 是否在首次失败时显示错误对话框
+            check_health: 是否检查连接健康状态（用于运行时断开检测）
+        
+        Returns:
+            Datafeed instance if available, None otherwise
+        """
+        try:
+            from vnpy.trader.datafeed_manager import get_global_datafeed, _datafeed_manager
+            
+            # 如果需要检查健康状态（运行时断开检测）
+            if check_health:
+                _datafeed_manager.check_connection_health(
+                    write_log=self.main_engine.write_log,
+                    show_error_dialog=show_error_dialog
+                )
+            
+            # 使用全局单例 Datafeed
+            datafeed = get_global_datafeed(
+                write_log=self.main_engine.write_log,
+                show_error_dialog=show_error_dialog
+            )
+            
+            return datafeed
+            
+        except Exception as e:
+            # 记录错误但不抛出异常
+            if self.main_engine:
+                self.main_engine.write_log(
+                    f"[ChartWindow-{id(self)}] 获取全局Datafeed失败: {e}"
+                )
+            return None
+
+    def _get_connection_count(self) -> dict[str, int] | None:
+        """
+        Get connection count statistics.
+        
+        Returns connection count for Datafeed and database connections.
+        Note: Database connection count is usually not directly available
+        as most database drivers use connection pools.
+        
+        Returns:
+            Dictionary with connection counts: {"database": count, "datafeed": count},
+            or None if unable to retrieve
+        """
+        try:
+            result = {}
+            
+            # Datafeed连接数：检查缓存的Datafeed实例
+            datafeed_count = 0
+            if self._cached_datafeed is not None:
+                datafeed_count = 1
+            result["datafeed"] = datafeed_count
+            
+            # 数据库连接数：尝试从数据库获取（如果支持）
+            # 注意：大多数数据库驱动使用连接池，无法直接获取连接数
+            # 这里只返回Datafeed连接数
+            result["database"] = None  # 数据库连接数通常无法直接获取
+            
+            return result
+        except Exception:
+            return None
+    
+    def _log_connection_count(self) -> None:
+        """
+        Log connection count statistics.
+        
+        Periodically logs connection counts to help diagnose connection leaks.
+        Issues a warning when connection count approaches the limit (90% threshold
+        for Futu OpenAPI's 128 connection limit).
+        """
+        try:
+            connection_count = self._get_connection_count()
+            if connection_count:
+                datafeed_count = connection_count.get("datafeed", 0)
+                database_count = connection_count.get("database", "N/A")
+                
+                # 检查是否接近限制（Futu OpenAPI限制为128）
+                futu_limit = 128
+                if datafeed_count is not None and datafeed_count > 0:
+                    if datafeed_count >= futu_limit * 0.9:  # 90%阈值
+                        warning_msg = (
+                            f"[ChartWindow] ⚠️ 警告：Datafeed连接数接近限制！"
+                            f"当前: {datafeed_count}/{futu_limit}"
+                        )
+                        if self.main_engine:
+                            self.main_engine.write_log(warning_msg)
+                    else:
+                        info_msg = (
+                            f"[ChartWindow] 连接数统计 - "
+                            f"Datafeed: {datafeed_count}, Database: {database_count}"
+                        )
+                        if self.main_engine:
+                            self.main_engine.write_log(info_msg)
+        except Exception as e:
+            # 记录连接数失败，不影响主流程
+            if self.main_engine:
+                self.main_engine.write_log(
+                    f"[ChartWindow] 记录连接数失败: {e}"
+                )
+    
+    def _check_connection_count_before_create(self) -> bool:
+        """
+        Check connection count before creating new connection.
+        
+        This method checks if the connection count is approaching the limit
+        (80% threshold for Futu OpenAPI's 128 connection limit) and issues
+        a warning if so. Still allows connection creation but logs a warning.
+        
+        Returns:
+            True if connection can be created, False if approaching limit
+        """
+        try:
+            connection_count = self._get_connection_count()
+            if connection_count:
+                datafeed_count = connection_count.get("datafeed", 0)
+                futu_limit = 128
+                
+                # 如果Datafeed连接数接近限制，发出警告
+                if datafeed_count is not None and datafeed_count >= futu_limit * 0.8:  # 80%阈值
+                    if self.main_engine:
+                        self.main_engine.write_log(
+                            f"[ChartWindow] ⚠️ 警告：Datafeed连接数较高 ({datafeed_count}/{futu_limit})，"
+                            f"建议复用现有连接",
+                            "ChartWindow"
+                        )
+                    # 仍然允许创建，但发出警告
+                    return True
+            return True
+        except Exception:
+            # 检查失败，允许创建（保守策略）
+            return True
+
     def _record_performance_metric(self, metric_name: str, latency_ms: float) -> None:
         """
-        Phase 5: 性能监控辅助方法 - 统一记录性能指标
+        Performance monitoring helper method - unified performance metrics logging
 
         Args:
             metric_name: 指标名称（"tick_update", "chart_refresh", "price_breakthrough"）
@@ -2607,7 +2816,7 @@ class ChartWindow(QtWidgets.QWidget):
 
     def register_event(self) -> None:
         """
-        Phase 5: 注册事件监听器
+        Register event listeners
 
         注册 EVENT_TICK 和 EVENT_ORDER 事件监听，用于接收实时 tick 数据并更新图表。
         使用信号-槽机制确保线程安全。
@@ -2666,12 +2875,12 @@ class ChartWindow(QtWidgets.QWidget):
         2. 价格突破监控（用于画线交易功能）
         3. 按钮状态更新
 
-        Phase 5: 性能监控 - 测量tick更新延迟
+        Performance monitoring - measure tick update latency
         """
         from vnpy.trader.object import TickData
         tick: TickData = event.data
 
-        # Phase 5: 性能监控 - 开始测量tick更新延迟
+        # Performance monitoring - start measuring tick update latency
         tick_update_start_time = None
         if self._perf_monitoring_enabled:
             tick_update_start_time = time.perf_counter()
@@ -2701,7 +2910,7 @@ class ChartWindow(QtWidgets.QWidget):
                         # 规范化datetime（去掉秒和微秒，确保与历史数据一致）
                         bar.datetime = bar.datetime.replace(second=0, microsecond=0)
                         
-                        # ✅ 对于1分钟周期，检查并修正开盘价
+                        # For 1-minute interval, check and correct open price
                         # 
                         # 【开盘价定义】：1分钟K线的开盘价 = 该分钟第一个tick的last_price
                         # 
@@ -2775,130 +2984,156 @@ class ChartWindow(QtWidgets.QWidget):
                             # 方法3：如果历史数据中没有，尝试从数据库加载该分钟的K线
                             # 参照物：数据库中的K线开盘价（已完成，从完整tick数据生成，理论上正确）
                             if not correct_open_price:
+                                # Check cache first to reduce database queries
                                 try:
-                                    from vnpy.trader.database import get_database
                                     from vnpy.trader.utility import extract_vt_symbol
-                                    from vnpy.trader.constant import Interval
-                                    
-                                    database = get_database()
                                     symbol, exchange = extract_vt_symbol(self.current_vt_symbol)
-                                    
-                                    # 查询该分钟的K线数据
-                                    minute_bars = database.load_bar_data(
-                                        symbol,
-                                        exchange,
-                                        Interval.MINUTE,
-                                        bar_minute_start,
-                                        bar_minute_start
-                                    )
-                                    
-                                    if minute_bars and len(minute_bars) > 0:
-                                        # 找到该分钟的K线，使用其开盘价
-                                        minute_bar = minute_bars[0]
-                                        if minute_bar.open_price > 0:
-                                            correct_open_price = minute_bar.open_price
-                                            self.main_engine.write_log(
-                                                f"[实时K线] 1分钟K线({bar_minute_start.strftime('%H:%M')}) "
-                                                f"从数据库获取开盘价: {correct_open_price} "
-                                                f"(参照物：数据库K线，已完成)"
-                                            )
+                                    cached_price = self._get_cached_open_price(symbol, bar_minute_start)
+                                    if cached_price is not None:
+                                        correct_open_price = cached_price
+                                    else:
+                                        # 缓存未命中，查询数据库
+                                        from vnpy.trader.database import get_database
+                                        from vnpy.trader.constant import Interval
+                                        
+                                        database = get_database()
+                                        symbol, exchange = extract_vt_symbol(self.current_vt_symbol)
+                                        
+                                        # 查询该分钟的K线数据
+                                        minute_bars = database.load_bar_data(
+                                            symbol,
+                                            exchange,
+                                            Interval.MINUTE,
+                                            bar_minute_start,
+                                            bar_minute_start
+                                        )
+                                        
+                                        if minute_bars and len(minute_bars) > 0:
+                                            # 找到该分钟的K线，使用其开盘价
+                                            minute_bar = minute_bars[0]
+                                            if minute_bar.open_price > 0:
+                                                correct_open_price = minute_bar.open_price
+                                                # Cache the result to reduce future queries
+                                                self._set_cached_open_price(symbol, bar_minute_start, correct_open_price)
+                                                self.main_engine.write_log(
+                                                    f"[实时K线] 1分钟K线({bar_minute_start.strftime('%H:%M')}) "
+                                                    f"从数据库获取开盘价: {correct_open_price} "
+                                                    f"(参照物：数据库K线，已完成)"
+                                                )
                                 except Exception as e:
-                                    # 数据库查询失败，忽略
-                                    pass
+                                    # Database query failed, log error but don't interrupt main flow
+                                    if self.main_engine:
+                                        self.main_engine.write_log(
+                                            f"[ChartWindow] 数据库查询开盘价失败: {e}",
+                                            "ChartWindow"
+                                        )
+                                    # Don't re-raise exception to ensure main flow continues
                             
                             # 方法4（最后手段）：从tick数据恢复正确的开盘价
                             # 参照物：该分钟第一个tick的last_price（这是开盘价的准确定义）
                             # 如果前三种方法都无法获取，尝试从数据库或datafeed查询该分钟的历史tick数据
                             if not correct_open_price:
+                                # Check cache first (tick data queries use the same cache key)
                                 try:
-                                    from datetime import timedelta
-                                    from vnpy.trader.database import get_database
                                     from vnpy.trader.utility import extract_vt_symbol
-                                    from vnpy.trader.constant import Interval
-                                    from vnpy.trader.object import HistoryRequest
-                                    
                                     symbol, exchange = extract_vt_symbol(self.current_vt_symbol)
-                                    
-                                    # 计算该分钟的时间范围
-                                    minute_end = bar_minute_start + timedelta(minutes=1)
-                                    
-                                    # 方法4.1：尝试从数据库加载该分钟的tick数据
-                                    try:
-                                        database = get_database()
-                                        ticks = database.load_tick_data(
-                                            symbol,
-                                            exchange,
-                                            bar_minute_start,
-                                            minute_end
-                                        )
+                                    cached_price = self._get_cached_open_price(symbol, bar_minute_start)
+                                    if cached_price is not None:
+                                        correct_open_price = cached_price
+                                    else:
+                                        # 缓存未命中，查询数据库或datafeed
+                                        from datetime import timedelta
+                                        from vnpy.trader.database import get_database
+                                        from vnpy.trader.constant import Interval
+                                        from vnpy.trader.object import HistoryRequest
                                         
-                                        if ticks:
-                                            # 按时间排序，找到第一个tick
-                                            ticks.sort(key=lambda x: x.datetime)
-                                            first_tick = ticks[0]
-                                            if first_tick.last_price > 0:
-                                                correct_open_price = first_tick.last_price
-                                                # 暂时注释掉日志，减少日志输出
-                                                # self.main_engine.write_log(
-                                                #     f"[实时K线] 1分钟K线({bar_minute_start.strftime('%H:%M')}) "
-                                                #     f"从数据库tick数据获取开盘价: {correct_open_price} "
-                                                #     f"(参照物：该分钟第一个tick，时间: {first_tick.datetime.strftime('%H:%M:%S')})"
-                                                # )
-                                                pass  # 确保代码块不为空
-                                    except Exception as e:
-                                        # 数据库查询tick失败，继续尝试datafeed
-                                        pass
-                                    
-                                    # 方法4.2：如果数据库没有，尝试从datafeed查询该分钟的tick数据
-                                    # 注意：FUTU datafeed的query_tick_history会返回空列表（不会发API请求）
-                                    # 其他支持tick数据查询的datafeed可以正常使用
-                                    if not correct_open_price:
+                                        # 计算该分钟的时间范围
+                                        minute_end = bar_minute_start + timedelta(minutes=1)
+                                        
+                                        # 方法4.1：尝试从数据库加载该分钟的tick数据
                                         try:
-                                            datafeed = None
-                                            if hasattr(self.main_engine, 'get_datafeed'):
-                                                datafeed = self.main_engine.get_datafeed()
+                                            database = get_database()
+                                            ticks = database.load_tick_data(
+                                                symbol,
+                                                exchange,
+                                                bar_minute_start,
+                                                minute_end
+                                            )
                                             
-                                            # 如果没有现成的datafeed，尝试创建FUTU datafeed
-                                            if datafeed is None:
-                                                try:
-                                                    from vnpy_futu.datafeed import Datafeed as FutuDatafeed
-                                                    datafeed = FutuDatafeed()
-                                                    if not datafeed.init(output=self.main_engine.write_log):
-                                                        datafeed = None
-                                                except ImportError:
-                                                    pass
-                                                except Exception:
-                                                    pass
-                                            
-                                            if datafeed:
-                                                req = HistoryRequest(
-                                                    symbol=symbol,
-                                                    exchange=exchange,
-                                                    interval=Interval.TICK,
-                                                    start=bar_minute_start,
-                                                    end=minute_end
-                                                )
-                                                
-                                                ticks = datafeed.query_tick_history(req, output=self.main_engine.write_log)
-                                                
-                                                if ticks:
-                                                    # 按时间排序，找到第一个tick
-                                                    ticks.sort(key=lambda x: x.datetime)
-                                                    first_tick = ticks[0]
-                                                    if first_tick.last_price > 0:
-                                                        correct_open_price = first_tick.last_price
-                                                        # 暂时注释掉日志，减少日志输出
-                                                        # self.main_engine.write_log(
-                                                        #     f"[实时K线] 1分钟K线({bar_minute_start.strftime('%H:%M')}) "
-                                                        #     f"从datafeed tick数据获取开盘价: {correct_open_price} "
-                                                        #     f"(参照物：该分钟第一个tick，时间: {first_tick.datetime.strftime('%H:%M:%S')})"
-                                                        # )
+                                            if ticks:
+                                                # 按时间排序，找到第一个tick
+                                                ticks.sort(key=lambda x: x.datetime)
+                                                first_tick = ticks[0]
+                                                if first_tick.last_price > 0:
+                                                    correct_open_price = first_tick.last_price
+                                                    # Cache the result to reduce future queries
+                                                    self._set_cached_open_price(symbol, bar_minute_start, correct_open_price)
+                                                    # 暂时注释掉日志，减少日志输出
+                                                    # self.main_engine.write_log(
+                                                    #     f"[实时K线] 1分钟K线({bar_minute_start.strftime('%H:%M')}) "
+                                                    #     f"从数据库tick数据获取开盘价: {correct_open_price} "
+                                                    #     f"(参照物：该分钟第一个tick，时间: {first_tick.datetime.strftime('%H:%M:%S')})"
+                                                    # )
+                                                    pass  # 确保代码块不为空
                                         except Exception as e:
-                                            # datafeed查询失败，忽略
-                                            pass
+                                            # Database tick query failed, log error but continue with datafeed
+                                            if self.main_engine:
+                                                self.main_engine.write_log(
+                                                    f"[ChartWindow] 数据库查询tick数据失败: {e}",
+                                                    "ChartWindow"
+                                                )
+                                            # Continue with datafeed query, don't interrupt main flow
+                                        
+                                        # 方法4.2：如果数据库没有，尝试从datafeed查询该分钟的tick数据
+                                        # 注意：FUTU datafeed的query_tick_history会返回空列表（不会发API请求）
+                                        # 其他支持tick数据查询的datafeed可以正常使用
+                                        if not correct_open_price:
+                                            try:
+                                                # Use cached Datafeed instance to avoid frequent connection creation
+                                                datafeed = self._get_datafeed()
+                                                
+                                                if datafeed:
+                                                    req = HistoryRequest(
+                                                        symbol=symbol,
+                                                        exchange=exchange,
+                                                        interval=Interval.TICK,
+                                                        start=bar_minute_start,
+                                                        end=minute_end
+                                                    )
+                                                    
+                                                    ticks = datafeed.query_tick_history(req, output=self.main_engine.write_log)
+                                                    
+                                                    if ticks:
+                                                        # 按时间排序，找到第一个tick
+                                                        ticks.sort(key=lambda x: x.datetime)
+                                                        first_tick = ticks[0]
+                                                        if first_tick.last_price > 0:
+                                                            correct_open_price = first_tick.last_price
+                                                            # Cache the result to reduce future queries
+                                                            self._set_cached_open_price(symbol, bar_minute_start, correct_open_price)
+                                                            # 暂时注释掉日志，减少日志输出
+                                                            # self.main_engine.write_log(
+                                                            #     f"[实时K线] 1分钟K线({bar_minute_start.strftime('%H:%M')}) "
+                                                            #     f"从datafeed tick数据获取开盘价: {correct_open_price} "
+                                                            #     f"(参照物：该分钟第一个tick，时间: {first_tick.datetime.strftime('%H:%M:%S')})"
+                                                            # )
+                                                            pass  # 确保代码块不为空
+                                            except Exception as e:
+                                                # Datafeed query failed, log error but don't interrupt main flow
+                                                if self.main_engine:
+                                                    self.main_engine.write_log(
+                                                        f"[ChartWindow] Datafeed查询tick数据失败: {e}",
+                                                        "ChartWindow"
+                                                    )
+                                                # Don't re-raise exception to ensure main flow continues
                                 except Exception as e:
-                                    # 查询tick数据失败，忽略
-                                    pass
+                                    # Tick data query failed, log error but don't interrupt main flow
+                                    if self.main_engine:
+                                        self.main_engine.write_log(
+                                            f"[ChartWindow] 查询tick数据失败: {e}",
+                                            "ChartWindow"
+                                        )
+                                    # Don't re-raise exception to ensure main flow continues
                         
                         # 如果找到了参照物且开盘价不同，则使用参照物的开盘价
                         if correct_open_price and correct_open_price > 0:
@@ -2930,14 +3165,14 @@ class ChartWindow(QtWidgets.QWidget):
                         
                         # 更新图表显示（BarManager会自动处理新bar的添加和已有bar的更新）
                         # 这会实时更新最后一根K线的显示（如果bar已存在）或添加新K线（如果bar不存在）
-                        # Phase 5: 性能监控 - 测量图表刷新延迟
+                        # Performance monitoring - measure chart refresh latency
                         chart_refresh_start_time = None
                         if self._perf_monitoring_enabled:
                             chart_refresh_start_time = time.perf_counter()
 
                         self.chart.update_bar(bar)
 
-                        # Phase 5: 性能监控 - 记录图表刷新延迟
+                        # Performance monitoring - log chart refresh latency
                         if self._perf_monitoring_enabled and chart_refresh_start_time is not None:
                             chart_refresh_end_time = time.perf_counter()
                             chart_refresh_latency_ms = (chart_refresh_end_time - chart_refresh_start_time) * 1000
@@ -2958,20 +3193,20 @@ class ChartWindow(QtWidgets.QWidget):
                 if line.get_line_type() == PriceLineType.PENDING
             }
             if pending_lines:
-                # Phase 5: 性能监控 - 测量价格突破触发延迟
+                # Performance monitoring - measure price breakthrough trigger latency
                 breakthrough_start_time = None
                 if self._perf_monitoring_enabled:
                     breakthrough_start_time = time.perf_counter()
 
                 self.chart._breakthrough_monitor.update_tick(tick, all_lines)
 
-                # Phase 5: 性能监控 - 记录价格突破触发延迟
+                # Performance monitoring - log price breakthrough trigger latency
                 if self._perf_monitoring_enabled and breakthrough_start_time is not None:
                     breakthrough_end_time = time.perf_counter()
                     breakthrough_latency_ms = (breakthrough_end_time - breakthrough_start_time) * 1000
                     self._record_performance_metric("price_breakthrough", breakthrough_latency_ms)
 
-        # 更新止损/止盈线监控（Phase 4: 实时止损止盈功能）
+        # Update stop loss/take profit line monitoring (real-time stop loss/take profit feature)
         if self.chart and self.chart._price_line_manager:
             all_lines = self.chart._price_line_manager.get_all_lines()
             from vnpy.chart.price_line import PriceLineType
@@ -3013,7 +3248,7 @@ class ChartWindow(QtWidgets.QWidget):
         # 更新按钮状态（现在始终启用，如果有合约的话）
         self._update_simulate_buttons_state()
 
-        # Phase 5: 性能监控 - 记录tick更新延迟
+        # Performance monitoring - log tick update latency
         if self._perf_monitoring_enabled and tick_update_start_time is not None:
             tick_update_end_time = time.perf_counter()
             tick_update_latency_ms = (tick_update_end_time - tick_update_start_time) * 1000
@@ -3418,11 +3653,11 @@ class ChartWindow(QtWidgets.QWidget):
         # 获取数据服务
         datafeed = get_datafeed()
         if not datafeed:
+            # Datafeed 不可用已在 DatafeedManager 中显示错误对话框
             self.main_engine.write_log(
-                "[ChartWindow] 未配置数据服务，无法下载数据。请先在设置中配置数据服务（如富途futu）",
-                "ChartWindow"
+                "[数据加载] Datafeed 服务不可用，无法下载数据"
             )
-            raise Exception(_("未配置数据服务"))
+            raise Exception(_("Datafeed 服务不可用"))
         
         # 使用 try-finally 确保连接总是被关闭，避免连接泄漏
         try:
@@ -3480,10 +3715,7 @@ class ChartWindow(QtWidgets.QWidget):
             try:
                 if hasattr(datafeed, 'close'):
                     datafeed.close()
-                    self.main_engine.write_log(
-                        "[ChartWindow] 已关闭数据服务连接",
-                        "ChartWindow"
-                    )
+                    self.main_engine.write_log("[数据加载] 已关闭Datafeed连接")
             except Exception as e:
                 # 关闭连接时出错，记录日志但不抛出异常
                 self.main_engine.write_log(
@@ -3559,8 +3791,7 @@ class ChartWindow(QtWidgets.QWidget):
                 count_4h = datamanager_engine.aggregate_4hour_bars(symbol, exchange)
                 if count_4h > 0:
                     self.main_engine.write_log(
-                        f"[ChartWindow] 已聚合 {count_4h} 条4小时K线数据",
-                        "ChartWindow"
+                        f"[数据加载] 已聚合 {count_4h} 条4小时K线数据"
                     )
             except Exception as e:
                 error_msg = str(e).replace("{", "{{").replace("}", "}}")
@@ -3608,7 +3839,7 @@ class ChartWindow(QtWidgets.QWidget):
         """
         切换到新的合约图表
 
-        Phase 5: 合约切换时的事件处理说明：
+        Event handling when switching contracts:
         - 不需要取消注册和重新注册事件监听器
         - process_tick_event 方法已经通过过滤 current_vt_symbol 来处理，
           只处理当前显示合约的 tick，因此切换合约时只需更新 current_vt_symbol
@@ -3622,7 +3853,7 @@ class ChartWindow(QtWidgets.QWidget):
         if vt_symbol == self.current_vt_symbol:
             return
 
-        # Phase 5: 合约切换时，事件监听器保持不变，只需更新当前合约代码
+        # When switching contracts, event listeners remain unchanged, only update current contract code
         # process_tick_event 会通过过滤 current_vt_symbol 自动处理新合约的 tick
         # 保存新的合约代码
         self.current_vt_symbol = vt_symbol
@@ -4358,6 +4589,9 @@ class ChartWindow(QtWidgets.QWidget):
             local_tz = ZoneInfo(get_localzone_name())
             now = datetime.now(local_tz)
 
+            # 解析合约代码和交易所（提前解析，避免后面使用时未定义）
+            symbol, exchange = extract_vt_symbol(vt_symbol)
+            
             # ✅ 对于1分钟和5分钟周期，排除当前时间周期，避免补齐未完成的K线
             # 这样可以确保最后几根K线的数据准确，不会被未完成的K线覆盖
             from vnpy.trader.period_utils import get_period_start
@@ -4406,7 +4640,6 @@ class ChartWindow(QtWidgets.QWidget):
             )
 
             # 从数据库加载1分钟数据来填充gap（仅1分钟周期尝试数据库）
-            symbol, exchange = extract_vt_symbol(vt_symbol)
             minute_bars = []
 
             if interval == Interval.MINUTE:
@@ -4572,28 +4805,19 @@ class ChartWindow(QtWidgets.QWidget):
         from vnpy.trader.object import HistoryRequest
 
         try:
-            # 尝试从main_engine获取datafeed
-            datafeed = None
-
-            # 尝试获取已连接的datafeed
-            if hasattr(self.main_engine, 'get_datafeed'):
-                datafeed = self.main_engine.get_datafeed()
-
-            # 如果没有现成的datafeed，尝试创建FUTU datafeed
+            # 使用全局单例 Datafeed（检查健康状态，运行时断开会提示并尝试重连）
+            datafeed = self._get_datafeed(
+                show_error_dialog=False,  # 不在这里弹窗，由 check_health 处理
+                check_health=True  # 检查连接健康状态
+            )
+            
             if datafeed is None:
-                try:
-                    from vnpy_futu.datafeed import Datafeed as FutuDatafeed
-                    datafeed = FutuDatafeed()
-                    if not datafeed.init(output=self.main_engine.write_log):
-                        self.main_engine.write_log("[FUTU API] 无法初始化FUTU数据服务，请确保富途牛牛已启动")
-                        return []
-                except ImportError:
-                    self.main_engine.write_log("[FUTU API] 未安装vnpy_futu模块")
-                    return []
-                except Exception as e:
-                    error_msg = str(e).replace("{", "{{").replace("}", "}}")
-                    self.main_engine.write_log(f"[FUTU API] 初始化失败: {error_msg}")
-                    return []
+                # 全局 Datafeed 不可用 - 数据补齐失败，但不阻止查看已有数据
+                self.main_engine.write_log(
+                    "[数据补齐] Datafeed 服务不可用，无法补齐数据缺口。"
+                    "已有数据仍可查看。"
+                )
+                return []
 
             # 创建历史数据请求
             req = HistoryRequest(
@@ -4608,15 +4832,15 @@ class ChartWindow(QtWidgets.QWidget):
             bars = datafeed.query_bar_history(req, output=self.main_engine.write_log)
 
             if bars:
-                self.main_engine.write_log(f"[FUTU API] 成功获取 {len(bars)} 根K线数据")
+                self.main_engine.write_log(f"[数据补齐] 从Datafeed获取了 {len(bars)} 根K线数据")
             else:
-                self.main_engine.write_log("[FUTU API] 未获取到数据")
+                self.main_engine.write_log("[数据补齐] Datafeed未返回数据")
 
             return bars
 
         except Exception as e:
             error_msg = str(e).replace("{", "{{").replace("}", "}}")
-            self.main_engine.write_log(f"[FUTU API] 获取数据失败: {error_msg}")
+            self.main_engine.write_log(f"[数据补齐] 从Datafeed获取数据失败: {error_msg}")
             return []
 
     def _synthesize_bars_from_minute(
@@ -5092,14 +5316,14 @@ class ChartWindow(QtWidgets.QWidget):
                 self.history_data[self._current_bar_index] = self._current_bar
 
         # 更新图表显示
-        # Phase 5: 性能监控 - 测量图表刷新延迟（大周期更新）
+        # Performance monitoring - measure chart refresh latency (large timeframe update)
         chart_refresh_start_time = None
         if self._perf_monitoring_enabled:
             chart_refresh_start_time = time.perf_counter()
 
         self.chart.update_bar(self._current_bar)
 
-        # Phase 5: 性能监控 - 记录图表刷新延迟（大周期更新）
+        # Performance monitoring - log chart refresh latency (large timeframe update)
         if self._perf_monitoring_enabled and chart_refresh_start_time is not None:
             chart_refresh_end_time = time.perf_counter()
             chart_refresh_latency_ms = (chart_refresh_end_time - chart_refresh_start_time) * 1000
@@ -6625,7 +6849,7 @@ class ChartWindow(QtWidgets.QWidget):
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         """
-        Phase 5: 窗口关闭时注销事件监听
+        Unregister event listeners when window closes
 
         确保在窗口关闭时正确注销所有事件监听器，避免内存泄漏。
 
@@ -6689,5 +6913,14 @@ class ChartWindow(QtWidgets.QWidget):
                     "ChartWindow"
                 )
         finally:
-            # 确保调用父类方法
+            # Clean up cache (注意：不再需要关闭 Datafeed，因为使用全局单例)
+            # Datafeed 连接由 DatafeedManager 管理，程序退出时自动关闭
+            
+            self._open_price_cache.clear()
+            if self.main_engine:
+                self.main_engine.write_log(
+                    f"[ChartWindow-{id(self)}] 已清空开盘价缓存"
+                )
+            
+            # Ensure parent class method is called
             super().closeEvent(event)

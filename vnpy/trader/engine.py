@@ -351,7 +351,7 @@ class MainEngine:
             if datafeed and hasattr(datafeed, 'close'):
                 datafeed.close()
                 try:
-                    self.write_log("Datafeed连接已关闭")
+                    self.write_log("[MainEngine] 全局Datafeed连接已关闭")
                 except Exception:
                     pass
         except Exception as e:

@@ -87,10 +87,20 @@ class ChartItem(pg.GraphicsObject):
     def update_bar(self, bar: BarData) -> None:
         """
         Update single bar data.
+        
+        Note: This method explicitly releases the old QPicture object before
+        updating to prevent resource leaks. QPicture is a C++ object that
+        requires explicit memory management.
         """
         ix: int | None = self._manager.get_index(bar.datetime)
         if ix is None:
             return
+
+        # Explicitly release old QPicture object to prevent resource leaks
+        # QPicture is a C++ object that requires explicit memory management
+        old_picture = self._bar_picutures.get(ix)
+        if old_picture is not None:
+            del old_picture
 
         self._bar_picutures[ix] = None
 
@@ -159,7 +169,21 @@ class ChartItem(pg.GraphicsObject):
     def clear_all(self) -> None:
         """
         Clear all data in the item.
+        
+        Note: This method explicitly releases all cached QPicture objects
+        to prevent resource leaks. QPicture is a C++ object that requires
+        explicit memory management.
         """
+        # Explicitly release all cached QPicture objects to prevent resource leaks
+        for ix in list(self._bar_picutures.keys()):
+            picture = self._bar_picutures.pop(ix)
+            if picture is not None:
+                del picture
+
+        # Explicitly release the overall drawing object
+        if self._item_picuture is not None:
+            del self._item_picuture
+
         self._item_picuture = None
         self._bar_picutures.clear()
         self.update()
