@@ -787,6 +787,47 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                             if self._price_line_drag_handler:
                                 self._price_line_drag_handler._preview_line = None
                             
+                            # ✅ 价格合理性检查：防止止盈线设置在错误位置导致立即触发
+                            current_price = 0
+                            if hasattr(self, '_main_engine') and self._main_engine and hasattr(self, '_vt_symbol') and self._vt_symbol:
+                                tick = self._main_engine.get_tick(self._vt_symbol)
+                                if tick and tick.last_price > 0:
+                                    current_price = tick.last_price
+                            
+                            # 检查止盈线价格是否合理
+                            price_warning = ""
+                            if line_type == PriceLineType.TAKE_PROFIT and current_price > 0:
+                                if direction == "long":
+                                    # 多单止盈：止盈价应该 > 当前价
+                                    if final_price <= current_price:
+                                        price_warning = f"⚠️ 多单止盈价 {final_price:.0f} ≤ 当前价 {current_price:.0f}，创建后可能立即触发平仓"
+                                else:
+                                    # 空单止盈：止盈价应该 < 当前价
+                                    if final_price >= current_price:
+                                        price_warning = f"⚠️ 空单止盈价 {final_price:.0f} ≥ 当前价 {current_price:.0f}，创建后可能立即触发平仓"
+                            
+                            # 如果有价格警告，弹窗提示用户
+                            if price_warning and hasattr(self, '_main_engine') and self._main_engine:
+                                self._main_engine.write_log(price_warning, "ChartWidget")
+                                from vnpy.trader.ui import QtWidgets
+                                reply = QtWidgets.QMessageBox.warning(
+                                    self,
+                                    "止盈价格警告",
+                                    f"{price_warning}\n\n是否仍然创建？",
+                                    QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+                                    QtWidgets.QMessageBox.StandardButton.No
+                                )
+                                if reply == QtWidgets.QMessageBox.StandardButton.No:
+                                    # 用户取消创建，清理预览线
+                                    if preview_line and self._first_plot:
+                                        try:
+                                            self._first_plot.removeItem(preview_line)
+                                        except Exception:
+                                            pass
+                                        manager.delete_line(preview_line_id)
+                                    event.accept()
+                                    return
+                            
                             # 创建止损/止盈线
                             new_line_id = manager.create_line(
                                 price=final_price,

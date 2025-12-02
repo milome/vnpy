@@ -26,6 +26,10 @@ class ChartWidgetDatabaseMixin(ChartWidgetMixinBase):
         # 加载所有关联关系
         all_relations = self._price_line_database.load_relations()
         
+        # 统计加载的关联关系
+        loaded_count = 0
+        activated_count = 0
+        
         # 按入场线ID分组
         for relation in all_relations:
             entry_line_id = relation["entry_line_id"]
@@ -41,6 +45,26 @@ class ChartWidgetDatabaseMixin(ChartWidgetMixinBase):
                 if entry_line_id not in self._entry_line_relations:
                     self._entry_line_relations[entry_line_id] = {}
                 self._entry_line_relations[entry_line_id][relation_type] = related_line_id
+                loaded_count += 1
+                
+                # ✅ 关键修复：恢复止损止盈线的关联状态
+                # 设置 associated_entry_line_id（这样止损止盈线才知道它们关联到哪个入场线）
+                if hasattr(related_line, 'set_associated_entry_line_id'):
+                    related_line.set_associated_entry_line_id(entry_line_id)
+                
+                # ✅ 关键修复：激活止损止盈线
+                # 入场线关联的止损止盈线应该是激活状态，否则会被识别为挂单止损止盈
+                if hasattr(related_line, 'set_creation_time'):
+                    from time import time
+                    related_line.set_creation_time(time())
+                    activated_count += 1
+        
+        # 记录加载结果
+        if hasattr(self, '_main_engine') and self._main_engine and loaded_count > 0:
+            self._main_engine.write_log(
+                f"[ChartWidget] 从数据库加载了 {loaded_count} 条价格线关联关系，激活了 {activated_count} 条止损/止盈线",
+                "ChartWidget"
+            )
     
     def save_price_lines(self) -> bool:
         """
