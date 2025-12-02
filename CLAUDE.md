@@ -5593,3 +5593,398 @@ git count-objects -vH
 - `clean_git_history.bat`: 使用git filter-branch的批处理脚本
 - `clean_git_history_simple.bat`: 使用git filter-repo的批处理脚本
 - `remove_large_files.md`: 详细的清理说明文档
+
+---
+
+## K线图表止损止盈线激活机制 (2025-12-02)
+
+### 概述
+
+实现了K线图表中止损止盈线的精确激活机制，解决了挂单止损止盈线被错误提前激活、拖拽移动线时激活状态不正确等问题。该机制使用 `creation_time` 字段控制激活状态，并通过500ms延迟防止创建后立即触发。
+
+### 核心概念
+
+#### 激活状态 (Activation)
+
+**定义**:
+- **激活**: `creation_time` 有值（时间戳），止损止盈线可以触发平仓
+- **未激活**: `creation_time = None`，止损止盈线不会触发平仓
+
+**作用**:
+- 防止挂单止损止盈线在挂单未成交前就触发平仓
+- 防止拖拽移动线后立即触发（500ms保护期）
+- 区分不同生命周期阶段的止损止盈线
+
+#### 500ms 保护期
+
+**目的**: 防止拖拽移动止损止盈线后，价格恰好在新位置附近导致立即触发
+
+**实现**:
+```python
+# vnpy/chart/widget_trigger.py
+def trigger_stop_loss_close(self, tick: TickData) -> bool:
+    # 检查激活状态和保护期
+    if creation_time is None:
+        return False  # 未激活，不触发
+    
+    elapsed_ms = (time() - creation_time) * 1000
+    if elapsed_ms < 500:
+        return False  # 保护期内，不触发
+    
+    # 检查价格突破
+    if 触发条件满足:
+        执行平仓
+```
+
+### 价格线分类与激活规则
+
+#### 1. 挂单关联的止损止盈线
+
+**生命周期**:
+```
+挂单创建 → 止损止盈线创建（creation_time = None）
+    ↓
+挂单委托中（creation_time = None，未激活）
+    ↓
+挂单成交 → 转为入场线 + 激活止损止盈（set_creation_time()）
+    ↓
+持仓中，止损止盈线可触发
+```
+
+**激活规则**:
+
+| 操作 | creation_time | 是否激活 | 能否触发 |
+|------|--------------|---------|---------|
+| 创建时 | `None` | ❌ 否 | ❌ 否 |
+| 拖拽后 | 保持 `None` | ❌ 否 | ❌ 否 |
+| 挂单成交 | `time()` | ✅ 是 | ✅ 是 (500ms后) |
+
+**代码实现**:
+
+```python
+# vnpy/chart/drawing_order.py - 挂单成交时激活
+def _process_order_update_main_thread(self, order: OrderData):
+    if order.status == Status.ALLTRADED:
+        # 挂单成交，激活止损止盈线
+        if stop_loss_line:
+            stop_loss_line.set_creation_time(time())  # 激活
+        if take_profit_line:
+            take_profit_line.set_creation_time(time())  # 激活
+```
+
+```python
+# vnpy/chart/widget_mouse.py - 拖拽挂单止损止盈线
+def mouseReleaseEvent(self, event):
+    # 判断是否为挂单关联的止损止盈线
+    is_pending_associated = False
+    if hasattr(self._drawing_order_controller, '_pending_line_relations'):
+        for pid, relations in self._drawing_order_controller._pending_line_relations.items():
+            if 止损止盈线在关联关系中:
+                is_pending_associated = True
+                break
+    
+    if is_pending_associated:
+        # 挂单关联：拖拽后不激活
+        # creation_time 保持 None
+        pass
+    else:
+        # 非挂单关联：拖拽后激活
+        dragging_line.set_creation_time()
+```
+
+#### 2. 入场线关联的止损止盈线
+
+**生命周期**:
+```
+从入场线拖拽创建 → 止损止盈线创建（set_creation_time()）
+    ↓
+创建时立即激活（creation_time = 当前时间）
+    ↓
+拖拽移动 → 重新激活（set_creation_time()）
+    ↓
+始终保持激活状态，可触发
+```
+
+**激活规则**:
+
+| 操作 | creation_time | 是否激活 | 能否触发 |
+|------|--------------|---------|---------|
+| 创建时 | `time()` | ✅ 是 | ✅ 是 (500ms后) |
+| 拖拽后 | `time()` (重置) | ✅ 是 | ✅ 是 (500ms后) |
+
+**代码实现**:
+
+```python
+# vnpy/chart/widget_mouse.py - 从入场线创建止损止盈线
+def mouseReleaseEvent(self, event):
+    if 从入场线创建止损止盈线:
+        new_line = manager.get_line(new_line_id)
+        if new_line:
+            new_line.set_creation_time()  # 创建时立即激活
+```
+
+```python
+# vnpy/chart/widget_mouse.py - 拖拽入场线止损止盈线
+def mouseReleaseEvent(self, event):
+    if 拖拽的是止损止盈线:
+        is_pending_associated = False  # 检查是否关联挂单
+        # ... 判断逻辑 ...
+        
+        if not is_pending_associated:
+            # 入场线关联或独立：拖拽后重新激活
+            dragging_line.set_creation_time()  # 重置时间，重新激活
+```
+
+#### 3. 独立止损止盈线
+
+**生命周期**:
+```
+直接创建（无关联） → 止损止盈线创建（creation_time = None）
+    ↓
+创建时未激活（creation_time = None）
+    ↓
+拖拽移动 → 激活（set_creation_time()）
+    ↓
+可触发
+```
+
+**激活规则**:
+
+| 操作 | creation_time | 是否激活 | 能否触发 |
+|------|--------------|---------|---------|
+| 创建时 | `None` | ❌ 否 | ❌ 否 |
+| 拖拽后 | `time()` | ✅ 是 | ✅ 是 (500ms后) |
+
+### 触发检查逻辑
+
+**文件**: `vnpy/chart/widget_trigger.py`
+
+#### 止损线触发检查
+
+```python
+def trigger_stop_loss_close(
+    self, 
+    tick: TickData,
+    line_id: str,
+    stop_loss_price: float,
+    direction: Direction,
+    volume: int,
+    creation_time: float | None
+) -> bool:
+    """检查止损线是否触发"""
+    
+    # 1. 检查激活状态
+    if creation_time is None:
+        return False  # 未激活，静默跳过
+    
+    # 2. 检查保护期（500ms）
+    elapsed_ms = (time() - creation_time) * 1000
+    if elapsed_ms < 500:
+        return False  # 保护期内，不触发
+    
+    # 3. 检查价格突破
+    if direction == Direction.LONG:
+        # 多单止损：价格跌破止损价
+        if tick.last_price <= stop_loss_price:
+            执行平仓
+            return True
+    else:
+        # 空单止损：价格涨破止损价
+        if tick.last_price >= stop_loss_price:
+            执行平仓
+            return True
+    
+    return False
+```
+
+#### 止盈线触发检查
+
+```python
+def trigger_take_profit_close(
+    self, 
+    tick: TickData,
+    line_id: str,
+    take_profit_price: float,
+    direction: Direction,
+    volume: int,
+    creation_time: float | None
+) -> bool:
+    """检查止盈线是否触发"""
+    
+    # 1. 检查激活状态
+    if creation_time is None:
+        return False  # 未激活，静默跳过
+    
+    # 2. 检查保护期（500ms）
+    elapsed_ms = (time() - creation_time) * 1000
+    if elapsed_ms < 500:
+        return False  # 保护期内，不触发
+    
+    # 3. 检查价格突破
+    if direction == Direction.LONG:
+        # 多单止盈：价格涨破止盈价
+        if tick.last_price >= take_profit_price:
+            执行平仓
+            return True
+    else:
+        # 空单止盈：价格跌破止盈价
+        if tick.last_price <= take_profit_price:
+            执行平仓
+            return True
+    
+    return False
+```
+
+### 过滤优化与性能考虑
+
+#### 问题：过度优化
+
+**错误做法**（已回退）:
+```python
+# ❌ 在 widget.py 中过滤未激活的线
+stop_loss_lines = [
+    line for line in all_stop_loss_lines 
+    if line.is_activated()  # 过度优化！
+]
+```
+
+**问题**:
+- 入场线关联的止损止盈线被提前过滤
+- 手动移动的线被认为未激活而跳过
+- 导致止损止盈失效
+
+**正确做法**:
+```python
+# ✅ 在 widget.py 中传递所有止损止盈线
+stop_loss_lines = all_stop_loss_lines  # 不过滤
+
+# ✅ 在 widget_trigger.py 中判断激活状态
+if creation_time is None:
+    return False  # 静默跳过，不记录日志
+```
+
+**设计原则**:
+- **widget.py**: 负责收集所有止损止盈线，不做过滤
+- **widget_trigger.py**: 负责判断激活状态和触发条件
+- **静默跳过**: 未激活的线返回 `False` 但不记录日志，避免日志污染
+
+### 场景验证
+
+#### 场景1: 挂单止损止盈线
+
+```
+1. 创建挂单，设置止损止盈
+   → 止损止盈线 creation_time = None（未激活）
+   
+2. 挂单委托中，价格波动
+   → trigger_stop_loss_close() 返回 False（未激活）
+   → 不触发平仓 ✅
+   
+3. 拖拽移动止损线
+   → 检测到关联挂单，不调用 set_creation_time()
+   → creation_time 保持 None
+   → 仍然不触发 ✅
+   
+4. 挂单成交
+   → 转为入场线，调用 stop_loss_line.set_creation_time()
+   → creation_time = 当前时间（激活）
+   
+5. 价格突破止损价
+   → elapsed_ms > 500ms
+   → 触发平仓 ✅
+```
+
+#### 场景2: 入场线止损止盈线
+
+```
+1. 持仓存在，从入场线拖拽创建止损线
+   → 创建时调用 new_line.set_creation_time()
+   → creation_time = 创建时间（立即激活）✅
+   
+2. 继续拖拽移动止损线
+   → 非挂单关联，调用 dragging_line.set_creation_time()
+   → creation_time = 新的当前时间（重新激活）✅
+   
+3. 500ms后价格突破
+   → elapsed_ms > 500ms
+   → 触发平仓 ✅
+```
+
+#### 场景3: 独立止损止盈线
+
+```
+1. 直接创建止损线（无关联）
+   → creation_time = None（未激活）
+   
+2. 拖拽移动止损线
+   → 检测到非挂单关联
+   → 调用 dragging_line.set_creation_time()
+   → creation_time = 当前时间（激活）✅
+   
+3. 价格突破
+   → elapsed_ms > 500ms
+   → 触发平仓 ✅
+```
+
+### 代码修改清单
+
+**修改文件**:
+
+1. **`vnpy/chart/widget_trigger.py`**:
+   - 修改 `trigger_stop_loss_close()`: 未激活时静默返回 `False`
+   - 修改 `trigger_take_profit_close()`: 未激活时静默返回 `False`
+   - 移除 "未激活，不触发" 的日志输出
+
+2. **`vnpy/chart/widget_mouse.py`**:
+   - 修改 `mouseReleaseEvent()`: 拖拽止损止盈线时区分挂单关联和入场线关联
+   - 挂单关联：拖拽后不调用 `set_creation_time()`
+   - 入场线关联或独立：拖拽后调用 `set_creation_time()`
+   - 从入场线创建时立即调用 `set_creation_time()`
+
+3. **`vnpy/chart/drawing_order.py`**:
+   - 修改 `_process_order_update_main_thread()`: 挂单成交时激活止损止盈线
+
+4. **`vnpy/trader/ui/widget.py`**:
+   - 回退过度优化：不在 `process_tick_event()` 中过滤未激活的线
+   - 传递所有止损止盈线给触发检查函数
+
+### 关键设计原则
+
+1. **分层职责**:
+   - UI层（widget.py）: 收集和传递
+   - 业务层（widget_trigger.py）: 判断和触发
+
+2. **激活状态控制**:
+   - 挂单关联：挂单成交前保持未激活
+   - 入场线关联：创建时和拖拽后都激活
+   - 独立线：拖拽后激活
+
+3. **静默处理**:
+   - 未激活的线返回 `False` 但不记录日志
+   - 避免日志污染
+
+4. **保护期机制**:
+   - 所有激活的线都有 500ms 保护期
+   - 防止拖拽后立即触发
+
+### 用户体验
+
+**优点**:
+- ✅ 挂单止损止盈不会错误提前触发
+- ✅ 入场线止损止盈始终保持激活
+- ✅ 拖拽移动止损止盈线后能正确触发
+- ✅ 500ms 保护期防止拖拽后立即触发
+- ✅ 无日志污染
+
+**测试场景**:
+- ✅ 挂单委托中价格波动不触发止损止盈
+- ✅ 挂单成交后止损止盈线正常工作
+- ✅ 持仓时移动止损线能正确触发
+- ✅ 拖拽后 500ms 内不触发
+
+### 相关文件
+
+- `vnpy/chart/widget_trigger.py`: 触发检查逻辑
+- `vnpy/chart/widget_mouse.py`: 鼠标事件和拖拽逻辑
+- `vnpy/chart/drawing_order.py`: 挂单订单管理
+- `vnpy/trader/ui/widget.py`: K线图表窗口

@@ -3140,11 +3140,12 @@ class ChartWindow(QtWidgets.QWidget):
                             if correct_open_price != bar.open_price:
                                 old_open_price = bar.open_price
                                 bar.open_price = correct_open_price
-                                self.main_engine.write_log(
-                                    f"[实时K线] 1分钟K线({bar_minute_start.strftime('%H:%M')}) "
-                                    f"开盘价已修正: {old_open_price} -> {correct_open_price} "
-                                    f"(使用参照物修正)"
-                                )
+                                # 暂时注释掉开盘价修正日志，减少日志输出
+                                # self.main_engine.write_log(
+                                #     f"[实时K线] 1分钟K线({bar_minute_start.strftime('%H:%M')}) "
+                                #     f"开盘价已修正: {old_open_price} -> {correct_open_price} "
+                                #     f"(使用参照物修正)"
+                                # )
                             else:
                                 # 开盘价相同，说明BarGenerator的开盘价是正确的（可能是第一个tick）
                                 # 暂时注释掉日志，减少日志输出
@@ -5674,10 +5675,11 @@ class ChartWindow(QtWidgets.QWidget):
 
                     print(f"[DEBUG] _correct_all_bars_open_price: ✓ 执行修正 | bar_dt={bar_dt_str}, old_open={old_open_price} -> new_open={correct_open_price}, 差异={price_diff}")
 
-                    self.main_engine.write_log(
-                        f"[开盘价修正] {bar.interval.value}K线({bar.datetime.strftime('%H:%M')}) "
-                        f"开盘价已修正: {old_open_price} -> {correct_open_price}"
-                    )
+                    # 暂时注释掉开盘价修正日志，减少日志输出
+                    # self.main_engine.write_log(
+                    #     f"[开盘价修正] {bar.interval.value}K线({bar.datetime.strftime('%H:%M')}) "
+                    #     f"开盘价已修正: {old_open_price} -> {correct_open_price}"
+                    # )
                 else:
                     print(f"[DEBUG] _correct_all_bars_open_price: - 无需修正 | bar_dt={bar_dt_str}, open_price={bar.open_price} == correct_open_price={correct_open_price}")
 
@@ -5734,11 +5736,12 @@ class ChartWindow(QtWidgets.QWidget):
                 old_open_price = self._current_bar.open_price
                 self._current_bar.open_price = correct_open_price
 
-                self.main_engine.write_log(
-                    f"[开盘价修正] {self._current_bar.interval.value}K线({self._current_bar.datetime.strftime('%H:%M')}) "
-                    f"开盘价已修正: {old_open_price} -> {correct_open_price} "
-                    f"(从历史数据标记时修正)"
-                )
+                # 暂时注释掉开盘价修正日志，减少日志输出
+                # self.main_engine.write_log(
+                #     f"[开盘价修正] {self._current_bar.interval.value}K线({self._current_bar.datetime.strftime('%H:%M')}) "
+                #     f"开盘价已修正: {old_open_price} -> {correct_open_price} "
+                #     f"(从历史数据标记时修正)"
+                # )
 
                 # 更新历史数据中的当前K线
                 if self._current_bar_index >= 0 and self._current_bar_index < len(self.history_data):
