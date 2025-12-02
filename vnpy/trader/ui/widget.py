@@ -5387,9 +5387,15 @@ class ChartWindow(QtWidgets.QWidget):
 
     def process_history_data(self, history: list) -> None:
         """处理历史数据"""
+        # 添加调试日志
+        self.main_engine.write_log(
+            f"[ChartWindow] process_history_data 被调用，数据量: {len(history) if history else 0}"
+        )
+        
         if not history:
             self.status_label.setText(_("未找到历史数据，等待实时行情..."))
             self.history_loaded = True
+            self.main_engine.write_log("[ChartWindow] 无历史数据，已设置 history_loaded = True")
             return
 
         # 确保是当前合约的数据
@@ -5440,6 +5446,12 @@ class ChartWindow(QtWidgets.QWidget):
         # 更新图表（使用修正后的历史数据）
         self.chart.update_history(self.history_data)
         self.history_loaded = True
+        
+        # 添加调试日志
+        self.main_engine.write_log(
+            f"[ChartWindow] 历史数据加载完成，已设置 history_loaded = True，"
+            f"数据量: {len(self.history_data)}"
+        )
 
         # 更新时间范围标签
         if self.history_data:
