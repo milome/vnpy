@@ -571,34 +571,36 @@ class DrawingOrderController:
         # 明确引用全局的 Status，避免 UnboundLocalError
         from vnpy.trader.constant import Status as StatusEnum
         
-        # 添加日志：开始处理订单更新
-        if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
-            self._widget._main_engine.write_log(
-                f"[DrawingOrderController] update_line_from_order 开始处理: order={order.vt_orderid} status={order.status.value}",
-                "DrawingOrderController"
-            )
+        # 注释开始处理日志，减少日志输出
+        # if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+        #     self._widget._main_engine.write_log(
+        #         f"[DrawingOrderController] update_line_from_order 开始处理: order={order.vt_orderid} status={order.status.value}",
+        #         "DrawingOrderController"
+        #     )
         
         # 检查是否在主线程中执行
         from vnpy.trader.ui import QtCore
         app = QtCore.QCoreApplication.instance()
         if app and QtCore.QThread.currentThread() != app.thread():
             # 不在主线程，使用QTimer调度到主线程
-            if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
-                self._widget._main_engine.write_log(
-                    f"[DrawingOrderController] 不在主线程，调度到主线程执行: order={order.vt_orderid}",
-                    "DrawingOrderController"
-                )
+            # 注释调度日志，减少日志输出
+            # if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+            #     self._widget._main_engine.write_log(
+            #         f"[DrawingOrderController] 不在主线程，调度到主线程执行: order={order.vt_orderid}",
+            #         "DrawingOrderController"
+            #     )
             # 使用functools.partial确保order对象正确传递
             from functools import partial
             QtCore.QTimer.singleShot(0, partial(self._update_line_from_order_main_thread, order))
             return True
         
         line_id = self.get_line_id_for_order(order.vt_orderid)
-        if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
-            self._widget._main_engine.write_log(
-                f"[DrawingOrderController] 查找订单关联的挂单线: order={order.vt_orderid} line_id={line_id}",
-                "DrawingOrderController"
-            )
+        # 注释查找挂单线日志，减少日志输出
+        # if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+        #     self._widget._main_engine.write_log(
+        #         f"[DrawingOrderController] 查找订单关联的挂单线: order={order.vt_orderid} line_id={line_id}",
+        #         "DrawingOrderController"
+        #     )
         if line_id is None:
             # ✅ 如果订单是平仓订单（offset=CLOSE），且没有关联挂单线，直接跳过
             # 平仓订单（如止损/止盈线触发的平仓订单）不应该关联挂单线
@@ -617,11 +619,12 @@ class DrawingOrderController:
                 return True
             
             # 订单未关联到挂单线，尝试查找未关联的挂单线（用于处理订单重委托场景）
-            if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
-                self._widget._main_engine.write_log(
-                    f"[DrawingOrderController] 订单 {order.vt_orderid} 未直接关联到挂单线，尝试查找未关联的挂单线进行匹配",
-                    "DrawingOrderController"
-                )
+            # 注释尝试查找日志，减少日志输出（匹配成功会打印[挂单匹配]）
+            # if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+            #     self._widget._main_engine.write_log(
+            #         f"[DrawingOrderController] 订单 {order.vt_orderid} 未直接关联到挂单线，尝试查找未关联的挂单线进行匹配",
+            #         "DrawingOrderController"
+            #     )
             line_id = self._find_unlinked_pending_line(order)
             if line_id:
                 # 找到匹配的挂单线，建立关联
@@ -1389,25 +1392,30 @@ class DrawingOrderController:
                 from datetime import datetime
                 current_time = datetime.now().strftime("%H:%M:%S")
                 
-                # 获取止损止盈价格信息
+                # 获取止损止盈价格信息（从迁移的止损止盈线中获取）
                 stop_loss_price = ""
                 take_profit_price = ""
-                if hasattr(self._widget, '_entry_line_relations') and new_line_id in self._widget._entry_line_relations:
-                    relations = self._widget._entry_line_relations[new_line_id]
-                    if relations:
-                        stop_loss = relations.get("stop_loss")
-                        if stop_loss:
-                            stop_loss_price = f" 止损@{stop_loss['price']}"
-                        take_profit = relations.get("take_profit")
-                        if take_profit:
-                            take_profit_price = f" 止盈@{take_profit['price']}"
+                
+                # 从价格线管理器中查找关联的止损止盈线
+                price_line_manager = self._get_price_line_manager()
+                if price_line_manager:
+                    all_lines = price_line_manager.get_all_lines()
+                    for lid, line in all_lines.items():
+                        # 查找关联到这个入场线的止损止盈线
+                        associated_entry_id = line.get_associated_entry_line_id() if hasattr(line, 'get_associated_entry_line_id') else None
+                        if associated_entry_id == new_line_id:
+                            from .price_line import PriceLineType
+                            if line.get_line_type() == PriceLineType.STOP_LOSS:
+                                stop_loss_price = f" 止损@{line.get_price():.0f}"
+                            elif line.get_line_type() == PriceLineType.TAKE_PROFIT:
+                                take_profit_price = f" 止盈@{line.get_price():.0f}"
                 
                 # 获取合约信息
                 vt_symbol = getattr(self._widget, '_vt_symbol', 'N/A')
                 
                 self._widget._main_engine.write_log(
                     f"[入场线] {current_time} {vt_symbol} {order.direction.value} "
-                    f"{order.traded}手@{order.price}{stop_loss_price}{take_profit_price} "
+                    f"{order.traded}手@{order.price:.0f}{stop_loss_price}{take_profit_price} "
                     f"(订单:{order.vt_orderid} -> 入场线:{new_line_id})",
                     "ChartWidget"
                 )

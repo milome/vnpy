@@ -521,7 +521,8 @@ class FutuGateway(BaseGateway):
             try:
                 # 构造富途格式的合约代码
                 futu_symbol = convert_symbol_vt2futu(main_symbol, exchange)
-                self.write_log(f"[主力合约检查] 开始检查 {main_symbol} (富途代码: {futu_symbol})")
+                # 注释主力合约检查开始日志，减少日志输出
+                # self.write_log(f"[主力合约检查] 开始检查 {main_symbol} (富途代码: {futu_symbol})")
                 
                 # 解析当前实际合约
                 actual_code = self._resolve_main_contract(main_symbol, futu_symbol)
@@ -535,7 +536,8 @@ class FutuGateway(BaseGateway):
                 else:
                     actual_symbol = actual_code
                 
-                self.write_log(f"[主力合约检查] {main_symbol} 当前实际合约: {actual_symbol}")
+                # 注释当前实际合约日志，减少日志输出
+                # self.write_log(f"[主力合约检查] {main_symbol} 当前实际合约: {actual_symbol}")
                 
                 # 获取缓存中的旧映射
                 old_actual_symbol = self.main_contract_mapping.get(main_symbol)
@@ -613,7 +615,9 @@ class FutuGateway(BaseGateway):
                     self._handle_main_contract_switch(main_symbol, exchange, old_actual_symbol, actual_symbol)
                 else:
                     # 未发生切换，不检查提前切换（只在初始化时检查一次）
-                    self.write_log(f"[主力合约检查] {main_symbol} 未发生切换，当前合约: {actual_symbol}")
+                    # 注释未发生切换日志，减少日志输出
+                    # self.write_log(f"[主力合约检查] {main_symbol} 未发生切换，当前合约: {actual_symbol}")
+                    pass
             
             except Exception as e:
                 import traceback
@@ -1316,7 +1320,8 @@ class FutuGateway(BaseGateway):
             if cached_actual_symbol:
                 # 缓存中存储的是实际合约代码（如"MHI2511"），需要转换为完整的富途格式
                 cached_code = f"HK.{cached_actual_symbol}"
-                self.write_log(f"使用缓存的主力合约映射: {vt_symbol} -> {cached_code} (缓存命中，跳过API调用)")
+                # 注释缓存命中日志，减少日志输出
+                # self.write_log(f"使用缓存的主力合约映射: {vt_symbol} -> {cached_code} (缓存命中，跳过API调用)")
                 return cached_code
             
             # 提取基础代码（去掉main后缀）
@@ -1571,7 +1576,9 @@ class FutuGateway(BaseGateway):
                 # 日志已在上面输出
                 pass
             else:
-                self.write_log(f"对手价订单：{req.direction.value} -> 使用UI计算的对手价 {order_price}")
+                # 注释对手价订单日志，减少日志输出
+                # self.write_log(f"对手价订单：{req.direction.value} -> 使用UI计算的对手价 {order_price}")
+                pass
         elif req.type == VtOrderType.OVER:
             self.write_log(f"超价类型：{req.direction.value} -> 使用UI计算的超价 {order_price}")
         elif req.type == VtOrderType.MARKET:
@@ -1599,13 +1606,15 @@ class FutuGateway(BaseGateway):
                 cached_actual_symbol = self.main_contract_mapping[req.symbol]
                 if cached_actual_symbol:
                     actual_symbol = f"HK.{cached_actual_symbol}"
-                    self.write_log(f"主力合约 {req.symbol} 转换为实际合约 {actual_symbol} (缓存)")
+                    # 注释主力合约转换日志，减少日志输出
+                    # self.write_log(f"主力合约 {req.symbol} 转换为实际合约 {actual_symbol} (缓存)")
                     futu_symbol = actual_symbol
                 else:
                     # 缓存未命中，调用解析函数
                     actual_symbol = self._resolve_main_contract(req.symbol, futu_symbol)
                     if actual_symbol:
-                        self.write_log(f"主力合约 {req.symbol} 转换为实际合约 {actual_symbol}")
+                        # 注释主力合约转换日志，减少日志输出
+                        # self.write_log(f"主力合约 {req.symbol} 转换为实际合约 {actual_symbol}")
                         futu_symbol = actual_symbol
                     else:
                         self.write_log(f"警告：无法解析主力合约 {req.symbol}，使用原代码")
@@ -1613,14 +1622,16 @@ class FutuGateway(BaseGateway):
                 # 缓存未命中，调用解析函数
                 actual_symbol = self._resolve_main_contract(req.symbol, futu_symbol)
                 if actual_symbol:
-                    self.write_log(f"主力合约 {req.symbol} 转换为实际合约 {actual_symbol}")
+                    # 注释主力合约转换日志，减少日志输出
+                    # self.write_log(f"主力合约 {req.symbol} 转换为实际合约 {actual_symbol}")
                     futu_symbol = actual_symbol
                 else:
                     self.write_log(f"警告：无法解析主力合约 {req.symbol}，使用原代码")
 
-        self.write_log(f"转换后的富途合约代码: {futu_symbol}")
-        self.write_log(f"当前市场设置: {self.market}")
-        self.write_log(f"交易上下文类型: {type(self.trade_ctx).__name__}")
+        # 注释富途合约代码和市场设置日志，减少日志输出
+        # self.write_log(f"转换后的富途合约代码: {futu_symbol}")
+        # self.write_log(f"当前市场设置: {self.market}")
+        # self.write_log(f"交易上下文类型: {type(self.trade_ctx).__name__}")
         
         # ⚠️ 已移除调试代码：查询可用期货合约的操作（耗时约500ms，影响性能）
         # 如需调试，可临时取消注释以下代码

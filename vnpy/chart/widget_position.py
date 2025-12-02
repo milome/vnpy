@@ -624,12 +624,13 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
         last_check = self._position_update_cache.get(cache_key_check)
         
         if last_check != current_check:
-            if hasattr(self, '_main_engine') and self._main_engine:
-                self._main_engine.write_log(
-                    f"[ChartWidget] 持仓变化检查: 持仓记录总手数={holding_total_volume}, 实际持仓手数={position.volume}, "
-                    f"持仓记录数量={len(holding.get_all_entries())}",
-                    "ChartWidget"
-                )
+            # 注释持仓变化检查日志，减少日志输出
+            # if hasattr(self, '_main_engine') and self._main_engine:
+            #     self._main_engine.write_log(
+            #         f"[ChartWidget] 持仓变化检查: 持仓记录总手数={holding_total_volume}, 实际持仓手数={position.volume}, "
+            #         f"持仓记录数量={len(holding.get_all_entries())}",
+            #         "ChartWidget"
+            #     )
             self._position_update_cache[cache_key_check] = current_check
         
         # 只有当实际持仓手数明显小于持仓记录总手数时，才认为是平仓
@@ -642,12 +643,13 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
             if close_volume > holding_total_volume:
                 close_volume = holding_total_volume
         
-            if hasattr(self, '_main_engine') and self._main_engine:
-                self._main_engine.write_log(
-                    f"[ChartWidget] 检测到平仓: 平仓手数={close_volume}, 持仓记录总手数={holding_total_volume}, "
-                    f"实际持仓手数={position.volume}",
-                    "ChartWidget"
-                )
+            # 注释平仓检测日志，减少日志输出
+            # if hasattr(self, '_main_engine') and self._main_engine:
+            #     self._main_engine.write_log(
+            #         f"[ChartWidget] 检测到平仓: 平仓手数={close_volume}, 持仓记录总手数={holding_total_volume}, "
+            #         f"实际持仓手数={position.volume}",
+            #         "ChartWidget"
+            #     )
         
             closed_entries = process_position_close(
                 self._position_holdings, 
@@ -657,21 +659,24 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                 vt_symbol=self._vt_symbol
             )
         
-            if hasattr(self, '_main_engine') and self._main_engine:
-                self._main_engine.write_log(
-                    f"[ChartWidget] 已移除 {len(closed_entries)} 条持仓记录",
-                    "ChartWidget"
-                )
+            # 注释移除持仓记录日志，减少日志输出
+            # if hasattr(self, '_main_engine') and self._main_engine:
+            #     self._main_engine.write_log(
+            #         f"[ChartWidget] 已移除 {len(closed_entries)} 条持仓记录",
+            #         "ChartWidget"
+            #     )
         
             # 删除已平仓的入场线
             for closed_entry in closed_entries:
                 line_id = closed_entry.line_id
                 if self._price_line_manager.delete_line(line_id):
-                    if hasattr(self, '_main_engine') and self._main_engine:
-                        self._main_engine.write_log(
-                            f"[ChartWidget] 已删除已平仓的入场线: {line_id} (价格={closed_entry.price}, 手数={closed_entry.volume})",
-                            "ChartWidget"
-                        )
+                    # 注释删除入场线日志，减少日志输出
+                    # if hasattr(self, '_main_engine') and self._main_engine:
+                    #     self._main_engine.write_log(
+                    #         f"[ChartWidget] 已删除已平仓的入场线: {line_id} (价格={closed_entry.price}, 手数={closed_entry.volume})",
+                    #         "ChartWidget"
+                    #     )
+                    pass
                     # 清理订单映射
                     if hasattr(self, '_drawing_order_controller') and self._drawing_order_controller:
                         order_id = self._drawing_order_controller.get_order_id_for_line(line_id)
@@ -1458,42 +1463,43 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
         last_find = self._position_update_cache.get(cache_key_find)
         
         if last_find != current_find:
-            if hasattr(self, '_main_engine') and self._main_engine:
-                self._main_engine.write_log(
-                    f"[ChartWidget] 获取所有持仓: 总数={len(all_positions)}, 当前持仓方向={position_direction}, 当前持仓数量={position.volume}",
-                    "ChartWidget"
-                )
-                for pos in all_positions:
-                    pos_vt_symbol = pos.vt_symbol
-                    matched = False
-                    if chart_vt_symbol and pos_vt_symbol == chart_vt_symbol:
-                        matched = True
-                    else:
-                        pos_symbol = pos.symbol
-                        chart_symbol = chart_vt_symbol.split('.')[0] if '.' in chart_vt_symbol else chart_vt_symbol
-                        for gateway_name in self._main_engine.get_all_gateway_names():
-                            gateway = self._main_engine.get_gateway(gateway_name)
-                            if gateway and hasattr(gateway, 'get_main_contract_mapping'):
-                                mapping = gateway.get_main_contract_mapping()
-                                for main_symbol, actual_symbol in mapping.items():
-                                    if actual_symbol == pos_symbol:
-                                        main_vt_symbol = f"{main_symbol}.{pos.exchange.value}"
-                                        if main_vt_symbol == chart_vt_symbol:
-                                            matched = True
-                                            break
-                                if matched:
-                                    break
-                    if matched:
-                        pos_direction = "long" if pos.direction.value == "多" else "short"
-                        self._main_engine.write_log(
-                            f"[ChartWidget] 匹配持仓: {pos.vt_symbol} {pos.direction.value} {pos.volume}手 -> position_map[{pos_direction}]={pos.volume}",
-                            "ChartWidget"
-                        )
-                self._main_engine.write_log(
-                    f"[ChartWidget] 查找入场线: 总入场线数量={len(entry_lines)}, 持仓方向={position_direction}, "
-                    f"持仓数量={position.volume}, 冻结={position.frozen}, 可用={available_volume}, 持仓映射={position_map_items}",
-                    "ChartWidget"
-                )
+            # 注释获取所有持仓、匹配持仓、查找入场线的详细日志，减少日志输出
+            # if hasattr(self, '_main_engine') and self._main_engine:
+            #     self._main_engine.write_log(
+            #         f"[ChartWidget] 获取所有持仓: 总数={len(all_positions)}, 当前持仓方向={position_direction}, 当前持仓数量={position.volume}",
+            #         "ChartWidget"
+            #     )
+            #     for pos in all_positions:
+            #         pos_vt_symbol = pos.vt_symbol
+            #         matched = False
+            #         if chart_vt_symbol and pos_vt_symbol == chart_vt_symbol:
+            #             matched = True
+            #         else:
+            #             pos_symbol = pos.symbol
+            #             chart_symbol = chart_vt_symbol.split('.')[0] if '.' in chart_vt_symbol else chart_vt_symbol
+            #             for gateway_name in self._main_engine.get_all_gateway_names():
+            #                 gateway = self._main_engine.get_gateway(gateway_name)
+            #                 if gateway and hasattr(gateway, 'get_main_contract_mapping'):
+            #                     mapping = gateway.get_main_contract_mapping()
+            #                     for main_symbol, actual_symbol in mapping.items():
+            #                         if actual_symbol == pos_symbol:
+            #                             main_vt_symbol = f"{main_symbol}.{pos.exchange.value}"
+            #                             if main_vt_symbol == chart_vt_symbol:
+            #                                 matched = True
+            #                                 break
+            #                     if matched:
+            #                         break
+            #         if matched:
+            #             pos_direction = "long" if pos.direction.value == "多" else "short"
+            #             self._main_engine.write_log(
+            #                 f"[ChartWidget] 匹配持仓: {pos.vt_symbol} {pos.direction.value} {pos.volume}手 -> position_map[{pos_direction}]={pos.volume}",
+            #                 "ChartWidget"
+            #             )
+            #     self._main_engine.write_log(
+            #         f"[ChartWidget] 查找入场线: 总入场线数量={len(entry_lines)}, 持仓方向={position_direction}, "
+            #         f"持仓数量={position.volume}, 冻结={position.frozen}, 可用={available_volume}, 持仓映射={position_map_items}",
+            #         "ChartWidget"
+            #     )
             self._position_update_cache[cache_key_find] = current_find
         
         # 收集需要删除的入场线（方向没有持仓或持仓为0）
@@ -1586,14 +1592,16 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                 # 标签已通过set_pnl_and_volume自动更新，这里只需要记录
                 if line.label is not None:
                     updated_count += 1
-                    if hasattr(self, '_main_engine') and self._main_engine:
-                        # 重新生成标签文本用于日志记录（InfLineLabel没有text()方法）
-                        price_precision = 0  # 默认整数显示
-                        label_text = line._create_label(line._price, line._line_type, price_precision, line._direction)
-                        self._main_engine.write_log(
-                            f"[ChartWidget] 已更新入场线 {line_id} 标签: {label_text}",
-                            "ChartWidget"
-                        )
+                    # 注释入场线标签更新日志，减少日志输出（已有[入场线盈亏]日志）
+                    # if hasattr(self, '_main_engine') and self._main_engine:
+                    #     # 重新生成标签文本用于日志记录（InfLineLabel没有text()方法）
+                    #     price_precision = 0  # 默认整数显示
+                    #     label_text = line._create_label(line._price, line._line_type, price_precision, line._direction)
+                    #     self._main_engine.write_log(
+                    #         f"[ChartWidget] 已更新入场线 {line_id} 标签: {label_text}",
+                    #         "ChartWidget"
+                    #     )
+                    pass
                 else:
                     if hasattr(self, '_main_engine') and self._main_engine:
                         self._main_engine.write_log(

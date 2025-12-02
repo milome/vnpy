@@ -64,13 +64,13 @@ class ChartWidgetOrderMixin(ChartWidgetMixinBase):
             for old_key, _ in sorted_items[:-100]:
                 self._processed_order_updates.pop(old_key, None)
         
-        # 添加详细日志
-        if hasattr(self, '_main_engine') and self._main_engine:
-            self._main_engine.write_log(
-                f"[ChartWidget] 收到订单更新事件: {order.vt_symbol} {order.direction.value if order.direction else 'N/A'} "
-                f"status={order.status.value} orderid={order.orderid} vt_orderid={order.vt_orderid}",
-                "ChartWidget"
-            )
+        # 注释详细日志，减少日志输出
+        # if hasattr(self, '_main_engine') and self._main_engine:
+        #     self._main_engine.write_log(
+        #         f"[ChartWidget] 收到订单更新事件: {order.vt_symbol} {order.direction.value if order.direction else 'N/A'} "
+        #         f"status={order.status.value} orderid={order.orderid} vt_orderid={order.vt_orderid}",
+        #         "ChartWidget"
+        #     )
             # 检查订单状态
             from vnpy.trader.constant import Status, Offset
             if order.status == Status.ALLTRADED:
@@ -86,16 +86,18 @@ class ChartWidgetOrderMixin(ChartWidgetMixinBase):
                     # 但这里不进行复杂判断，只记录日志，实际判断在 update_line_from_order 中进行
                     pass
                 
-                if is_close_order:
-                    self._main_engine.write_log(
-                        f"[ChartWidget] 订单 {order.vt_orderid} 状态为全部成交（平仓订单，不会转换为入场线）",
-                        "ChartWidget"
-                    )
-                else:
-                    self._main_engine.write_log(
-                        f"[ChartWidget] 订单 {order.vt_orderid} 状态为全部成交，准备检查是否转换为入场线",
-                        "ChartWidget"
-                    )
+                # 注释订单成交状态日志，减少日志输出
+                # if is_close_order:
+                #     self._main_engine.write_log(
+                #         f"[ChartWidget] 订单 {order.vt_orderid} 状态为全部成交（平仓订单，不会转换为入场线）",
+                #         "ChartWidget"
+                #     )
+                # else:
+                #     self._main_engine.write_log(
+                #         f"[ChartWidget] 订单 {order.vt_orderid} 状态为全部成交，准备检查是否转换为入场线",
+                #         "ChartWidget"
+                #     )
+                pass
         
         # 处理主力合约映射：如果图表是主力合约，订单是实际合约，需要匹配
         order_vt_symbol = order.vt_symbol
@@ -118,47 +120,51 @@ class ChartWidgetOrderMixin(ChartWidgetMixinBase):
                                 main_vt_symbol = f"{main_symbol}.{order.exchange.value}"
                                 if main_vt_symbol == chart_vt_symbol:
                                     matched = True
-                                    if hasattr(self, '_main_engine') and self._main_engine:
-                                        self._main_engine.write_log(
-                                            f"[ChartWidget] 订单主力合约映射匹配: 图表={chart_vt_symbol}, 订单={order_vt_symbol} (通过映射 {main_symbol}->{actual_symbol})",
-                                            "ChartWidget"
-                                        )
+                                    # 注释主力合约映射匹配日志，减少日志输出
+                                    # if hasattr(self, '_main_engine') and self._main_engine:
+                                    #     self._main_engine.write_log(
+                                    #         f"[ChartWidget] 订单主力合约映射匹配: 图表={chart_vt_symbol}, 订单={order_vt_symbol} (通过映射 {main_symbol}->{actual_symbol})",
+                                    #         "ChartWidget"
+                                    #     )
                                     break
                         if matched:
                             break
             
             if not matched:
-                if hasattr(self, '_main_engine') and self._main_engine:
-                    self._main_engine.write_log(
-                        f"[ChartWidget] 订单更新事件合约不匹配: 图表={chart_vt_symbol}, 订单={order_vt_symbol}",
-                        "ChartWidget"
-                    )
+                # 注释合约不匹配日志，减少日志输出
+                # if hasattr(self, '_main_engine') and self._main_engine:
+                #     self._main_engine.write_log(
+                #         f"[ChartWidget] 订单更新事件合约不匹配: 图表={chart_vt_symbol}, 订单={order_vt_symbol}",
+                #         "ChartWidget"
+                #     )
                 return
         
         # 如果没有drawing_order_controller，不需要更新
         if not self._drawing_order_controller:
-            if hasattr(self, '_main_engine') and self._main_engine:
-                self._main_engine.write_log(
-                    f"[ChartWidget] 订单更新事件: drawing_order_controller未初始化",
-                    "ChartWidget"
-                )
+            # 注释未初始化日志，减少日志输出
+            # if hasattr(self, '_main_engine') and self._main_engine:
+            #     self._main_engine.write_log(
+            #         f"[ChartWidget] 订单更新事件: drawing_order_controller未初始化",
+            #         "ChartWidget"
+            #     )
             return
         
-        # 添加日志：检查订单是否关联到挂单线
-        if hasattr(self, '_main_engine') and self._main_engine:
-            line_id = self._drawing_order_controller.get_line_id_for_order(order.vt_orderid)
-            self._main_engine.write_log(
-                f"[ChartWidget] 订单 {order.vt_orderid} 关联的挂单线: {line_id}",
-                "ChartWidget"
-            )
+        # 注释查询挂单线关联日志，减少日志输出
+        # if hasattr(self, '_main_engine') and self._main_engine:
+        #     line_id = self._drawing_order_controller.get_line_id_for_order(order.vt_orderid)
+        #     self._main_engine.write_log(
+        #         f"[ChartWidget] 订单 {order.vt_orderid} 关联的挂单线: {line_id}",
+        #         "ChartWidget"
+        #     )
         
         # 使用信号槽机制确保在主线程中执行，避免线程问题
         from vnpy.trader.ui import QtCore
-        if hasattr(self, '_main_engine') and self._main_engine:
-            self._main_engine.write_log(
-                f"[ChartWidget] 准备调用 update_line_from_order 更新挂单线",
-                "ChartWidget"
-            )
+        # 注释准备调用日志，减少日志输出
+        # if hasattr(self, '_main_engine') and self._main_engine:
+        #     self._main_engine.write_log(
+        #         f"[ChartWidget] 准备调用 update_line_from_order 更新挂单线",
+        #         "ChartWidget"
+        #     )
         
         # 直接检查是否在主线程，如果是则直接调用，否则使用信号槽
         app = QtCore.QCoreApplication.instance()
