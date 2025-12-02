@@ -2284,11 +2284,8 @@ class ChartWindow(QtWidgets.QWidget):
         self._cache_ttl: int = 60  # Cache TTL: 60 seconds
         self._cache_max_size: int = 1000  # Maximum cache size: 1000 entries
         
-        # Datafeed instance cache (prevents frequent creation of new connections)
-        from vnpy.trader.datafeed import BaseDatafeed
-        self._cached_datafeed: BaseDatafeed | None = None
-        import threading
-        self._datafeed_lock = threading.RLock()  # Thread-safe lock
+        # 注意：不再需要 _cached_datafeed，因为使用全局单例 DatafeedManager
+        # Datafeed 连接现在由 DatafeedManager 管理，程序退出时自动关闭
 
         # Performance monitoring (optional, enabled via configuration)
         from vnpy.trader.setting import SETTINGS
@@ -2391,70 +2388,28 @@ class ChartWindow(QtWidgets.QWidget):
     
     def _get_datafeed(self):
         """
-        Get Datafeed instance with connection reuse.
+        Get global singleton Datafeed instance.
         
-        This method implements a three-tier priority system:
-        1. Use MainEngine's Datafeed instance (if available)
-        2. Use cached Datafeed instance
-        3. Create new instance as last resort (with connection count check)
-        
-        This prevents excessive connection creation, especially important
-        for Futu OpenAPI which has a connection limit of 128.
+        使用全局单例 DatafeedManager，确保整个程序只有一个 Datafeed 连接。
+        这解决了多个 ChartWindow 创建重复连接导致超过 128 连接限制的问题。
         
         Returns:
             Datafeed instance if available, None otherwise
         """
-        with self._datafeed_lock:  # Thread-safe access
-            # 优先级1：尝试从MainEngine获取
-            if hasattr(self.main_engine, 'get_datafeed'):
-                try:
-                    datafeed = self.main_engine.get_datafeed()
-                    if datafeed is not None:
-                        self._cached_datafeed = datafeed
-                        self.main_engine.write_log(
-                            f"[ChartWindow-{id(self)}] 使用 MainEngine 的 Datafeed 实例"
-                        )
-                        return datafeed
-                except Exception:
-                    pass
+        try:
+            from vnpy.trader.datafeed_manager import get_global_datafeed
             
-            # 优先级2：使用缓存的实例
-            if self._cached_datafeed is not None:
+            # 使用全局单例 Datafeed
+            datafeed = get_global_datafeed(write_log=self.main_engine.write_log)
+            
+            return datafeed
+            
+        except Exception as e:
+            # 记录错误但不抛出异常
+            if self.main_engine:
                 self.main_engine.write_log(
-                    f"[ChartWindow-{id(self)}] 使用缓存的 Datafeed 实例"
+                    f"[ChartWindow-{id(self)}] 获取全局Datafeed失败: {e}"
                 )
-                return self._cached_datafeed
-            
-            # Priority 3: Create new instance as last resort
-            # Check connection count before creating new connection
-            if not self._check_connection_count_before_create():
-                # Connection count approaching limit, skip creating new instance
-                if self.main_engine:
-                    self.main_engine.write_log(
-                        f"[ChartWindow-{id(self)}] ⚠️ 连接数接近限制，跳过创建新Datafeed实例"
-                    )
-                return None
-            
-            try:
-                from vnpy.trader.datafeed import get_datafeed
-                datafeed = get_datafeed()
-                if datafeed and hasattr(datafeed, 'init'):
-                    if datafeed.init(output=self.main_engine.write_log):
-                        self._cached_datafeed = datafeed
-                        # 关键日志：记录新连接创建
-                        self.main_engine.write_log(
-                            f"[ChartWindow-{id(self)}] ⚠️ 创建了新的 Datafeed 实例"
-                        )
-                        # Log connection count change
-                        self._log_connection_count()
-                        return datafeed
-            except Exception as e:
-                # 记录错误但不抛出异常
-                if self.main_engine:
-                    self.main_engine.write_log(
-                        f"[ChartWindow-{id(self)}] 创建Datafeed实例失败: {e}"
-                    )
-            
             return None
 
     def _get_connection_count(self) -> dict[str, int] | None:
@@ -6967,27 +6922,13 @@ class ChartWindow(QtWidgets.QWidget):
                     "ChartWindow"
                 )
         finally:
-            # Clean up cache and close Datafeed connection
-            if self._cached_datafeed is not None:
-                try:
-                    if hasattr(self._cached_datafeed, 'close'):
-                        self._cached_datafeed.close()
-                        if self.main_engine:
-                            self.main_engine.write_log(
-                                f"[ChartWindow] 已关闭缓存的Datafeed连接 (ChartWindow ID: {id(self)})"
-                            )
-                except Exception as e:
-                    if self.main_engine:
-                        self.main_engine.write_log(
-                            f"[ChartWindow] 关闭缓存的Datafeed连接失败: {e}"
-                        )
-                finally:
-                    self._cached_datafeed = None
+            # Clean up cache (注意：不再需要关闭 Datafeed，因为使用全局单例)
+            # Datafeed 连接由 DatafeedManager 管理，程序退出时自动关闭
             
             self._open_price_cache.clear()
             if self.main_engine:
                 self.main_engine.write_log(
-                    "[ChartWindow] 已清空开盘价缓存"
+                    f"[ChartWindow-{id(self)}] 已清空开盘价缓存"
                 )
             
             # Ensure parent class method is called
