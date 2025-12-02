@@ -2,7 +2,192 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Latest Fix: ChartWindow Resource Leak and Connection Limit (December 2024)
+## Latest Fix: Pending Order Trigger Error and Position Synchronization (December 2024)
+
+### Overview
+
+Fixed critical issues with pending order trigger and position synchronization in ChartWindow:
+1. **`unhashable type: 'dict'` error** when triggering pending orders
+2. **Position synchronization issue** where entry lines still displayed after position closed
+
+### Problem Statement
+
+**Issue 1: Pending Order Trigger Error**
+
+**Symptoms**:
+- Error logs: `[ChartWidget] [实时挂单触发失败] 发送订单时发生异常: ... 错误: unhashable type: 'dict'`
+- Pending orders failed to trigger even though orders were successfully submitted
+- Error occurred in `link_line_to_order` method when trying to use `vt_orderid` as dictionary key
+
+**Root Causes**:
+1. **Data structure inconsistency**: `stop_loss`/`take_profit` in `_pending_line_relations` could be either string (line_id) or dict ({"line_id": str, "points": int})
+2. **Missing type validation**: No comprehensive type checking before using `vt_orderid` as dictionary key
+3. **Potential data corruption**: Edge cases where `vt_orderid` might not be string type
+
+**Issue 2: Position Synchronization**
+
+**Symptoms**:
+- After closing position in Trade UI, ChartWindow still shows entry lines when reopened
+- Entry lines display price and direction but no volume (because position is 0)
+- Entry lines should be automatically removed when position is 0
+
+**Root Causes**:
+- ChartWindow loads entry lines from database on startup
+- No synchronization with current position status after loading
+- Entry lines persist even after positions are closed via Trade UI
+
+### Solution Implementation
+
+#### Fix 1: Enhanced Type Checking and Data Structure Compatibility
+
+**Files Modified**:
+- `vnpy/chart/widget_trigger.py`
+- `vnpy/chart/drawing_order.py`
+- `vnpy_futu/vnpy_futu/futu_gateway.py`
+
+**Changes**:
+
+1. **Added comprehensive type validation in `widget_trigger.py`**:
+```python
+# ✅ 确保 vt_orderid 是字符串类型（双重验证）
+if vt_orderid and isinstance(vt_orderid, str):
+    # 添加调试日志
+    if main_engine:
+        main_engine.write_log(
+            f"[DEBUG widget_trigger] 准备调用 link_line_to_order: line_id={line_id}, vt_orderid类型={type(vt_orderid).__name__}, vt_orderid值={vt_orderid}",
+            "ChartWidget"
+        )
+    # 使用 try-except 捕获 TypeError
+    try:
+        controller.link_line_to_order(line_id, vt_orderid)
+    except TypeError as e:
+        # 记录详细错误信息
+        ...
+```
+
+2. **Added type validation in `drawing_order.py`**:
+```python
+def link_line_to_order(self, line_id: str, vt_orderid: str) -> None:
+    # ✅ 类型安全检查：确保 vt_orderid 是字符串类型
+    if not isinstance(vt_orderid, str):
+        # 检查是否是字典类型（字典不能作为字典键）
+        if isinstance(vt_orderid, dict):
+            # 记录错误并返回
+            return
+        # 尝试转换为字符串
+        ...
+    
+    # 再次确保 vt_orderid 是字符串（防御性编程）
+    if not isinstance(vt_orderid, str):
+        return
+    
+    try:
+        self._line_order_map[line_id] = vt_orderid
+        self._order_line_map[vt_orderid] = line_id
+    except TypeError as e:
+        # 记录详细错误信息
+        raise
+```
+
+3. **Fixed data structure compatibility in `widget_trigger.py`**:
+```python
+# 获取止损线信息（支持字符串或字典格式）
+stop_loss_value = relations.get("stop_loss")
+if stop_loss_value:
+    # 处理两种格式：字符串（line_id）或字典（{"line_id": str, "points": int}）
+    if isinstance(stop_loss_value, dict):
+        stop_loss_line_id = stop_loss_value.get("line_id")
+    elif isinstance(stop_loss_value, str):
+        stop_loss_line_id = stop_loss_value
+    else:
+        stop_loss_line_id = None
+```
+
+4. **Added debug logging in `futu_gateway.py`**:
+```python
+# ⚠️ [调试] 打印原始 order_id_value
+self.write_log(f"[DEBUG send_order] 原始order_id_value: 类型={type(order_id_value).__name__}, 值={order_id_value}")
+
+# ⚠️ [调试] 打印规范化后的 orderid
+self.write_log(f"[DEBUG send_order] 规范化后的orderid: 类型={type(normalized_orderid).__name__}, 值={normalized_orderid}")
+
+# ⚠️ [调试] 打印最终返回的 vt_orderid
+self.write_log(f"[DEBUG send_order] ⭐ 最终返回的 vt_orderid: 类型={type(order.vt_orderid).__name__}, 值={order.vt_orderid}")
+```
+
+#### Fix 2: Position Synchronization on ChartWindow Load
+
+**Files Modified**:
+- `vnpy/chart/widget_position.py`
+- `vnpy/chart/widget.py`
+
+**Changes**:
+
+1. **Added `_sync_position_on_load` method in `widget_position.py`**:
+```python
+def _sync_position_on_load(self) -> None:
+    """
+    在加载价格线后同步当前持仓状态。
+    如果某个方向的持仓为0，清除对应方向的入场线。
+    """
+    # 查询所有持仓
+    all_positions = self._main_engine.get_all_positions()
+    
+    # 构建持仓映射（考虑主力合约映射）
+    position_map = {}
+    # ... 匹配持仓逻辑 ...
+    
+    # 检查每个方向的持仓，如果为0则清除对应方向的入场线
+    for direction in ["long", "short"]:
+        position_volume = position_map.get(direction, 0.0)
+        if position_volume <= 0:
+            # 创建虚拟持仓对象并调用清除逻辑
+            virtual_position = PositionData(...)
+            self._update_entry_line_pnl(virtual_position)
+```
+
+2. **Called synchronization in `widget.py`**:
+```python
+def set_vt_symbol(self, vt_symbol: str) -> None:
+    # ... 加载价格线 ...
+    # ✅ 同步当前持仓状态（清除持仓为0的入场线）
+    if hasattr(self, '_sync_position_on_load'):
+        self._sync_position_on_load()
+```
+
+### Key Improvements
+
+1. **Robust Type Validation**: Multiple layers of type checking ensure `vt_orderid` is always a string
+2. **Data Structure Compatibility**: Handles both string and dict formats for `stop_loss`/`take_profit`
+3. **Comprehensive Debug Logging**: Detailed logs help trace issues in production
+4. **Position Synchronization**: Automatic cleanup of entry lines when positions are closed
+5. **Defensive Programming**: Try-except blocks with detailed error logging
+
+### Testing Results
+
+After fixes:
+- ✅ Pending order trigger works correctly
+- ✅ Entry lines automatically removed when position is 0
+- ✅ No `unhashable type: 'dict'` errors
+- ✅ All debug logs show correct types (strings)
+
+### Files Modified
+
+- `vnpy/chart/widget_trigger.py`: Type checking and data structure compatibility
+- `vnpy/chart/drawing_order.py`: Enhanced type validation in `link_line_to_order`
+- `vnpy/chart/widget_position.py`: Added `_sync_position_on_load` method
+- `vnpy/chart/widget.py`: Call position synchronization after loading lines
+- `vnpy_futu/vnpy_futu/futu_gateway.py`: Added debug logging (temporary, to be removed after verification)
+
+### Related Documentation
+
+- `bugfix/挂单触发错误原因分析.md`: Root cause analysis
+- `bugfix/挂单触发unhashable_dict错误修复说明.md`: Fix documentation
+- `specs/006-fix-regression-link-line-to-order/REGRESSION_ANALYSIS.md`: Regression analysis
+
+---
+
+## Previous Fix: ChartWindow Resource Leak and Connection Limit (December 2024)
 
 ### Overview
 

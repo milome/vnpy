@@ -411,6 +411,10 @@ class ChartWidget(
             
             # 加载持仓记录（用于FIFO平仓）
             self._load_position_holdings()
+            
+            # ✅ 同步当前持仓状态（清除持仓为0的入场线）
+            if hasattr(self, '_sync_position_on_load'):
+                self._sync_position_on_load()
         
         if self._drawing_order_controller:
             self._drawing_order_controller.set_vt_symbol(vt_symbol)

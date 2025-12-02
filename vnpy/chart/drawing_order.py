@@ -330,6 +330,51 @@ class DrawingOrderController:
             line_id: Price line ID
             vt_orderid: VT order ID
         """
+        # ⚠️ [调试] 方法入口日志
+        if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+            self._widget._main_engine.write_log(
+                f"[DEBUG link_line_to_order] 方法入口: line_id={line_id}, vt_orderid类型={type(vt_orderid).__name__}, vt_orderid值={vt_orderid}",
+                "DrawingOrderController"
+            )
+        
+        # ✅ 类型安全检查：确保 vt_orderid 是字符串类型
+        if not isinstance(vt_orderid, str):
+            # 记录警告
+            if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+                self._widget._main_engine.write_log(
+                    f"[DrawingOrderController] 警告: link_line_to_order 收到非字符串类型的 vt_orderid: {type(vt_orderid)}, 值: {vt_orderid}",
+                    "DrawingOrderController"
+                )
+            
+            # 检查是否是字典类型（字典不能作为字典键）
+            if isinstance(vt_orderid, dict):
+                if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+                    self._widget._main_engine.write_log(
+                        f"[DrawingOrderController] 错误: link_line_to_order 收到字典类型的 vt_orderid，无法使用: {vt_orderid}",
+                        "DrawingOrderController"
+                    )
+                return
+            
+            # 尝试转换为字符串（排除字典）
+            if vt_orderid:
+                try:
+                    vt_orderid = str(vt_orderid)
+                except Exception as e:
+                    if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+                        self._widget._main_engine.write_log(
+                            f"[DrawingOrderController] 错误: 无法将 vt_orderid 转换为字符串: {str(e)}, 类型: {type(vt_orderid)}, 值: {vt_orderid}",
+                            "DrawingOrderController"
+                        )
+                    return
+            else:
+                # 如果为空，记录错误并返回
+                if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+                    self._widget._main_engine.write_log(
+                        f"[DrawingOrderController] 错误: link_line_to_order 收到无效的 vt_orderid: {vt_orderid}",
+                        "DrawingOrderController"
+                    )
+                return
+        
         # 注释link详细日志，减少日志输出
         # if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
         #     self._widget._main_engine.write_log(
@@ -337,8 +382,32 @@ class DrawingOrderController:
         #         "DrawingOrderController"
         #     )
         
-        self._line_order_map[line_id] = vt_orderid
-        self._order_line_map[vt_orderid] = line_id
+        # ⚠️ [调试] 在执行字典操作前，再次验证类型
+        if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+            self._widget._main_engine.write_log(
+                f"[DEBUG link_line_to_order] 准备设置映射: line_id={line_id}, vt_orderid类型={type(vt_orderid).__name__}, vt_orderid值={vt_orderid}",
+                "DrawingOrderController"
+            )
+        
+        # 再次确保 vt_orderid 是字符串（防御性编程）
+        if not isinstance(vt_orderid, str):
+            if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+                self._widget._main_engine.write_log(
+                    f"[DrawingOrderController] 错误: 在执行字典操作前，vt_orderid 不是字符串: {type(vt_orderid)}, 值: {vt_orderid}",
+                    "DrawingOrderController"
+                )
+            return
+        
+        try:
+            self._line_order_map[line_id] = vt_orderid
+            self._order_line_map[vt_orderid] = line_id
+        except TypeError as e:
+            if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+                self._widget._main_engine.write_log(
+                    f"[DrawingOrderController] 错误: 设置字典映射时发生TypeError: {str(e)}, vt_orderid类型={type(vt_orderid).__name__}, vt_orderid值={vt_orderid}, line_id={line_id}",
+                    "DrawingOrderController"
+                )
+            raise
         
         # 注释关联验证日志，减少日志输出
         # if hasattr(self._widget, '_main_engine') and self._widget._main_engine:

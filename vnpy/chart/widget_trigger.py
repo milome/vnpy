@@ -223,23 +223,73 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
                         stop_loss_info = ""
                         take_profit_info = ""
                         if controller and hasattr(controller, '_pending_line_relations'):
-                            relations = controller._pending_line_relations.get(line_id, {})
+                            # ⚠️ [调试] 在访问 _pending_line_relations 前检查 line_id 类型
+                            if main_engine:
+                                main_engine.write_log(
+                                    f"[DEBUG widget_trigger] 准备访问 _pending_line_relations: line_id类型={type(line_id).__name__}, line_id值={line_id}",
+                                    "ChartWidget"
+                                )
+                            try:
+                                # 确保 _pending_line_relations 是字典类型
+                                if isinstance(controller._pending_line_relations, dict):
+                                    # ⚠️ [调试] 检查 _pending_line_relations 的键类型
+                                    if controller._pending_line_relations:
+                                        sample_keys = list(controller._pending_line_relations.keys())[:3]
+                                        if main_engine:
+                                            main_engine.write_log(
+                                                f"[DEBUG widget_trigger] _pending_line_relations 示例键类型: {[type(k).__name__ for k in sample_keys]}, 示例键值: {sample_keys}",
+                                                "ChartWidget"
+                                            )
+                                    relations = controller._pending_line_relations.get(line_id, {})
+                                else:
+                                    relations = {}
+                                    if main_engine:
+                                        main_engine.write_log(
+                                            f"[ChartWidget] 警告: _pending_line_relations 不是字典类型: {type(controller._pending_line_relations)}",
+                                            "ChartWidget"
+                                        )
+                            except Exception as rel_error:
+                                relations = {}
+                                if main_engine:
+                                    main_engine.write_log(
+                                        f"[ChartWidget] 获取挂单关联关系失败: {str(rel_error)}, line_id类型={type(line_id).__name__}, line_id值={line_id}",
+                                        "ChartWidget"
+                                    )
+                            
                             if relations and self._price_line_manager:
-                                # 获取止损线信息（存储的是line_id字符串）
-                                stop_loss_line_id = relations.get("stop_loss")
-                                if stop_loss_line_id:
-                                    # 从 PriceLineManager 获取止损线对象
-                                    stop_loss_line = self._price_line_manager.get_line(stop_loss_line_id)
-                                    if stop_loss_line:
-                                        stop_loss_info = f" 止损@{stop_loss_line.get_price():.0f}"
+                                # 获取止损线信息（支持字符串或字典格式）
+                                stop_loss_value = relations.get("stop_loss")
+                                if stop_loss_value:
+                                    # 处理两种格式：字符串（line_id）或字典（{"line_id": str, "points": int}）
+                                    if isinstance(stop_loss_value, dict):
+                                        stop_loss_line_id = stop_loss_value.get("line_id")
+                                    elif isinstance(stop_loss_value, str):
+                                        stop_loss_line_id = stop_loss_value
+                                    else:
+                                        stop_loss_line_id = None
+                                    
+                                    if stop_loss_line_id:
+                                        # 从 PriceLineManager 获取止损线对象
+                                        stop_loss_line = self._price_line_manager.get_line(stop_loss_line_id)
+                                        if stop_loss_line:
+                                            stop_loss_info = f" 止损@{stop_loss_line.get_price():.0f}"
                                 
-                                # 获取止盈线信息（存储的是line_id字符串）
-                                take_profit_line_id = relations.get("take_profit")
-                                if take_profit_line_id:
-                                    # 从 PriceLineManager 获取止盈线对象
-                                    take_profit_line = self._price_line_manager.get_line(take_profit_line_id)
-                                    if take_profit_line:
-                                        take_profit_info = f" 止盈@{take_profit_line.get_price():.0f}"
+                                # 获取止盈线信息（支持字符串或字典格式）
+                                take_profit_value = relations.get("take_profit")
+                                if take_profit_value:
+                                    # 处理两种格式：字符串（line_id）或字典（{"line_id": str, "points": int}）
+                                    if isinstance(take_profit_value, dict):
+                                        take_profit_line_id = take_profit_value.get("line_id")
+                                    elif isinstance(take_profit_value, str):
+                                        take_profit_line_id = take_profit_value
+                                    else:
+                                        take_profit_line_id = None
+                                    
+                                    if take_profit_line_id:
+                                        # 从 PriceLineManager 获取止盈线对象
+                                        take_profit_line = self._price_line_manager.get_line(take_profit_line_id)
+                                        if take_profit_line:
+                                            take_profit_info = f" 止盈@{take_profit_line.get_price():.0f}"
                         
                         main_engine.write_log(
                             f"[挂单触发] {current_time} {vt_symbol} {direction.value} "
@@ -247,16 +297,75 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
                             f"(挂单线:{line_id} -> 订单:{vt_orderid})",
                             "ChartWidget"
                         )
-                    # 确保controller存在
+                    # 确保controller存在，并关联订单和挂单线
                     if controller:
-                        # 使用字典存储订单和挂单线的关联关系
-                        if not hasattr(controller, '_line_order_map'):
-                            controller._line_order_map = {}
-                        if not hasattr(controller, '_order_line_map'):
-                            controller._order_line_map = {}
+                        # ✅ 确保 vt_orderid 是字符串类型（双重验证）
+                        if vt_orderid is None:
+                            if main_engine:
+                                main_engine.write_log(
+                                    f"[ChartWidget] 警告: send_order 返回了 None",
+                                    "ChartWidget"
+                                )
+                            vt_orderid = None
+                        elif not isinstance(vt_orderid, str):
+                            if main_engine:
+                                main_engine.write_log(
+                                    f"[ChartWidget] 警告: send_order 返回了非字符串类型: {type(vt_orderid)}, 值: {vt_orderid}",
+                                    "ChartWidget"
+                                )
+                            # 尝试转换为字符串（排除字典和其他不可哈希类型）
+                            if isinstance(vt_orderid, dict):
+                                if main_engine:
+                                    main_engine.write_log(
+                                        f"[ChartWidget] 错误: send_order 返回了字典类型，无法转换为字符串键: {vt_orderid}",
+                                        "ChartWidget"
+                                    )
+                                vt_orderid = None
+                            else:
+                                try:
+                                    vt_orderid = str(vt_orderid) if vt_orderid else None
+                                except Exception as e:
+                                    if main_engine:
+                                        main_engine.write_log(
+                                            f"[ChartWidget] 错误: 无法将 vt_orderid 转换为字符串: {str(e)}, 类型: {type(vt_orderid)}, 值: {vt_orderid}",
+                                            "ChartWidget"
+                                        )
+                                    vt_orderid = None
                         
-                        controller._line_order_map[line_id] = vt_orderid
-                        controller._order_line_map[vt_orderid] = line_id
+                        # ✅ 最终验证：确保 vt_orderid 是有效的字符串
+                        if vt_orderid and isinstance(vt_orderid, str):
+                            # ⚠️ [调试] 在调用 link_line_to_order 前打印日志
+                            if main_engine:
+                                main_engine.write_log(
+                                    f"[DEBUG widget_trigger] 准备调用 link_line_to_order: line_id={line_id}, vt_orderid类型={type(vt_orderid).__name__}, vt_orderid值={vt_orderid}",
+                                    "ChartWidget"
+                                )
+                            # 使用 controller 的方法关联订单和挂单线（更安全）
+                            if hasattr(controller, 'link_line_to_order'):
+                                try:
+                                    controller.link_line_to_order(line_id, vt_orderid)
+                                except TypeError as e:
+                                    if main_engine:
+                                        main_engine.write_log(
+                                            f"[DEBUG widget_trigger] link_line_to_order 发生 TypeError: {str(e)}, vt_orderid类型={type(vt_orderid).__name__}, vt_orderid值={vt_orderid}",
+                                            "ChartWidget"
+                                        )
+                                    raise
+                            else:
+                                # 向后兼容：如果方法不存在，直接操作字典
+                                if not hasattr(controller, '_line_order_map'):
+                                    controller._line_order_map = {}
+                                if not hasattr(controller, '_order_line_map'):
+                                    controller._order_line_map = {}
+                                
+                                controller._line_order_map[line_id] = vt_orderid
+                                controller._order_line_map[vt_orderid] = line_id
+                        else:
+                            if main_engine:
+                                main_engine.write_log(
+                                    f"[ChartWidget] 警告: 无法关联订单和挂单线，vt_orderid 无效: {vt_orderid}",
+                                    "ChartWidget"
+                                )
                     
                     # 监听订单成交事件，创建入场线和成交标记
                     # 这将在订单成交后通过update_line_from_order处理
@@ -464,9 +573,19 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
                     )
                 return False
             
+            # ✅ 提前检查可用持仓：如果持仓被冻结（正在平仓中），应该跳过
             # 获取平仓手数（使用止损线的手数，但不超过持仓手数）
             # 如果止损线手数为0，则使用持仓的全部可用手数
             available_volume = position.volume - position.frozen
+            if available_volume <= 0:
+                # 可用持仓为0，说明持仓已被冻结（正在平仓中），应该跳过
+                if main_engine:
+                    main_engine.write_log(
+                        f"[ChartWidget] 触发止损跳过: 止损线 {line_id} 可用持仓为0（持仓={position.volume}, 冻结={position.frozen}），可能正在平仓中",
+                        "ChartWidget"
+                    )
+                return False
+            
             if line_volume > 0:
                 close_volume = min(line_volume, available_volume)
             else:
@@ -796,9 +915,19 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
                     )
                 return False
             
+            # ✅ 提前检查可用持仓：如果持仓被冻结（正在平仓中），应该跳过
             # 获取平仓手数（使用止盈线的手数，但不超过持仓手数）
             # 如果止盈线手数为0，则使用持仓的全部可用手数
             available_volume = position.volume - position.frozen
+            if available_volume <= 0:
+                # 可用持仓为0，说明持仓已被冻结（正在平仓中），应该跳过
+                if main_engine:
+                    main_engine.write_log(
+                        f"[ChartWidget] 触发止盈跳过: 止盈线 {line_id} 可用持仓为0（持仓={position.volume}, 冻结={position.frozen}），可能正在平仓中",
+                        "ChartWidget"
+                    )
+                return False
+            
             if line_volume > 0:
                 close_volume = min(line_volume, available_volume)
             else:

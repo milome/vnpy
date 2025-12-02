@@ -2852,7 +2852,7 @@ class ChartWindow(QtWidgets.QWidget):
             # 记录日志
             if self.main_engine:
                 self.main_engine.write_log(
-                    "[ChartWindow] [Phase 5] 已注册事件监听：EVENT_TICK (signal_tick.emit), EVENT_ORDER (process_order_event)",
+                    "已注册事件监听：EVENT_TICK (signal_tick.emit), EVENT_ORDER (process_order_event)",
                     "ChartWindow"
                 )
 

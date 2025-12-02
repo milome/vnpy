@@ -1195,8 +1195,7 @@ class FutuGateway(BaseGateway):
         self.quote_ctx.set_handler(QuoteHandler())
         self.quote_ctx.set_handler(OrderBookHandler())
         self.quote_ctx.start()
-        print("开始订阅 MHImain")
-        self.write_log("行情接口连接成功!!!")
+        self.write_log("行情接口连接成功")
 
         req = SubscribeRequest(symbol="MHImain", exchange=Exchange.HKFE)
         self.subscribe(req)
@@ -1663,12 +1662,78 @@ class FutuGateway(BaseGateway):
             self.write_log(f"委托失败：{data}")
             return ""
 
-        for ix, row in data.iterrows():
-            orderid: str = self._normalize_orderid(str(row["order_id"])) or str(row["order_id"])
+        # ✅ 添加类型检查：确保返回的数据是 DataFrame
+        if not isinstance(data, pd.DataFrame):
+            self.write_log(
+                f"错误: place_order 返回了非DataFrame类型: {type(data)}, 值: {data}",
+                "FUTU"
+            )
+            return ""
+
+        # ✅ 检查 DataFrame 是否为空
+        if data.empty:
+            self.write_log(
+                f"错误: place_order 返回了空的DataFrame",
+                "FUTU"
+            )
+            return ""
+
+        # ✅ 安全地获取 order_id
+        orderid: Optional[str] = None
+        try:
+            for ix, row in data.iterrows():
+                order_id_value = row.get("order_id")
+                if order_id_value is not None:
+                    # ⚠️ [调试] 打印原始 order_id_value
+                    self.write_log(f"[DEBUG send_order] 原始order_id_value: 类型={type(order_id_value).__name__}, 值={order_id_value}")
+                    
+                    # ✅ 检查 order_id 的类型
+                    if isinstance(order_id_value, dict):
+                        # order_id 是字典类型（异常情况）
+                        self.write_log(
+                            f"警告: order_id 是字典类型: {order_id_value}，尝试提取订单ID"
+                        )
+                        # 尝试从字典中提取订单ID
+                        # 可能的键名：order_id, id, orderId 等
+                        orderid = str(order_id_value.get("order_id") or 
+                                     order_id_value.get("id") or 
+                                     order_id_value.get("orderId") or 
+                                     order_id_value)
+                    elif isinstance(order_id_value, (str, int, float)):
+                        # order_id 是正常类型（字符串或数字）
+                        orderid = str(order_id_value)
+                    else:
+                        # order_id 是其他类型
+                        self.write_log(
+                            f"警告: order_id 是未知类型: {type(order_id_value)}, 值: {order_id_value}，尝试转换为字符串"
+                        )
+                        orderid = str(order_id_value)
+                    break
+        except Exception as e:
+            self.write_log(
+                f"错误: 从返回数据中提取订单ID时发生异常: {str(e)}, 数据: {data}"
+            )
+            return ""
+
+        # ✅ 验证 orderid 是否有效
+        if not orderid:
+            self.write_log(
+                f"错误: 无法从返回数据中获取订单ID，数据: {data.to_dict() if hasattr(data, 'to_dict') else data}"
+            )
+            return ""
+
+        # ✅ 规范化订单ID（去除网关前缀）
+        normalized_orderid = self._normalize_orderid(orderid) or orderid
+        # ⚠️ [调试] 打印规范化后的 orderid
+        self.write_log(f"[DEBUG send_order] 规范化后的orderid: 类型={type(normalized_orderid).__name__}, 值={normalized_orderid}")
+        orderid = normalized_orderid
 
         # 创建订单对象
         order: OrderData = req.create_order_data(orderid, self.gateway_name)
         self.on_order(order)
+        
+        # ⚠️ [调试] 打印订单对象的 vt_orderid
+        self.write_log(f"[DEBUG send_order] 订单对象 vt_orderid: 类型={type(order.vt_orderid).__name__}, 值={order.vt_orderid}")
 
         # 检查是否需要启用追价功能
         chase_config = ChaseConfig(req.reference)
@@ -1684,6 +1749,8 @@ class FutuGateway(BaseGateway):
             self.write_log(f"启用智能追价: {req.symbol} 订单{orderid} - "
                           f"重试{chase_config.max_retry_times}次")
 
+        # ⚠️ [调试] 打印最终返回的 vt_orderid
+        self.write_log(f"[DEBUG send_order] ⭐ 最终返回的 vt_orderid: 类型={type(order.vt_orderid).__name__}, 值={order.vt_orderid}")
         return order.vt_orderid
 
     def _notify_chase_timeout_failure(self, chase_order: ChaseOrder, elapsed_seconds: float) -> None:

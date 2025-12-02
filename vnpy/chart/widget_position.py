@@ -1840,4 +1840,94 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                     f"[ChartWidget] 从数据库加载了 {len(entries_data)} 条{direction}方向的持仓记录",
                     "ChartWidget"
                 )
+    
+    def _sync_position_on_load(self) -> None:
+        """
+        在加载价格线后同步当前持仓状态。
+        如果某个方向的持仓为0，清除对应方向的入场线。
+        """
+        if not hasattr(self, '_main_engine') or not self._main_engine:
+            return
+        
+        if not self._vt_symbol:
+            return
+        
+        # 查询所有持仓
+        all_positions = self._main_engine.get_all_positions()
+        
+        # 构建持仓映射：direction -> volume
+        position_map = {}
+        chart_vt_symbol = self._vt_symbol
+        for pos in all_positions:
+            # 检查是否与图表合约匹配（考虑主力合约映射）
+            pos_vt_symbol = pos.vt_symbol
+            matched = False
+            if chart_vt_symbol and pos_vt_symbol == chart_vt_symbol:
+                matched = True
+            else:
+                # 尝试通过主力合约映射匹配
+                pos_symbol = pos.symbol
+                chart_symbol = chart_vt_symbol.split('.')[0] if '.' in chart_vt_symbol else chart_vt_symbol
+                for gateway_name in self._main_engine.get_all_gateway_names():
+                    gateway = self._main_engine.get_gateway(gateway_name)
+                    if gateway and hasattr(gateway, 'get_main_contract_mapping'):
+                        mapping = gateway.get_main_contract_mapping()
+                        for main_symbol, actual_symbol in mapping.items():
+                            if actual_symbol == pos_symbol:
+                                main_vt_symbol = f"{main_symbol}.{pos.exchange.value}"
+                                if main_vt_symbol == chart_vt_symbol:
+                                    matched = True
+                                    break
+                        if matched:
+                            break
+            
+            if matched:
+                pos_direction = "long" if pos.direction.value == "多" else "short"
+                position_map[pos_direction] = pos.volume
+        
+        # 检查每个方向的持仓，如果为0则清除对应方向的入场线
+        manager = self.get_price_line_manager()
+        if not manager:
+            return
+        
+        all_lines = manager.get_all_lines()
+        if not all_lines:
+            return
+        
+        for direction in ["long", "short"]:
+            position_volume = position_map.get(direction, 0.0)
+            if position_volume <= 0:
+                # 持仓为0，清除该方向的所有入场线
+                if hasattr(self, '_main_engine') and self._main_engine:
+                    self._main_engine.write_log(
+                        f"[ChartWidget] 加载时同步持仓：{direction}方向持仓为0，清除对应入场线",
+                        "ChartWidget"
+                    )
+                
+                # 复用现有的清除逻辑：创建一个虚拟的持仓对象
+                from vnpy.trader.object import PositionData
+                from vnpy.trader.constant import Direction, Exchange
+                
+                # 解析exchange
+                exchange = Exchange.SHFE
+                if '.' in chart_vt_symbol:
+                    exchange_str = chart_vt_symbol.split('.')[1]
+                    try:
+                        exchange = Exchange(exchange_str)
+                    except ValueError:
+                        pass
+                
+                virtual_position = PositionData(
+                    symbol=chart_vt_symbol.split('.')[0] if '.' in chart_vt_symbol else chart_vt_symbol,
+                    exchange=exchange,
+                    direction=Direction.LONG if direction == "long" else Direction.SHORT,
+                    volume=0,
+                    frozen=0,
+                    price=0,
+                    pnl=0,
+                    gateway_name=""
+                )
+                
+                # 调用现有的清除逻辑
+                self._update_entry_line_pnl(virtual_position)
 
