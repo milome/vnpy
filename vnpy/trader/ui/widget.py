@@ -4794,15 +4794,10 @@ class ChartWindow(QtWidgets.QWidget):
         should_close_datafeed = False  # 标记是否需要关闭datafeed
         
         try:
-            # 优先使用 _get_datafeed() 方法（支持缓存和复用）
+            # 优先使用 _get_datafeed() 方法（返回全局单例）
             datafeed = self._get_datafeed()
             
-            if datafeed is None:
-                # 降级：尝试从main_engine获取datafeed
-                if hasattr(self.main_engine, 'get_datafeed'):
-                    datafeed = self.main_engine.get_datafeed()
-
-            # 最后手段：创建临时的FUTU datafeed（必须关闭）
+            # 如果全局单例创建失败，创建临时的FUTU datafeed（必须关闭）
             if datafeed is None:
                 try:
                     from vnpy_futu.datafeed import Datafeed as FutuDatafeed
