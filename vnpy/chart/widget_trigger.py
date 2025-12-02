@@ -343,12 +343,7 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
             # 挂单线关联的止损线在创建时创建时间为None（未激活），只有在挂单成交后才激活（设置创建时间）
             creation_time = line.get_creation_time()
             if creation_time is None:
-                # 止损线未激活（关联挂单线但挂单未成交），跳过触发
-                if main_engine:
-                    main_engine.write_log(
-                        f"[ChartWidget] 触发止损跳过: 止损线 {line_id} 未激活（关联挂单线但挂单未成交），不触发",
-                        "ChartWidget"
-                    )
+                # 止损线未激活（关联挂单线但挂单未成交），静默跳过（不记录日志，避免刷屏）
                 return False
             
             # ✅ 检查创建时间：如果刚激活（<500ms），忽略触发（防止激活后立即触发）
@@ -655,12 +650,7 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
             # 挂单线关联的止盈线在创建时创建时间为None（未激活），只有在挂单成交后才激活（设置创建时间）
             creation_time = line.get_creation_time()
             if creation_time is None:
-                # 止盈线未激活（关联挂单线但挂单未成交），跳过触发
-                if main_engine:
-                    main_engine.write_log(
-                        f"[ChartWidget] 触发止盈跳过: 止盈线 {line_id} 未激活（关联挂单线但挂单未成交），不触发",
-                        "ChartWidget"
-                    )
+                # 止盈线未激活（关联挂单线但挂单未成交），静默跳过（不记录日志，避免刷屏）
                 return False
             
             # ✅ 检查创建时间：如果刚激活（<500ms），忽略触发（防止激活后立即触发）

@@ -3211,16 +3211,16 @@ class ChartWindow(QtWidgets.QWidget):
             all_lines = self.chart._price_line_manager.get_all_lines()
             from vnpy.chart.price_line import PriceLineType
 
-            # 优化：只处理已激活的止损线（提前过滤，避免日志刷屏）
+            # 处理止损线（不提前过滤，让内部方法判断是否激活）
             stop_loss_lines = {
                 line_id: line
                 for line_id, line in all_lines.items()
-                if (line.get_line_type() == PriceLineType.STOP_LOSS and
-                    hasattr(line, 'is_activated') and line.is_activated())
+                if line.get_line_type() == PriceLineType.STOP_LOSS
             }
             for line_id, line in stop_loss_lines.items():
                 try:
-                    # 调用触发方法，方法内部会检查价格是否触及止损线
+                    # 调用触发方法，方法内部会检查激活状态和价格是否触及止损线
+                    # 未激活的线会在内部静默跳过（不记录日志，避免刷屏）
                     self.chart.trigger_stop_loss_close(line_id, line, tick)
                 except Exception as e:
                     if self.main_engine:
@@ -3229,16 +3229,16 @@ class ChartWindow(QtWidgets.QWidget):
                             "ChartWindow"
                         )
 
-            # 优化：只处理已激活的止盈线（提前过滤，避免日志刷屏）
+            # 处理止盈线（不提前过滤，让内部方法判断是否激活）
             take_profit_lines = {
                 line_id: line
                 for line_id, line in all_lines.items()
-                if (line.get_line_type() == PriceLineType.TAKE_PROFIT and
-                    hasattr(line, 'is_activated') and line.is_activated())
+                if line.get_line_type() == PriceLineType.TAKE_PROFIT
             }
             for line_id, line in take_profit_lines.items():
                 try:
-                    # 调用触发方法，方法内部会检查价格是否触及止盈线
+                    # 调用触发方法，方法内部会检查激活状态和价格是否触及止盈线
+                    # 未激活的线会在内部静默跳过（不记录日志，避免刷屏）
                     self.chart.trigger_take_profit_close(line_id, line, tick)
                 except Exception as e:
                     if self.main_engine:
