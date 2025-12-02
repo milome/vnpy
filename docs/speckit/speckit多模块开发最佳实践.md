@@ -338,7 +338,9 @@ specs/
 
 ### 概述
 
-Speckit 通过一系列命令（`/speckit.*`）来管理功能开发的完整生命周期。这些命令在 `specs/000-Overview/.cursor/commands/` 目录下定义，通过 PowerShell 脚本自动创建文件夹结构、生成文档和管理 Git 分支。
+Speckit 通过一系列命令（`/speckit.*`）来管理功能开发的完整生命周期。这些命令在 `specs/000-Overview/.cursor/commands/` 目录下定义，通过 PowerShell 脚本自动创建文件夹结构、生成文档。
+
+**重要说明**：Speckit 命令本身**不会创建 Git 分支或 worktree**，这些操作需要手动完成。
 
 ### 核心命令流程
 
@@ -592,6 +594,272 @@ A: 功能编号在创建时确定，不建议修改。如果需要调整，可�
 2. 更新 Git 分支名称
 3. 更新文档中的引用
 
+**Q: Speckit 命令会创建 Git 分支吗？**
+
+A: ❌ **不会** - Speckit 只创建文档，不涉及 Git 操作。Git 分支和 worktree 需要手动创建。
+
+**Q: 应该在哪个阶段创建 feature branch？**
+
+A: ✅ **在文档完成后，开始开发前** - 推荐在 `/speckit.tasks` 完成后创建。
+
+**Q: 可以同时创建分支和 worktree 吗？**
+
+A: ✅ **可以，推荐使用脚本自动化** - 详见下面的"Git 分支和 Worktree 创建时机"章节。
+
+## 🔗 Git 分支和 Worktree 创建时机
+
+### 核心问题
+
+**Q: Speckit 命令会创建 Git 分支吗？**  
+**A: ❌ 不会** - Speckit 只创建文档，不涉及 Git 操作
+
+**Q: 应该在哪个阶段创建 feature branch？**  
+**A: ✅ 在文档完成后，开始开发前**
+
+**Q: 可以同时创建分支和 worktree 吗？**  
+**A: ✅ 可以，推荐使用脚本自动化**
+
+### Speckit 工作流程中的 Git 操作
+
+#### Speckit 命令阶段（不创建分支）
+
+```
+阶段1: /speckit.specify
+  - 创建文件夹: specs/{编号}-{功能}/
+  - 创建文件: specification.md, .speckit.clarify
+  - Git操作: ❌ 无（通常在dev分支）
+
+阶段2: /speckit.plan
+  - 创建文件: plan.md (+ 可选文档)
+  - Git操作: ❌ 无（通常在dev分支）
+
+阶段3: /speckit.tasks
+  - 创建文件: tasks.md
+  - Git操作: ❌ 无（通常在dev分支）
+```
+
+#### 开发准备阶段（创建分支和 worktree）⭐
+
+```
+阶段4: 准备开发环境
+  - Git操作: ✅ 创建feature branch
+  - Git操作: ✅ 创建worktree（推荐）
+  - 位置: 在worktree中开始开发
+```
+
+### 推荐的完整流程
+
+#### 流程1: 文档在dev分支，开发在feature branch（推荐）
+
+```bash
+# ===== 阶段1-3: 文档创建（在dev分支） =====
+cd vnpy
+git checkout dev
+git pull origin dev
+
+# 使用speckit创建文档
+# /speckit.specify → specification.md
+# /speckit.plan → plan.md
+# /speckit.tasks → tasks.md
+
+# 提交文档到dev分支（可选）
+git add specs/005-multi-timeframe-overlay/
+git commit -m "docs: add multi-timeframe overlay specification"
+
+# ===== 阶段4: 创建feature branch和worktree =====
+# 创建feature branch
+git checkout -b 005-multi-timeframe-overlay dev
+
+# 创建worktree（推荐）
+git worktree add ../vnpy-005-multi-timeframe-overlay 005-multi-timeframe-overlay
+
+# 切换到worktree开始开发
+cd ../vnpy-005-multi-timeframe-overlay
+
+# ===== 阶段5: 在worktree中开发 =====
+# 开发代码...
+# 提交到feature branch...
+```
+
+**优点**:
+- ✅ 文档在dev分支，便于评审和共享
+- ✅ 开发代码在feature branch，保持dev干净
+- ✅ 使用worktree隔离，不影响其他工作
+
+#### 流程2: 使用脚本自动化（最推荐）
+
+```bash
+# ===== 阶段1-3: 文档创建（在dev分支） =====
+cd vnpy
+git checkout dev
+
+# 使用speckit创建文档...
+
+# ===== 阶段4: 使用脚本创建分支和worktree =====
+# Windows PowerShell
+.\scripts\setup_worktree.ps1 create 005-multi-timeframe-overlay
+
+# Linux/Mac Bash
+./scripts/setup_worktree.sh create 005-multi-timeframe-overlay
+
+# 脚本会自动:
+# 1. 检查分支是否存在，不存在则从dev创建
+# 2. 检查worktree是否存在，不存在则创建
+# 3. 切换到worktree目录
+
+# ===== 阶段5: 在worktree中开发 =====
+# 已经在worktree目录中，直接开始开发
+```
+
+**优点**:
+- ✅ 自动化，减少错误
+- ✅ 自动处理分支和worktree的创建
+- ✅ 自动处理已存在的情况
+
+#### 流程3: 文档也在feature branch
+
+```bash
+# ===== 阶段1-2: 文档创建（在dev分支） =====
+cd vnpy
+git checkout dev
+
+# /speckit.specify → specification.md
+# /speckit.plan → plan.md
+
+# ===== 阶段3: 创建feature branch =====
+git checkout -b 005-multi-timeframe-overlay dev
+
+# /speckit.tasks → tasks.md (在feature branch)
+
+# ===== 阶段4: 创建worktree =====
+git worktree add ../vnpy-005-multi-timeframe-overlay 005-multi-timeframe-overlay
+
+# ===== 阶段5: 在worktree中开发 =====
+cd ../vnpy-005-multi-timeframe-overlay
+# 开发代码...
+```
+
+**优点**:
+- ✅ 所有相关文件都在feature branch
+- ✅ 便于功能完整管理
+
+### 同时创建分支和 Worktree
+
+#### 可以同时创建
+
+**方式1: 手动操作**
+```bash
+# 一步完成：创建分支并创建worktree
+git checkout -b 005-multi-timeframe-overlay dev
+git worktree add ../vnpy-005-multi-timeframe-overlay 005-multi-timeframe-overlay
+```
+
+**方式2: 使用脚本（推荐）**
+```bash
+# 脚本会自动处理分支和worktree的创建
+./scripts/setup_worktree.sh create 005-multi-timeframe-overlay
+```
+
+**脚本内部逻辑**:
+```bash
+# 1. 检查分支是否存在
+if ! branch_exists "005-multi-timeframe-overlay"; then
+    git checkout -b 005-multi-timeframe-overlay dev
+fi
+
+# 2. 检查worktree是否存在
+if ! worktree_exists "005-multi-timeframe-overlay"; then
+    git worktree add ../vnpy-005-multi-timeframe-overlay 005-multi-timeframe-overlay
+fi
+
+# 3. 切换到worktree
+cd ../vnpy-005-multi-timeframe-overlay
+```
+
+### 时机对比表
+
+| 阶段 | Speckit命令 | Git分支 | Worktree | 说明 |
+|------|------------|---------|----------|------|
+| 1. 需求分析 | `/speckit.specify` | ❌ 无 | ❌ 无 | 创建文档，通常在dev分支 |
+| 2. 计划制定 | `/speckit.plan` | ❌ 无 | ❌ 无 | 创建文档，通常在dev分支 |
+| 3. 任务分解 | `/speckit.tasks` | ❌ 无 | ❌ 无 | 创建文档，可在dev或feature branch |
+| 4. 准备开发 | 手动操作 | ✅ **创建** | ✅ **创建** | **推荐此时创建** |
+| 5. 开发过程 | 手动开发 | ✅ 使用 | ✅ 使用 | 在worktree中开发 |
+
+### 关键要点总结
+
+#### Speckit 命令
+- ❌ **不创建 Git 分支**
+- ❌ **不创建 worktree**
+- ✅ **只创建文档文件**
+
+#### Git 分支创建
+- ✅ **手动创建** - 在文档完成后，开发开始前
+- ✅ **推荐时机** - 在 `/speckit.tasks` 完成后
+- ✅ **从 dev 分支创建** - `git checkout -b {编号}-{功能} dev`
+
+#### Worktree 创建
+- ✅ **手动创建** - 在 feature branch 创建后
+- ✅ **推荐时机** - 与 feature branch 同时创建
+- ✅ **使用脚本** - 自动化创建过程
+
+#### 同时创建
+- ✅ **可以同时创建** - 推荐使用脚本
+- ✅ **脚本优势** - 自动检查、自动创建、自动切换
+
+### 检查清单
+
+#### 文档阶段完成后
+- [ ] specification.md 已创建
+- [ ] plan.md 已创建
+- [ ] tasks.md 已创建
+- [ ] .speckit.clarify 已初始化
+
+#### 开发准备阶段
+- [ ] 创建 feature branch: `git checkout -b {编号}-{功能} dev`
+- [ ] 创建 worktree: `git worktree add ../vnpy-{编号} {编号}-{功能}`
+- [ ] 切换到 worktree 目录
+- [ ] 确认当前分支和路径
+
+#### 开发阶段
+- [ ] 在 worktree 中开发代码
+- [ ] 提交到 feature branch
+- [ ] 定期同步 dev 分支: `git fetch origin dev && git merge origin/dev`
+- [ ] 保持 dev 分支干净
+
+### 常见问题
+
+#### Q1: 可以在 speckit 命令执行时自动创建分支吗？
+
+**A**: 目前 speckit 不支持，需要手动创建。但可以使用脚本自动化：
+```bash
+# 创建脚本包装speckit + git操作
+./scripts/setup_feature.sh 005-multi-timeframe-overlay
+# 脚本内部:
+# 1. 执行speckit命令（如果需要）
+# 2. 创建feature branch
+# 3. 创建worktree
+```
+
+#### Q2: 文档应该提交到 dev 还是 feature branch？
+
+**A**: 两种方式都可以：
+- **方式1（推荐）**: 文档在 dev 分支，便于评审和共享
+- **方式2**: 文档在 feature branch，功能完整管理
+
+#### Q3: 如果已经创建了 feature branch，还需要 worktree 吗？
+
+**A**: 推荐使用 worktree，原因：
+- 隔离开发环境
+- 不影响其他工作
+- 便于多 agent 协作
+
+#### Q4: 可以多个 worktree 指向同一个分支吗？
+
+**A**: ❌ **不可以** - Git 限制：一个分支只能检出一个 worktree
+- 如果需要多个工作环境，使用不同分支
+- 或者在不同时间使用同一个 worktree
+
 ## 🔄 工作流程建议
 
 ### 1. 新模块开发流程
@@ -643,11 +911,20 @@ A: 功能编号在创建时确定，不建议修改。如果需要调整，可�
 
 ---
 
-**文档版本：** 1.1  
+**文档版本：** 1.2  
 **最后更新：** 2025-01-27  
 **维护者：** vnpy 开发团队
 
 ## 📝 更新日志
+
+### v1.2 (2025-01-27)
+- ✅ 整合 Git 分支和 Worktree 创建时机指南
+- ✅ 新增"Git 分支和 Worktree 创建时机"章节
+- ✅ 详细说明 Speckit 命令与 Git 操作的关系
+- ✅ 添加三种推荐的完整工作流程
+- ✅ 说明同时创建分支和 worktree 的方法
+- ✅ 添加时机对比表和检查清单
+- ✅ 补充常见问题解答
 
 ### v1.1 (2025-01-27)
 - ✅ 新增"Speckit 工作流程原理"章节
