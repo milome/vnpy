@@ -260,7 +260,8 @@ class Datafeed(BaseDatafeed):
         查询历史Tick数据
         注意：富途API暂不支持历史Tick数据查询，此方法返回空列表
         """
-        safe_output(output, _("富途数据服务暂不支持历史Tick数据查询"))
+        # 注释掉频繁的日志，避免刷屏
+        # safe_output(output, _("富途数据服务暂不支持历史Tick数据查询"))
         return []
 
     def close(self) -> None:

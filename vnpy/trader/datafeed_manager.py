@@ -70,8 +70,9 @@ class DatafeedManager:
             
             # 如果已有实例，直接返回
             if self._datafeed is not None:
-                if write_log:
-                    write_log("[DatafeedManager] 使用全局单例 Datafeed 连接")
+                # 注释掉频繁的日志，避免刷屏
+                # if write_log:
+                #     write_log("[DatafeedManager] 使用全局单例 Datafeed 连接")
                 return self._datafeed
             
             # 首次访问，创建并初始化 Datafeed
