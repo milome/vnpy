@@ -178,11 +178,12 @@ class ChartWidgetOrderMixin(ChartWidgetMixinBase):
             self._process_order_update(order)
         else:
             # 不在主线程，使用信号槽调度到主线程
-            if hasattr(self, '_main_engine') and self._main_engine:
-                self._main_engine.write_log(
-                    f"[ChartWidget] 不在主线程，使用信号槽调度 _process_order_update",
-                    "ChartWidget"
-                )
+            # 注释调度日志，减少日志输出
+            # if hasattr(self, '_main_engine') and self._main_engine:
+            #     self._main_engine.write_log(
+            #         f"[ChartWidget] 不在主线程，使用信号槽调度 _process_order_update",
+            #         "ChartWidget"
+            #     )
             self._signal_order_update.emit(order)
     
     def _process_order_update(self, order: OrderData) -> None:
@@ -455,16 +456,18 @@ class ChartWidgetOrderMixin(ChartWidgetMixinBase):
         # 标记为已处理
         self._processed_order_updates[order_key] = current_time
         
-        if hasattr(self, '_main_engine') and self._main_engine:
-            self._main_engine.write_log(
-                f"[ChartWidget] 开始处理订单更新: {order.vt_orderid} status={order.status.value}",
-                "ChartWidget"
-            )
+        # 注释开始处理订单更新日志，减少日志输出
+        # if hasattr(self, '_main_engine') and self._main_engine:
+        #     self._main_engine.write_log(
+        #         f"[ChartWidget] 开始处理订单更新: {order.vt_orderid} status={order.status.value}",
+        #         "ChartWidget"
+        #     )
         if self._drawing_order_controller:
             result = self._drawing_order_controller.update_line_from_order(order)
-            if hasattr(self, '_main_engine') and self._main_engine:
-                self._main_engine.write_log(
-                    f"[ChartWidget] update_line_from_order 返回结果: {result}",
-                    "ChartWidget"
-                )
+            # 注释返回结果日志，减少日志输出
+            # if hasattr(self, '_main_engine') and self._main_engine:
+            #     self._main_engine.write_log(
+            #         f"[ChartWidget] update_line_from_order 返回结果: {result}",
+            #         "ChartWidget"
+            #     )
 

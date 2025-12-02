@@ -362,16 +362,17 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                             line_type = PriceLineType.STOP_LOSS if new_price > entry_price else PriceLineType.TAKE_PROFIT
                         
                         # 添加调试日志，帮助排查类型判断问题
-                        if hasattr(self, '_main_engine') and self._main_engine:
-                            line_type_name = "止损" if line_type == PriceLineType.STOP_LOSS else "止盈"
-                            price_diff = new_price - entry_price
-                            position_desc = "上方" if price_diff > 0 else "下方"
-                            self._main_engine.write_log(
-                                f"[ChartWidget] 拖拽预览线类型判断: 入场价={entry_price:.2f}, "
-                                f"拖拽价格={new_price:.2f} ({position_desc}, 价差={price_diff:+.2f}), "
-                                f"方向={direction}, 判断为={line_type_name}",
-                                "ChartWidget"
-                            )
+                        # 注释拖拽预览线类型判断日志，减少日志输出（拖拽时频繁打印）
+                        # if hasattr(self, '_main_engine') and self._main_engine:
+                        #     line_type_name = "止损" if line_type == PriceLineType.STOP_LOSS else "止盈"
+                        #     price_diff = new_price - entry_price
+                        #     position_desc = "上方" if price_diff > 0 else "下方"
+                        #     self._main_engine.write_log(
+                        #         f"[ChartWidget] 拖拽预览线类型判断: 入场价={entry_price:.2f}, "
+                        #         f"拖拽价格={new_price:.2f} ({position_desc}, 价差={price_diff:+.2f}), "
+                        #         f"方向={direction}, 判断为={line_type_name}",
+                        #         "ChartWidget"
+                        #     )
                         
                         preview_line = self._price_line_drag_handler.get_preview_line()
                         if preview_line:
