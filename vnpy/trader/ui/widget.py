@@ -3739,10 +3739,7 @@ class ChartWindow(QtWidgets.QWidget):
             try:
                 if hasattr(datafeed, 'close'):
                     datafeed.close()
-                    self.main_engine.write_log(
-                        "[ChartWindow] 已关闭数据服务连接",
-                        "ChartWindow"
-                    )
+                    self.main_engine.write_log("[数据加载] 已关闭Datafeed连接")
             except Exception as e:
                 # 关闭连接时出错，记录日志但不抛出异常
                 self.main_engine.write_log(
@@ -3818,8 +3815,7 @@ class ChartWindow(QtWidgets.QWidget):
                 count_4h = datamanager_engine.aggregate_4hour_bars(symbol, exchange)
                 if count_4h > 0:
                     self.main_engine.write_log(
-                        f"[ChartWindow] 已聚合 {count_4h} 条4小时K线数据",
-                        "ChartWindow"
+                        f"[数据加载] 已聚合 {count_4h} 条4小时K线数据"
                     )
             except Exception as e:
                 error_msg = str(e).replace("{", "{{").replace("}", "}}")
@@ -4617,6 +4613,9 @@ class ChartWindow(QtWidgets.QWidget):
             local_tz = ZoneInfo(get_localzone_name())
             now = datetime.now(local_tz)
 
+            # 解析合约代码和交易所（提前解析，避免后面使用时未定义）
+            symbol, exchange = extract_vt_symbol(vt_symbol)
+            
             # ✅ 对于1分钟和5分钟周期，排除当前时间周期，避免补齐未完成的K线
             # 这样可以确保最后几根K线的数据准确，不会被未完成的K线覆盖
             from vnpy.trader.period_utils import get_period_start
@@ -4665,7 +4664,6 @@ class ChartWindow(QtWidgets.QWidget):
             )
 
             # 从数据库加载1分钟数据来填充gap（仅1分钟周期尝试数据库）
-            symbol, exchange = extract_vt_symbol(vt_symbol)
             minute_bars = []
 
             if interval == Interval.MINUTE:
