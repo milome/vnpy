@@ -224,23 +224,14 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
                         )
                     # 确保controller存在
                     if controller:
-                        controller.link_line_to_order(line_id, vt_orderid)
+                        # 使用字典存储订单和挂单线的关联关系
+                        if not hasattr(controller, '_line_order_map'):
+                            controller._line_order_map = {}
+                        if not hasattr(controller, '_order_line_map'):
+                            controller._order_line_map = {}
                         
-                        # 注释掉订单关联验证日志，减少日志输出
-                        # # 验证关联是否成功
-                        # linked_line_id = controller.get_line_id_for_order(vt_orderid)
-                        # if linked_line_id == line_id:
-                        #     if main_engine:
-                        #         main_engine.write_log(
-                        #             f"[ChartWidget] 订单关联验证成功: 订单 {vt_orderid} -> 挂单线 {line_id}",
-                        #             "ChartWidget"
-                        #         )
-                        # else:
-                        #     if main_engine:
-                        #         main_engine.write_log(
-                        #             f"[ChartWidget] 警告: 订单关联验证失败: 订单 {vt_orderid} -> 挂单线 {linked_line_id} (期望: {line_id})",
-                        #             "ChartWidget"
-                        #         )
+                        controller._line_order_map[line_id] = vt_orderid
+                        controller._order_line_map[vt_orderid] = line_id
                     
                     # 监听订单成交事件，创建入场线和成交标记
                     # 这将在订单成交后通过update_line_from_order处理
