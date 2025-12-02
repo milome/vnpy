@@ -89,15 +89,8 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
             # 转换为枚举类型
             from vnpy.trader.constant import Direction, Offset
             direction = Direction.LONG if direction_str == "long" else Direction.SHORT
-            offset = Offset.OPEN if order_offset_str == "OPEN" else Offset.CLOSE
-            
-            # 调试日志：确认挂单参数
-            if main_engine:
-                main_engine.write_log(
-                    f"[ChartWidget] [挂单参数] 线ID: {line_id}, 方向: {direction_str}, "
-                    f"开平参数: {order_offset_str}, 转换后: {offset.value}",
-                    "ChartWidget"
-                )
+            # 修复：支持中文和英文的开平参数
+            offset = Offset.OPEN if order_offset_str in ("OPEN", "开") else Offset.CLOSE
             
             # ========== 检查是否为平仓操作 ==========
             # 即使 offset 是 OPEN，如果存在反向持仓，也应该视为平仓
