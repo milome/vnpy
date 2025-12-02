@@ -199,13 +199,22 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
                         take_profit_info = ""
                         if controller and hasattr(controller, '_pending_line_relations'):
                             relations = controller._pending_line_relations.get(line_id, {})
-                            if relations:
-                                stop_loss = relations.get("stop_loss")
-                                if stop_loss:
-                                    stop_loss_info = f" 止损@{stop_loss['price']}"
-                                take_profit = relations.get("take_profit")
-                                if take_profit:
-                                    take_profit_info = f" 止盈@{take_profit['price']}"
+                            if relations and self._price_line_manager:
+                                # 获取止损线信息（存储的是line_id字符串）
+                                stop_loss_line_id = relations.get("stop_loss")
+                                if stop_loss_line_id:
+                                    # 从 PriceLineManager 获取止损线对象
+                                    stop_loss_line = self._price_line_manager.get_line(stop_loss_line_id)
+                                    if stop_loss_line:
+                                        stop_loss_info = f" 止损@{stop_loss_line.get_price():.0f}"
+                                
+                                # 获取止盈线信息（存储的是line_id字符串）
+                                take_profit_line_id = relations.get("take_profit")
+                                if take_profit_line_id:
+                                    # 从 PriceLineManager 获取止盈线对象
+                                    take_profit_line = self._price_line_manager.get_line(take_profit_line_id)
+                                    if take_profit_line:
+                                        take_profit_info = f" 止盈@{take_profit_line.get_price():.0f}"
                         
                         main_engine.write_log(
                             f"[挂单触发] {current_time} {vt_symbol} {direction.value} "
