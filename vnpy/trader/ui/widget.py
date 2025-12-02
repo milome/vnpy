@@ -4790,29 +4790,29 @@ class ChartWindow(QtWidgets.QWidget):
         """
         from vnpy.trader.object import HistoryRequest
 
-        datafeed = None
-        should_close_datafeed = False  # 标记是否需要关闭datafeed
-        
         try:
-            # 优先使用 _get_datafeed() 方法（返回全局单例）
+            # 使用全局单例 Datafeed（如果失败是致命错误，不应创建临时连接）
             datafeed = self._get_datafeed()
             
-            # 如果全局单例创建失败，创建临时的FUTU datafeed（必须关闭）
             if datafeed is None:
-                try:
-                    from vnpy_futu.datafeed import Datafeed as FutuDatafeed
-                    datafeed = FutuDatafeed()
-                    should_close_datafeed = True  # 标记需要关闭
-                    if not datafeed.init(output=self.main_engine.write_log):
-                        self.main_engine.write_log("[数据补齐] 无法初始化FUTU数据服务")
-                        return []
-                except ImportError:
-                    self.main_engine.write_log("[数据补齐] 未安装vnpy_futu模块")
-                    return []
-                except Exception as e:
-                    error_msg = str(e).replace("{", "{{").replace("}", "}}")
-                    self.main_engine.write_log(f"[数据补齐] 初始化Datafeed失败: {error_msg}")
-                    return []
+                # 全局 Datafeed 创建失败是致命错误
+                error_msg = (
+                    "全局 Datafeed 服务不可用！\n\n"
+                    "可能原因：\n"
+                    "1. 未配置数据服务（请在设置中配置 Datafeed）\n"
+                    "2. Datafeed 初始化失败（请检查连接）\n"
+                    "3. 富途牛牛未启动或 OpenD 服务未开启\n\n"
+                    "这是系统级错误，无法进行数据补齐。"
+                )
+                self.main_engine.write_log(f"[数据补齐] ❌ 致命错误：{error_msg}")
+                
+                # 弹窗通知用户（致命错误）
+                QtWidgets.QMessageBox.critical(
+                    self,
+                    "Datafeed 服务不可用",
+                    error_msg
+                )
+                return []
 
             # 创建历史数据请求
             req = HistoryRequest(
@@ -4837,15 +4837,6 @@ class ChartWindow(QtWidgets.QWidget):
             error_msg = str(e).replace("{", "{{").replace("}", "}}")
             self.main_engine.write_log(f"[数据补齐] 从Datafeed获取数据失败: {error_msg}")
             return []
-        finally:
-            # ✅ 关键修复：如果创建了临时的datafeed，必须关闭
-            if should_close_datafeed and datafeed is not None:
-                try:
-                    if hasattr(datafeed, 'close'):
-                        datafeed.close()
-                        self.main_engine.write_log("[数据补齐] 已关闭临时Datafeed连接")
-                except Exception as e:
-                    self.main_engine.write_log(f"[数据补齐] 关闭临时Datafeed连接失败: {e}")
 
     def _synthesize_bars_from_minute(
         self,
