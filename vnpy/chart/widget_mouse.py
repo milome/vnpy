@@ -573,25 +573,26 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                     price = view_pos.y()
                     
                     if price > 0:
-                        # 添加调试日志
-                        if hasattr(self, '_main_engine') and self._main_engine:
-                            self._main_engine.write_log(
-                                f"[ChartWidget] 画线下单模式点击: 价格={price:.2f}, "
-                                f"回调存在={hasattr(self, '_on_drawing_click')}, "
-                                f"回调不为None={hasattr(self, '_on_drawing_click') and self._on_drawing_click is not None}",
-                                "ChartWidget"
-                            )
+                        # 注释掉画线下单的详细调试日志，减少日志输出
+                        # if hasattr(self, '_main_engine') and self._main_engine:
+                        #     self._main_engine.write_log(
+                        #         f"[ChartWidget] 画线下单模式点击: 价格={price:.2f}, "
+                        #         f"回调存在={hasattr(self, '_on_drawing_click')}, "
+                        #         f"回调不为None={hasattr(self, '_on_drawing_click') and self._on_drawing_click is not None}",
+                        #         "ChartWidget"
+                        #     )
                         
                         # Show preview line
                         self._drawing_order_controller.show_preview_line(price, "long")
                         
                         # Call callback for order dialog (will be handled by parent widget)
                         if hasattr(self, '_on_drawing_click') and self._on_drawing_click:
-                            if hasattr(self, '_main_engine') and self._main_engine:
-                                self._main_engine.write_log(
-                                    f"[ChartWidget] 调用画线下单回调: 价格={price:.2f}",
-                                    "ChartWidget"
-                                )
+                            # 注释掉画线下单回调日志，减少日志输出
+                            # if hasattr(self, '_main_engine') and self._main_engine:
+                            #     self._main_engine.write_log(
+                            #         f"[ChartWidget] 调用画线下单回调: 价格={price:.2f}",
+                            #         "ChartWidget"
+                            #     )
                             self._on_drawing_click(price)
                         else:
                             # 如果回调未设置，记录警告
