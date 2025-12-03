@@ -3,6 +3,8 @@
 
 使用DataManager的精确时间边界合成逻辑，替代标准的BarGenerator时间整除规则。
 保持与BarGenerator完全兼容的接口，可以无缝替换。
+
+复用period_utils.py中的周期判断函数，避免重复代码。
 """
 from datetime import datetime, timedelta
 from typing import Callable, Optional
@@ -12,6 +14,12 @@ from vnpy.trader.constant import Interval, Exchange
 from vnpy.trader.object import BarData, TickData
 from vnpy.trader.utility import BarGenerator
 from vnpy.trader.database import DB_TZ
+from vnpy.trader.period_utils import (
+    get_period_start,
+    get_hkfe_hour_period_start,
+    get_hkfe_4hour_period,
+    update_bar_ohlcv,
+)
 
 
 class HKFEBarGenerator(BarGenerator):
@@ -63,108 +71,17 @@ class HKFEBarGenerator(BarGenerator):
         self.current_period_start: Optional[datetime] = None
     
     def _get_hkfe_5minute_period(self, bar_dt: datetime) -> Optional[datetime]:
-        """获取5分钟周期起始时间（复制自ManagerEngine的逻辑）"""
-        # 检查是否在交易时段
-        hour = bar_dt.hour
-        minute = bar_dt.minute
-        time_value = hour * 100 + minute
-        
-        # 港期交易时段：09:15-12:00, 13:00-16:30, 17:15-03:00
-        if not (915 <= time_value <= 1200 or 
-                1300 <= time_value <= 1630 or 
-                1715 <= time_value <= 2359 or
-                0 <= time_value <= 300):
-            return None
-        
-        # 计算5分钟K线的起始时间（在交易时段内）
-        period_start_minute = (minute // 5) * 5
-        period_start = bar_dt.replace(minute=period_start_minute, second=0, microsecond=0)
-        
-        return period_start
+        """获取5分钟周期起始时间（复用period_utils）"""
+        return get_period_start(bar_dt, Interval.MINUTE_5, Exchange.HKFE)
     
     def _get_hkfe_hour_period(self, bar_dt: datetime) -> Optional[datetime]:
-        """获取1小时周期起始时间（复制自ManagerEngine的逻辑）"""
-        hour = bar_dt.hour
-        minute = bar_dt.minute
-        time_value = hour * 100 + minute
-        
-        # 夜盘时段
-        if 1715 <= time_value <= 1814:
-            return bar_dt.replace(hour=17, minute=15, second=0, microsecond=0)
-        elif 1815 <= time_value <= 1914:
-            return bar_dt.replace(hour=18, minute=15, second=0, microsecond=0)
-        elif 1915 <= time_value <= 2014:
-            return bar_dt.replace(hour=19, minute=15, second=0, microsecond=0)
-        elif 2015 <= time_value <= 2114:
-            return bar_dt.replace(hour=20, minute=15, second=0, microsecond=0)
-        elif 2115 <= time_value <= 2214:
-            return bar_dt.replace(hour=21, minute=15, second=0, microsecond=0)
-        elif 2215 <= time_value <= 2314:
-            return bar_dt.replace(hour=22, minute=15, second=0, microsecond=0)
-        elif 2315 <= time_value <= 2359:
-            return bar_dt.replace(hour=23, minute=15, second=0, microsecond=0)
-        elif 0 <= time_value <= 14:
-            return (bar_dt - timedelta(days=1)).replace(hour=23, minute=15, second=0, microsecond=0)
-        elif 15 <= time_value <= 114:
-            return bar_dt.replace(hour=0, minute=15, second=0, microsecond=0)
-        elif 115 <= time_value <= 214:
-            return bar_dt.replace(hour=1, minute=15, second=0, microsecond=0)
-        elif 215 <= time_value <= 929:
-            weekday = bar_dt.weekday()
-            if weekday == 0:  # 周一
-                return (bar_dt - timedelta(days=2)).replace(hour=2, minute=15, second=0, microsecond=0)
-            elif weekday == 6:  # 周日
-                return (bar_dt - timedelta(days=1)).replace(hour=2, minute=15, second=0, microsecond=0)
-            else:
-                return bar_dt.replace(hour=2, minute=15, second=0, microsecond=0)
-        # 日盘时段
-        elif 930 <= time_value <= 1029:
-            return bar_dt.replace(hour=9, minute=30, second=0, microsecond=0)
-        elif 1030 <= time_value <= 1129:
-            return bar_dt.replace(hour=10, minute=30, second=0, microsecond=0)
-        elif (1130 <= time_value <= 1200) or (1300 <= time_value <= 1329):
-            return bar_dt.replace(hour=11, minute=30, second=0, microsecond=0)
-        elif 1330 <= time_value <= 1429:
-            return bar_dt.replace(hour=13, minute=30, second=0, microsecond=0)
-        elif 1430 <= time_value <= 1529:
-            return bar_dt.replace(hour=14, minute=30, second=0, microsecond=0)
-        elif 1530 <= time_value <= 1629:
-            return bar_dt.replace(hour=15, minute=30, second=0, microsecond=0)
-        else:
-            if 915 <= time_value <= 929:
-                weekday = bar_dt.weekday()
-                if weekday == 0:  # 周一
-                    return (bar_dt - timedelta(days=2)).replace(hour=2, minute=15, second=0, microsecond=0)
-                elif weekday == 6:  # 周日
-                    return (bar_dt - timedelta(days=1)).replace(hour=2, minute=15, second=0, microsecond=0)
-                else:
-                    return bar_dt.replace(hour=2, minute=15, second=0, microsecond=0)
-            return None
+        """获取1小时周期起始时间（复用period_utils）"""
+        return get_hkfe_hour_period_start(bar_dt)
     
     def _get_hkfe_4hour_period(self, bar_dt: datetime) -> Optional[datetime]:
-        """获取4小时周期起始时间（复制自ManagerEngine的逻辑）"""
-        hour = bar_dt.hour
-        minute = bar_dt.minute
-        time_value = hour * 100 + minute
-        
-        if 1715 <= time_value <= 2114:
-            return bar_dt.replace(hour=17, minute=15, second=0, microsecond=0)
-        elif 2115 <= time_value <= 2359:
-            return bar_dt.replace(hour=21, minute=15, second=0, microsecond=0)
-        elif 0 <= time_value <= 114:
-            return (bar_dt - timedelta(days=1)).replace(hour=21, minute=15, second=0, microsecond=0)
-        elif 115 <= time_value <= 300:
-            return bar_dt.replace(hour=1, minute=15, second=0, microsecond=0)
-        elif 915 <= time_value <= 1129:
-            weekday = bar_dt.weekday()
-            if weekday == 0:  # 周一
-                return (bar_dt - timedelta(days=2)).replace(hour=1, minute=15, second=0, microsecond=0)
-            else:
-                return bar_dt.replace(hour=1, minute=15, second=0, microsecond=0)
-        elif (1130 <= time_value <= 1200) or (1300 <= time_value <= 1629):
-            return bar_dt.replace(hour=11, minute=30, second=0, microsecond=0)
-        else:
-            return None
+        """获取4小时周期起始时间（复用period_utils）"""
+        period_start, _ = get_hkfe_4hour_period(bar_dt)
+        return period_start
     
     def update_bar(self, bar: BarData) -> None:
         """
@@ -224,14 +141,9 @@ class HKFEBarGenerator(BarGenerator):
                 open_interest=bar.open_interest
             )
         else:
-            # 更新当前周期
+            # 更新当前周期（使用通用聚合函数）
             if self.window_bar:
-                self.window_bar.high_price = max(self.window_bar.high_price, bar.high_price)
-                self.window_bar.low_price = min(self.window_bar.low_price, bar.low_price)
-                self.window_bar.close_price = bar.close_price
-                self.window_bar.volume += bar.volume
-                self.window_bar.turnover += bar.turnover
-                self.window_bar.open_interest = bar.open_interest
+                update_bar_ohlcv(self.window_bar, bar, is_new_period=False)
     
     def _update_bar_hkfe_hour(self, bar: BarData) -> None:
         """使用HKFE精确逻辑合成1小时K线"""
@@ -265,14 +177,9 @@ class HKFEBarGenerator(BarGenerator):
                 open_interest=bar.open_interest
             )
         else:
-            # 更新当前周期
+            # 更新当前周期（使用通用聚合函数）
             if self.hour_bar:
-                self.hour_bar.high_price = max(self.hour_bar.high_price, bar.high_price)
-                self.hour_bar.low_price = min(self.hour_bar.low_price, bar.low_price)
-                self.hour_bar.close_price = bar.close_price
-                self.hour_bar.volume += bar.volume
-                self.hour_bar.turnover += bar.turnover
-                self.hour_bar.open_interest = bar.open_interest
+                update_bar_ohlcv(self.hour_bar, bar, is_new_period=False)
     
     def _update_bar_hkfe_4hour(self, bar: BarData) -> None:
         """使用HKFE精确逻辑合成4小时K线"""
@@ -306,14 +213,9 @@ class HKFEBarGenerator(BarGenerator):
                 open_interest=bar.open_interest
             )
         else:
-            # 更新当前周期
+            # 更新当前周期（使用通用聚合函数）
             if self.window_bar:
-                self.window_bar.high_price = max(self.window_bar.high_price, bar.high_price)
-                self.window_bar.low_price = min(self.window_bar.low_price, bar.low_price)
-                self.window_bar.close_price = bar.close_price
-                self.window_bar.volume += bar.volume
-                self.window_bar.turnover += bar.turnover
-                self.window_bar.open_interest = bar.open_interest
+                update_bar_ohlcv(self.window_bar, bar, is_new_period=False)
 
 
 def create_bar_generator(

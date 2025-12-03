@@ -816,3 +816,47 @@ def aggregate_to_1hour_from_minutes(
     
     return one_hour_bars
 
+
+def update_bar_ohlcv(
+    target_bar: BarData,
+    source_bar: BarData,
+    is_new_period: bool = False
+) -> None:
+    """
+    更新目标K线的OHLCV数据（实时聚合）
+    
+    用于实时增量更新大周期K线的OHLCV数据。
+    这是所有实时聚合的共同逻辑，被以下模块复用：
+    - vnpy.trader.hkfe_bar_generator.HKFEBarGenerator
+    
+    Args:
+        target_bar: 目标K线（大周期，如5分钟、1小时、4小时）
+        source_bar: 源K线（小周期，如1分钟）
+        is_new_period: 是否是新周期（如果是，则设置open_price）
+    
+    Note:
+        - 如果 is_new_period=True，会设置 target_bar.open_price = source_bar.open_price
+        - 如果 is_new_period=False，只更新 high/low/close/volume/turnover/open_interest
+        - high_price 和 low_price 使用 max/min 更新
+        - close_price 直接使用 source_bar.close_price
+        - volume 和 turnover 累加
+        - open_interest 使用 source_bar.open_interest（取最新值）
+    """
+    if is_new_period:
+        target_bar.open_price = source_bar.open_price
+    
+    target_bar.high_price = max(target_bar.high_price, source_bar.high_price)
+    target_bar.low_price = min(target_bar.low_price, source_bar.low_price)
+    target_bar.close_price = source_bar.close_price
+    target_bar.volume += source_bar.volume
+    
+    # 兼容处理：turnover 和 open_interest 可能不存在
+    if hasattr(source_bar, 'turnover') and source_bar.turnover:
+        if hasattr(target_bar, 'turnover'):
+            target_bar.turnover += source_bar.turnover
+        else:
+            target_bar.turnover = source_bar.turnover
+    
+    if hasattr(source_bar, 'open_interest'):
+        target_bar.open_interest = source_bar.open_interest
+

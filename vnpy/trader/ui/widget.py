@@ -2825,6 +2825,7 @@ class ChartWindow(QtWidgets.QWidget):
         - 合约切换时不需要重新注册事件，因为 process_tick_event 已经通过过滤
           current_vt_symbol 来处理，只处理当前显示合约的 tick。
         - 窗口关闭时会自动调用 closeEvent() 注销所有事件监听器。
+        - 窗口重新打开时会自动调用 showEvent() 重新注册事件监听器。
         """
         try:
             # 检查 event_engine 是否已初始化
@@ -2839,6 +2840,20 @@ class ChartWindow(QtWidgets.QWidget):
             from vnpy.trader.event import EVENT_TICK
 
             # 注册 tick 事件监听（使用信号槽机制确保线程安全）
+            # 先检查是否已连接，避免重复连接
+            try:
+                self.signal_tick.disconnect(self.process_tick_event)
+            except (TypeError, RuntimeError):
+                # 连接不存在，这是正常的，继续注册
+                pass
+            
+            # 先注销（如果已注册），避免重复注册
+            try:
+                self.event_engine.unregister(EVENT_TICK, self.signal_tick.emit)
+            except (KeyError, ValueError):
+                # 未注册，这是正常的，继续注册
+                pass
+            
             self.signal_tick.connect(self.process_tick_event)
             self.event_engine.register(EVENT_TICK, self.signal_tick.emit)
 
@@ -2847,6 +2862,12 @@ class ChartWindow(QtWidgets.QWidget):
 
             # 注册订单事件（用于画线交易功能）
             from vnpy.trader.event import EVENT_ORDER
+            # 先注销（如果已注册），避免重复注册
+            try:
+                self.event_engine.unregister(EVENT_ORDER, self.process_order_event)
+            except (KeyError, ValueError):
+                # 未注册，这是正常的，继续注册
+                pass
             self.event_engine.register(EVENT_ORDER, self.process_order_event)
 
             # 记录日志
@@ -2889,21 +2910,21 @@ class ChartWindow(QtWidgets.QWidget):
         if tick.vt_symbol != self.current_vt_symbol:
             return
 
-        # 如果历史数据还没加载完，跳过K线更新（但可以更新价格突破监控）
-        if self.history_loaded:
-            # 获取当前周期
-            interval_enum = self._get_interval_enum()
-            from vnpy.trader.constant import Interval
+        # 获取当前周期（无论历史数据是否加载完成，都需要知道当前周期）
+        interval_enum = self._get_interval_enum()
+        from vnpy.trader.constant import Interval
 
-            if interval_enum == Interval.MINUTE:
-                # 1分钟周期：使用BarGenerator从tick合成K线
-                if self.bg:
-                    # 更新BarGenerator（这会自动创建或更新bg.bar）
-                    self.bg.update_tick(tick)
+        # 1分钟周期：即使历史数据未加载完成，也允许实时K线更新
+        # 这样可以确保用户能够看到实时K线，即使历史数据还在加载中
+        if interval_enum == Interval.MINUTE:
+            # 1分钟周期：使用BarGenerator从tick合成K线
+            if self.bg:
+                # 更新BarGenerator（这会自动创建或更新bg.bar）
+                self.bg.update_tick(tick)
 
-                    # 实时更新当前K线（每次tick都更新，确保实时显示）
-                    # 注意：bg.bar在第一个有效tick时会被创建，之后每次tick都会更新
-                    if self.bg.bar:
+                # 实时更新当前K线（每次tick都更新，确保实时显示）
+                # 注意：bg.bar在第一个有效tick时会被创建，之后每次tick都会更新                                                                              
+                if self.bg.bar:
                         from vnpy.trader.object import BarData
                         # 创建当前K线的副本用于实时更新（避免修改原始bar对象）
                         bar: BarData = copy(self.bg.bar)
@@ -6870,8 +6891,12 @@ class ChartWindow(QtWidgets.QWidget):
             try:
                 from vnpy.trader.event import EVENT_TICK
                 self.event_engine.unregister(EVENT_TICK, self.signal_tick.emit)
-                # 断开信号连接
-                self.signal_tick.disconnect(self.process_tick_event)
+                # 断开信号连接（如果连接存在）
+                try:
+                    self.signal_tick.disconnect(self.process_tick_event)
+                except (TypeError, RuntimeError):
+                    # 连接不存在或已经断开，这是正常的，不需要记录错误
+                    pass
                 if self.main_engine:
                     self.main_engine.write_log(
                         "[ChartWindow] 已注销 EVENT_TICK 事件监听器（signal_tick.emit）",
@@ -6926,3 +6951,16 @@ class ChartWindow(QtWidgets.QWidget):
             
             # Ensure parent class method is called
             super().closeEvent(event)
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:
+        """
+        窗口显示时重新注册事件监听器
+        
+        当窗口被关闭后重新打开时，事件监听器可能已被注销，
+        需要重新注册以确保实时数据更新正常工作。
+        """
+        # 重新注册事件监听器（如果已注册会先注销再注册，避免重复）
+        self.register_event()
+        
+        # 调用父类方法
+        super().showEvent(event)
