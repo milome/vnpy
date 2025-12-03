@@ -13,7 +13,8 @@ from vnpy.trader.period_utils import (
     get_period_start,
     get_hkfe_hour_period_start,
     get_hkfe_4hour_period,
-    is_hkfe_trading_time
+    is_hkfe_trading_time,
+    aggregate_to_1hour_from_minutes
 )
 
 APP_NAME = "DataManager"
@@ -584,8 +585,8 @@ class ManagerEngine(BaseEngine):
         
         self.main_engine.write_log(f"[1小时数据合成] 加载了 {len(minute_bars)} 条1分钟数据，开始按港期时段合成...")
         
-        # 按1小时周期分组
-        period_bars: dict[datetime, list[BarData]] = {}
+        # 统一时区处理：确保所有bar的datetime都有时区信息
+        processed_bars = []
         skipped_count = 0
         
         for i, bar in enumerate(minute_bars):
@@ -598,60 +599,39 @@ class ManagerEngine(BaseEngine):
                 bar_dt = bar.datetime
             else:
                 bar_dt = bar.datetime.replace(tzinfo=DB_TZ)
+                # 创建新的BarData对象，使用带时区的datetime
+                bar = BarData(
+                    symbol=bar.symbol,
+                    exchange=bar.exchange,
+                    datetime=bar_dt,
+                    interval=bar.interval,
+                    open_price=bar.open_price,
+                    high_price=bar.high_price,
+                    low_price=bar.low_price,
+                    close_price=bar.close_price,
+                    volume=bar.volume,
+                    turnover=bar.turnover,
+                    open_interest=bar.open_interest,
+                    gateway_name=bar.gateway_name,
+                )
             
-            # 获取该K线所属的1小时周期
+            # 检查是否在交易时段内（非交易时段数据会被共同函数跳过）
             period_start = get_hkfe_hour_period_start(bar_dt)
-            
             if period_start is None:
-                # 非交易时段数据，跳过
                 skipped_count += 1
                 continue
             
-            # 添加到对应周期
-            if period_start not in period_bars:
-                period_bars[period_start] = []
-            period_bars[period_start].append(bar)
+            processed_bars.append(bar)
         
         if skipped_count > 0:
             self.main_engine.write_log(f"[1小时数据合成] 跳过非交易时段数据 {skipped_count} 条")
         
-        # 合成1小时K线
-        aggregated_bars: list[BarData] = []
+        # 使用共同函数聚合
+        aggregated_bars = aggregate_to_1hour_from_minutes(processed_bars, symbol, exchange)
         
-        for period_start in sorted(period_bars.keys()):
-            bars = period_bars[period_start]
-            if not bars:
-                continue
-            
-            # 确保bars按时间排序，以便正确获取第一根和最后一根
-            bars.sort(key=lambda x: x.datetime)
-            
-            # 计算OHLCV
-            # 使用第一根1分钟K线的开盘价（已按时间排序）
-            open_price = bars[0].open_price
-            close_price = bars[-1].close_price
-            high_price = max(bar.high_price for bar in bars)
-            low_price = min(bar.low_price for bar in bars)
-            volume = sum(bar.volume for bar in bars)
-            turnover = sum(bar.turnover for bar in bars)
-            open_interest = bars[-1].open_interest
-            
-            # 创建1小时K线
-            bar_1h = BarData(
-                symbol=symbol,
-                exchange=exchange,
-                datetime=period_start,
-                interval=Interval.HOUR,
-                open_price=open_price,
-                high_price=high_price,
-                low_price=low_price,
-                close_price=close_price,
-                volume=volume,
-                turnover=turnover,
-                open_interest=open_interest,
-                gateway_name="DB"
-            )
-            aggregated_bars.append(bar_1h)
+        # 设置gateway_name为"DB"（数据库来源）
+        for bar in aggregated_bars:
+            bar.gateway_name = "DB"
         
         self.main_engine.write_log(f"[1小时数据合成] 合成完成，共 {len(aggregated_bars)} 根1小时K线")
         

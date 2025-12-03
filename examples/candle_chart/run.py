@@ -1,43 +1,12 @@
-from datetime import datetime
+"""
+原始单周期示例改造为多周期示例入口：
 
-from vnpy.trader.ui import create_qapp, QtCore
-from vnpy.trader.constant import Exchange, Interval
-from vnpy.trader.database import get_database
-from vnpy.chart import ChartWidget, VolumeItem, CandleItem
+直接运行本文件，将调用 run_multi_timeframe 中的逻辑，
+叠加显示1分钟K线和4小时K线（4小时为跨索引绘制）。
+"""
+
+from run_multi_timeframe import main  # type: ignore
 
 
 if __name__ == "__main__":
-    app = create_qapp()
-
-    database = get_database()
-    bars = database.load_bar_data(
-        "MHImain",
-        Exchange.HKFE,
-        interval=Interval.MINUTE,
-        start=datetime(2017, 11, 14),
-        end=datetime(2025, 11, 18)
-    )
-
-    widget = ChartWidget()
-    widget.add_plot("candle", hide_x_axis=True)
-    widget.add_plot("volume", maximum_height=200)
-    widget.add_item(CandleItem, "candle", "candle")
-    widget.add_item(VolumeItem, "volume", "volume")
-    widget.add_cursor()
-
-    n = 1000000
-    history = bars[:n]
-    new_data = bars[n:]
-
-    widget.update_history(history)
-
-    def update_bar() -> None:
-        bar = new_data.pop(0)
-        widget.update_bar(bar)
-
-    timer = QtCore.QTimer()
-    timer.timeout.connect(update_bar)
-    # timer.start(100)
-
-    widget.show()
-    app.exec()
+    main()

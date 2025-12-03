@@ -22,7 +22,7 @@
 """
 
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, List
 
 from vnpy.trader.constant import Interval, Exchange
 from vnpy.trader.object import BarData, TickData
@@ -721,4 +721,98 @@ class PeriodOpenPriceHelper:
         self._minute_bars_cache.clear()
         self._warnings.clear()
         self._errors.clear()
+
+
+def aggregate_to_1hour_from_minutes(
+    one_minute_bars: List[BarData],
+    symbol: Optional[str] = None,
+    exchange: Optional[Exchange] = None
+) -> List[BarData]:
+    """
+    从1分钟K线数据合成1小时K线（HKFE规则）
+    
+    这是所有1小时K线聚合的共同逻辑，被以下模块复用：
+    - vnpy_datamanager.engine.aggregate_hour_bars()
+    - examples.candle_chart.one_hour_aggregator.aggregate_to_1hour()
+    - vnpy.trader.ui.widget.ChartWindow (数据补齐时)
+    
+    Args:
+        one_minute_bars: 1分钟K线数据列表（已按时间排序）
+        symbol: 合约代码（可选，如果不提供则从第一根K线获取）
+        exchange: 交易所（可选，如果不提供则从第一根K线获取或使用HKFE）
+    
+    Returns:
+        1小时K线数据列表
+    """
+    if not one_minute_bars:
+        return []
+    
+    # 从第一根K线获取symbol和exchange（如果未提供）
+    first_bar = one_minute_bars[0]
+    if symbol is None:
+        symbol = first_bar.symbol
+    if exchange is None:
+        exchange = first_bar.exchange or Exchange.HKFE
+    
+    # 按1小时周期分组
+    period_groups: dict[datetime, List[BarData]] = {}
+    
+    for bar in one_minute_bars:
+        period_start = get_hkfe_hour_period_start(bar.datetime)
+        if period_start is None:
+            continue
+        
+        if period_start not in period_groups:
+            period_groups[period_start] = []
+        
+        period_groups[period_start].append(bar)
+    
+    # 聚合每个周期
+    one_hour_bars: List[BarData] = []
+    
+    for period_start in sorted(period_groups.keys()):
+        bars = period_groups[period_start]
+        if not bars:
+            continue
+        
+        # 确保bars按时间排序，以便正确获取第一根和最后一根
+        bars.sort(key=lambda x: x.datetime)
+        
+        # 计算OHLCV
+        open_price = bars[0].open_price
+        close_price = bars[-1].close_price
+        high_price = max(bar.high_price for bar in bars)
+        low_price = min(bar.low_price for bar in bars)
+        volume = sum(bar.volume for bar in bars)
+        
+        # 兼容处理：turnover 和 open_interest 可能不存在
+        turnover = sum(
+            bar.turnover for bar in bars 
+            if hasattr(bar, 'turnover') and bar.turnover is not None
+        )
+        open_interest = (
+            bars[-1].open_interest 
+            if hasattr(bars[-1], 'open_interest') and bars[-1].open_interest is not None
+            else 0
+        )
+        
+        # 创建1小时K线
+        hour_bar = BarData(
+            symbol=symbol,
+            exchange=exchange,
+            datetime=period_start,
+            interval=Interval.HOUR,
+            open_price=open_price,
+            high_price=high_price,
+            low_price=low_price,
+            close_price=close_price,
+            volume=volume,
+            turnover=turnover,
+            open_interest=open_interest,
+            gateway_name=first_bar.gateway_name,
+        )
+        
+        one_hour_bars.append(hour_bar)
+    
+    return one_hour_bars
 
