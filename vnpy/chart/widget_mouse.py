@@ -278,15 +278,15 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                                 new_y_max = y_max + price_delta
                                 
                                 # 添加调试日志（帮助诊断问题）
-                                if hasattr(self, '_main_engine') and self._main_engine:
-                                    direction = "向上" if total_dy_pixels > 0 else "向下"
-                                    self._main_engine.write_log(
-                                        f"[ChartWidget] 拖拽坐标轴: {direction}, dy={total_dy_pixels:.1f}px, "
-                                        f"price_delta={price_delta:.2f}, "
-                                        f"y_range=[{new_y_min:.2f}, {new_y_max:.2f}], "
-                                        f"start_pos={start_pos.y()}, current_pos={current_pos.y()}",
-                                        "ChartWidget"
-                                    )
+                                # if hasattr(self, '_main_engine') and self._main_engine:
+                                #     direction = "向上" if total_dy_pixels > 0 else "向下"
+                                #     self._main_engine.write_log(
+                                #         f"[ChartWidget] 拖拽坐标轴: {direction}, dy={total_dy_pixels:.1f}px, "
+                                #         f"price_delta={price_delta:.2f}, "
+                                #         f"y_range=[{new_y_min:.2f}, {new_y_max:.2f}], "
+                                #         f"start_pos={start_pos.y()}, current_pos={current_pos.y()}",
+                                #         "ChartWidget"
+                                #     )
                                 
                                 # 使用plot.setRange设置Y轴范围（与X轴拖拽保持一致的方式）
                                 # 直接对PlotItem设置范围，而不是对ViewBox设置
@@ -1715,6 +1715,49 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
         """
         # 使用相同的逻辑更新
         self._update_related_lines_on_drag(dragging_line, final_price)
+        
+        # ✅ 检查并重新注册价格突破监控（如果挂单线没有关联的活跃订单）
+        from .price_line import PriceLineType
+        if dragging_line.get_line_type() == PriceLineType.PENDING:
+            # 找到挂单线的ID
+            line_id = None
+            for lid, line in self._price_line_manager.get_all_lines().items():
+                if line == dragging_line:
+                    line_id = lid
+                    break
+            
+            if line_id:
+                # 检查挂单线是否有关联的活跃订单
+                controller = self.get_drawing_order_controller()
+                has_active_order = False
+                if controller and hasattr(controller, '_line_order_map'):
+                    linked_order_id = controller._line_order_map.get(line_id)
+                    if linked_order_id:
+                        # 检查订单状态
+                        if hasattr(self, '_main_engine') and self._main_engine:
+                            all_orders = self._main_engine.get_all_orders()
+                            for order in all_orders:
+                                if order.vt_orderid == linked_order_id:
+                                    from vnpy.trader.constant import Status
+                                    # 如果订单是活跃状态（未成交、部分成交、提交中），则不需要重新注册
+                                    if order.status in [Status.SUBMITTING, Status.NOTTRADED, Status.PARTTRADED]:
+                                        has_active_order = True
+                                    break
+                
+                # 如果没有活跃订单，重新注册监控
+                if not has_active_order and self._breakthrough_monitor:
+                    # 检查是否已经注册
+                    if line_id not in self._breakthrough_monitor._callbacks:
+                        self._breakthrough_monitor.register_line(
+                            line_id,
+                            dragging_line,
+                            self._on_price_breakthrough
+                        )
+                        if hasattr(self, '_main_engine') and self._main_engine:
+                            self._main_engine.write_log(
+                                f"[鼠标事件] 挂单线 {line_id} 拖拽结束，已重新注册价格突破监控",
+                                "Chart"
+                            )
     
     def _update_points_on_line_drag(self, dragged_line, new_price: float, line_type) -> None:
         """

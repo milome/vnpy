@@ -131,7 +131,7 @@ class ChaseConfig:
 class ChaseOrder:
     """追价订单状态"""
     def __init__(self, orderid: str, original_price: float, config: ChaseConfig,
-                 symbol: str, exchange, direction, offset, volume: int, reference: str):
+                 symbol: str, exchange, direction, offset, volume: int, reference: str, original_order_type: VtOrderType = None):
         # 标记是否刚刚撤单成功，用于区分"已取消的旧订单"和"刚撤单成功的订单"
         self.just_cancelled: bool = False
         self.original_orderid = orderid  # 保存第一次下单的订单ID（不更新）
@@ -150,6 +150,7 @@ class ChaseOrder:
         self.offset = offset  # 保持原始offset
         self.volume = volume
         self.original_reference = reference
+        self.original_order_type = original_order_type  # ✅ 保存原始订单类型（OPPONENT/LIMIT等）
         self.vt_symbol = f"{symbol}.{exchange.value}"
         
         # 时间戳
@@ -1012,13 +1013,15 @@ class FutuGateway(BaseGateway):
                 self.write_log(f"订单{original_orderid}重委托失败：无效价格")
                 return
             
-            # 5. 重新委托 - 保持原始direction和offset，只修改价格
+            # 5. 重新委托 - 保持原始direction、offset和订单类型，只修改价格
+            # ✅ 使用保存的原始订单类型（OPPONENT/LIMIT等），而不是固定使用LIMIT
+            original_type = chase_order.original_order_type if chase_order.original_order_type else VtOrderType.OPPONENT
             new_order_req = OrderRequest(
                 symbol=chase_order.symbol,
                 exchange=chase_order.exchange,
                 direction=chase_order.direction,  # 保持原始方向
                 offset=chase_order.offset,  # 保持原始offset
-                type=VtOrderType.LIMIT,
+                type=original_type,  # ✅ 使用原始订单类型（保持对手价/限价等）
                 price=new_price,  # 只修改价格
                 volume=chase_order.volume,  # 保持原始数量
                 reference=chase_order.original_reference
@@ -1749,7 +1752,8 @@ class FutuGateway(BaseGateway):
             # 创建追价订单追踪（保存原始订单信息）
             chase_order = ChaseOrder(
                 orderid, req.price, chase_config,
-                req.symbol, req.exchange, req.direction, req.offset, req.volume, req.reference
+                req.symbol, req.exchange, req.direction, req.offset, req.volume, req.reference,
+                req.type  # ✅ 保存原始订单类型（OPPONENT/LIMIT等）
             )
             self._safe_set_chase_order(orderid, chase_order)
             self.chase_stats["total_orders"] += 1

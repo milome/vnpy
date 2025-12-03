@@ -50,7 +50,7 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
         if hasattr(self, '_main_engine') and self._main_engine:
             self._main_engine.write_log(
                 f"[持仓同步] 已注册事件监听: {registered_events}",
-                "ChartWidget"
+                "Chart"
             )
     
     def _on_position_update(self, event: Event) -> None:

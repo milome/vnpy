@@ -181,7 +181,8 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
                 type=OrderType.OPPONENT,  # 画线下单使用对手价单（与止损止盈一致）
                 volume=order_volume,
                 price=price,
-                offset=offset
+                offset=offset,
+                reference="OPPONENT_Retry2"  # ✅ 启用智能追价（重试2次），与止损止盈保持一致
             )
             
             # 发送订单
@@ -294,8 +295,8 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
                         main_engine.write_log(
                             f"[挂单触发] {current_time} {vt_symbol} {direction.value} "
                             f"{order_volume}手@{price}{stop_loss_info}{take_profit_info} "
-                            f"(挂单线:{line_id} -> 订单:{vt_orderid})",
-                            "ChartWidget"
+                            f"(挂单线:{line_id} -> 订单:{vt_orderid}, 对手价+智能追价)",
+                            "Chart"
                         )
                     # 确保controller存在，并关联订单和挂单线
                     if controller:

@@ -901,10 +901,28 @@ class DrawingOrderController:
                 self._order_line_map.pop(order.vt_orderid, None)
                 # 从正向映射中移除（但保留挂单线）
                 self._line_order_map.pop(line_id, None)
+                
+                # ✅ 重新注册价格突破监控，允许挂单线再次触发
+                if hasattr(self._widget, '_breakthrough_monitor') and self._widget._breakthrough_monitor:
+                    line = self._price_line_manager.get_line(line_id) if self._price_line_manager else None
+                    if line and line.get_line_type() == PriceLineType.PENDING:
+                        # 检查挂单线是否仍然存在且是挂单类型
+                        if hasattr(self._widget, '_on_price_breakthrough'):
+                            self._widget._breakthrough_monitor.register_line(
+                                line_id,
+                                line,
+                                self._widget._on_price_breakthrough
+                            )
+                            if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+                                self._widget._main_engine.write_log(
+                                    f"[订单处理] 订单 {order.vt_orderid} 已撤销，已重新注册挂单线 {line_id} 的价格突破监控",
+                                    "Chart"
+                                )
+                
                 if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
                     self._widget._main_engine.write_log(
-                        f"[DrawingOrderController] 订单 {order.vt_orderid} 已撤销，已清理映射关系，保留挂单线 {line_id} 供新订单匹配",
-                        "DrawingOrderController"
+                        f"[订单处理] 订单 {order.vt_orderid} 已撤销，已清理映射关系，保留挂单线 {line_id} 供新订单匹配",
+                        "Chart"
                     )
             return True
         

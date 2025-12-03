@@ -252,7 +252,8 @@ class SingleTimeframeChart(QWidget):
     
     def refresh_chart(self):
         """刷新图表显示"""
-        if len(self.ohlc_data) < 2:
+        # ✅ 至少需要1条数据就可以绘制（降低要求）
+        if len(self.ohlc_data) < 1:
             return
         
         # 清除旧的绘图项
@@ -285,6 +286,48 @@ class SingleTimeframeChart(QWidget):
         # 创建K线图形项
         candlestick_item = CandlestickItem(candlestick_data)
         self.main_chart.addItem(candlestick_item)
+        
+        # ✅ 自动调整Y轴范围以显示所有K线
+        if len(self.ohlc_data) > 0:
+            # 计算价格范围
+            all_prices = []
+            for _, o, h, l, c, _ in self.ohlc_data:
+                all_prices.extend([o, h, l, c])
+            
+            if all_prices:
+                min_price = min(all_prices)
+                max_price = max(all_prices)
+                price_range = max_price - min_price
+                
+                # 添加一些边距（10%）
+                margin = price_range * 0.1 if price_range > 0 else 100
+                self.main_chart.setYRange(min_price - margin, max_price + margin, padding=0)
+            
+            # 自动调整X轴范围
+            if len(self.ohlc_data) > 0:
+                max_index = len(self.ohlc_data) - 1
+                self.main_chart.setXRange(-1, max(max_index + 1, 10), padding=0)
+        
+        # ✅ 自动调整Y轴范围以显示所有K线
+        if len(self.ohlc_data) > 0:
+            # 计算价格范围
+            all_prices = []
+            for _, o, h, l, c, _ in self.ohlc_data:
+                all_prices.extend([o, h, l, c])
+            
+            if all_prices:
+                min_price = min(all_prices)
+                max_price = max(all_prices)
+                price_range = max_price - min_price
+                
+                # 添加一些边距（10%）
+                margin = price_range * 0.1 if price_range > 0 else 100
+                self.main_chart.setYRange(min_price - margin, max_price + margin, padding=0)
+            
+            # 自动调整X轴范围
+            if len(self.ohlc_data) > 0:
+                max_index = len(self.ohlc_data) - 1
+                self.main_chart.setXRange(-1, max(max_index + 1, 10), padding=0)
     
     def draw_moving_averages(self):
         """绘制移动平均线"""
