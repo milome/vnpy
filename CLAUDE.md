@@ -2,7 +2,160 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Latest Fix: Pending Order Trigger Error and Position Synchronization (December 2024)
+## Latest Fix: Bug Fixes and Log Format Optimization (December 2024)
+
+### Overview
+
+Fixed 5 code bugs and optimized log format across ChartWidget components:
+1. **Code bug fixes**: Fixed redundant assignments, type conversion issues, missing parameters, and logic inconsistencies
+2. **Log format optimization**: Eliminated duplicate prefixes, simplified identifiers, and added category tags for better filtering
+
+### Problem Statement
+
+**Issue 1: Code Bugs**
+
+**Bug 1**: Redundant `vt_orderid = None` assignment in `widget_trigger.py` (line 309)
+- When `vt_orderid` is `None`, the code assigned it to `None` again, which is redundant
+- The `elif` branch would never execute when `vt_orderid` is not a string but also not `None`
+
+**Bug 2**: Early return after type conversion in `drawing_order.py`
+- After successfully converting `vt_orderid` to string, the code would return early, preventing legitimate type conversions
+- Successfully converted values were not being used
+
+**Bug 3**: Missing second argument in `write_log()` calls in `futu_gateway.py`
+- Multiple `write_log()` calls were missing the category/source parameter
+- Inconsistent logging could cause missing context in production
+
+**Bug 4**: Chase order time tracking inconsistency
+- Chase orders were never recorded in `_order_time_map` but cleanup tried to delete them
+- This inconsistency suggested unclear logic separation between chase and regular orders
+
+**Bug 5**: Default exchange fallback issue in `widget_position.py`
+- Code defaulted `exchange` to `Exchange.SHFE` even when parsing from `chart_vt_symbol` failed
+- For non-SHFE contracts (e.g., HKFE), virtual position objects would have wrong exchange
+
+**Issue 2: Log Format Issues**
+
+**Symptoms**:
+- Duplicate prefixes: `ChartWidget | [ChartWidget]` appeared in logs
+- Inconsistent format: Mixed log source identifiers
+- Hard to filter: No clear category tags for different types of operations
+
+**Root Causes**:
+- All logs used `[ChartWidget]` prefix with `"ChartWidget"` as source identifier
+- No categorization of different operation types (order processing, mouse events, position management, etc.)
+- Inconsistent logging patterns across different mixin classes
+
+### Solution Implementation
+
+#### Fix 1: Code Bug Fixes
+
+**Files Modified**:
+- `vnpy/chart/widget_trigger.py`
+- `vnpy/chart/drawing_order.py`
+- `vnpy_futu/vnpy_futu/futu_gateway.py`
+- `vnpy/chart/widget_position.py`
+
+**Changes**:
+
+1. **Fixed redundant assignment in `widget_trigger.py`**:
+   - Removed redundant `vt_orderid = None` assignment
+   - Added comment explaining the logic
+
+2. **Fixed type conversion logic in `drawing_order.py`**:
+   - After successful conversion, use converted value and continue execution
+   - Only return early if conversion fails or result is empty
+
+3. **Added missing parameters in `futu_gateway.py`**:
+   - Added `"FUTU"` as second parameter to all `write_log()` calls (lines 1698, 1712, 1718, 1728)
+
+4. **Fixed chase order time tracking in `futu_gateway.py`**:
+   - Only regular orders are recorded in `_order_time_map`
+   - Chase orders use `ChaseOrder.original_order_time`, not recorded in `_order_time_map`
+   - Cleanup logic explicitly skips chase orders
+
+5. **Improved exchange parsing in `widget_position.py`**:
+   - Try parsing from `chart_vt_symbol` first
+   - If parsing fails, try getting exchange from `main_engine.get_contract()`
+   - If still fails, log warning and use default (now `Exchange.HKFE` instead of `SHFE`)
+
+#### Fix 2: Log Format Optimization
+
+**Files Modified**:
+- `vnpy/chart/widget_mixin_base.py`
+- `vnpy/chart/widget_order.py`
+- `vnpy/chart/widget_mouse.py`
+- `vnpy/chart/widget_position.py`
+- `vnpy/chart/widget_trigger.py`
+
+**Changes**:
+
+1. **Enhanced base log method in `widget_mixin_base.py`**:
+```python
+def _log(self, message: str, category: str | None = None, source: str = "Chart") -> None:
+    """统一的日志记录方法
+    
+    Args:
+        message: 日志消息（不应包含 [ChartWidget] 等前缀）
+        category: 日志分类标签（如 "持仓同步"、"入场线盈亏" 等），可选
+        source: 日志来源标识，默认为 "Chart"（简洁版本）
+    """
+    main_engine = self._get_main_engine()
+    if main_engine:
+        if category:
+            formatted_message = f"[{category}] {message}"
+        else:
+            formatted_message = message
+        main_engine.write_log(formatted_message, source)
+```
+
+2. **Unified log format across all files**:
+   - Removed all `[ChartWidget]` prefixes from log messages
+   - Changed log source from `"ChartWidget"` to `"Chart"`
+   - Added category tags:
+     - `[订单处理]` - Order processing operations
+     - `[鼠标事件]` - Mouse interaction events
+     - `[入场线管理]` - Entry line and stop-loss/take-profit management
+     - `[持仓同步]` - Position synchronization operations
+     - `[入场线盈亏]` - Entry line PnL updates
+
+### Key Improvements
+
+1. **Code Quality**: Fixed 5 bugs improving code reliability and maintainability
+2. **Log Clarity**: Eliminated duplicate prefixes, making logs easier to read
+3. **Log Categorization**: Clear category tags make filtering and searching easier
+4. **Consistency**: Unified log format across all ChartWidget components
+5. **Better Debugging**: Improved exchange parsing with fallback logic and warnings
+
+### Example Log Output
+
+**Before**:
+```
+ChartWidget | [ChartWidget] 检测到重复的订单更新事件...
+ChartWidget | [ChartWidget] 从入场线创建止损线: 价格=25864.92...
+ChartWidget | [ChartWidget] 双击事件: 场景位置=...
+```
+
+**After**:
+```
+Chart | [订单处理] 检测到重复的订单更新事件...
+Chart | [入场线管理] 从入场线创建止损线: 价格=25864.92...
+Chart | [鼠标事件] 双击事件: 场景位置=...
+```
+
+### Files Modified
+
+- `vnpy/chart/widget_mixin_base.py`: Enhanced log method with category support
+- `vnpy/chart/widget_order.py`: Optimized order processing logs
+- `vnpy/chart/widget_mouse.py`: Optimized mouse event logs
+- `vnpy/chart/widget_position.py`: Optimized position management logs and fixed exchange parsing
+- `vnpy/chart/widget_trigger.py`: Unified log format
+- `vnpy/chart/drawing_order.py`: Fixed type conversion logic
+- `vnpy_futu/vnpy_futu/futu_gateway.py`: Fixed log parameters and chase order time tracking
+
+---
+
+## Previous Fix: Pending Order Trigger Error and Position Synchronization (December 2024)
 
 ### Overview
 
