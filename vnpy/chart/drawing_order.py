@@ -358,7 +358,19 @@ class DrawingOrderController:
             # 尝试转换为字符串（排除字典）
             if vt_orderid:
                 try:
-                    vt_orderid = str(vt_orderid)
+                    converted_vt_orderid = str(vt_orderid)
+                    # 转换成功后，使用转换后的值继续执行
+                    if converted_vt_orderid:
+                        vt_orderid = converted_vt_orderid
+                        # 转换成功，继续执行（不return）
+                    else:
+                        # 转换后为空字符串，记录错误并返回
+                        if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
+                            self._widget._main_engine.write_log(
+                                f"[DrawingOrderController] 错误: link_line_to_order 收到无效的 vt_orderid（转换后为空）: {vt_orderid}",
+                                "DrawingOrderController"
+                            )
+                        return
                 except Exception as e:
                     if hasattr(self._widget, '_main_engine') and self._widget._main_engine:
                         self._widget._main_engine.write_log(

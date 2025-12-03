@@ -216,8 +216,8 @@ class ChartWidgetOrderMixin(ChartWidgetMixinBase):
                                     # 但需要先判断是否为平仓操作，以决定止损/止盈线的处理方式
                                     if hasattr(self, '_main_engine') and self._main_engine:
                                         self._main_engine.write_log(
-                                            f"[ChartWidget] 检测到重复的订单更新事件，但挂单线 {line_id} 仍然存在，需要判断是否为平仓操作",
-                                            "ChartWidget"
+                                            f"[订单处理] 检测到重复的订单更新事件，但挂单线 {line_id} 仍然存在，需要判断是否为平仓操作",
+                                            "Chart"
                                         )
                                     
                                     # 判断是否为平仓操作（使用与 update_line_from_order 相同的逻辑）
@@ -341,8 +341,8 @@ class ChartWidgetOrderMixin(ChartWidgetMixinBase):
                                         
                                         if hasattr(self, '_main_engine') and self._main_engine:
                                             self._main_engine.write_log(
-                                                f"[ChartWidget] 平仓订单，已删除挂单线 {line_id} 及其关联的止损/止盈线",
-                                                "ChartWidget"
+                                                f"[订单处理] 平仓订单，已删除挂单线 {line_id} 及其关联的止损/止盈线",
+                                                "Chart"
                                             )
                                         return
                                     else:
@@ -350,8 +350,8 @@ class ChartWidgetOrderMixin(ChartWidgetMixinBase):
                                         # 应该继续处理，让 update_line_from_order 方法正确处理（创建入场线并迁移止损/止盈线）
                                         if hasattr(self, '_main_engine') and self._main_engine:
                                             self._main_engine.write_log(
-                                                f"[ChartWidget] 非平仓订单，挂单线 {line_id} 仍然存在，继续处理以创建入场线并迁移止损/止盈线",
-                                                "ChartWidget"
+                                                f"[订单处理] 非平仓订单，挂单线 {line_id} 仍然存在，继续处理以创建入场线并迁移止损/止盈线",
+                                                "Chart"
                                             )
                                         # 继续处理，不return，确保调用 update_line_from_order
                                 

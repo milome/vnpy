@@ -30,8 +30,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
         if not self._event_engine:
             if hasattr(self, '_main_engine') and self._main_engine:
                 self._main_engine.write_log(
-                    f"[ChartWidget] 无法注册事件：_event_engine为None",
-                    "ChartWidget"
+                    f"[持仓同步] 无法注册事件：_event_engine为None",
+                    "Chart"
                 )
             return
         
@@ -49,7 +49,7 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
         
         if hasattr(self, '_main_engine') and self._main_engine:
             self._main_engine.write_log(
-                f"[ChartWidget] 已注册事件监听: {registered_events}",
+                f"[持仓同步] 已注册事件监听: {registered_events}",
                 "ChartWidget"
             )
     
@@ -61,7 +61,7 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
         # if hasattr(self, '_main_engine') and self._main_engine:
         #     available_volume = position.volume - position.frozen
         #     self._main_engine.write_log(
-        #         f"[ChartWidget] 收到持仓更新事件: {position.vt_symbol} {position.direction.value} "
+        #         f"[持仓同步] 收到持仓更新事件: {position.vt_symbol} {position.direction.value} "
         #         f"volume={position.volume} frozen={position.frozen} available={available_volume} pnl={position.pnl}",
         #         "ChartWidget"
         #     )
@@ -74,7 +74,7 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
         # 注释合约匹配检查日志，减少日志输出
         # if hasattr(self, '_main_engine') and self._main_engine:
         #     self._main_engine.write_log(
-        #         f"[ChartWidget] 合约匹配检查: 图表合约={chart_vt_symbol}, 持仓合约={position_vt_symbol}",
+        #         f"[持仓同步] 合约匹配检查: 图表合约={chart_vt_symbol}, 持仓合约={position_vt_symbol}",
         #         "ChartWidget"
         #     )
         
@@ -103,7 +103,7 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                                     # 注释主力合约映射匹配日志，减少日志输出
                                     # if hasattr(self, '_main_engine') and self._main_engine:
                                     #     self._main_engine.write_log(
-                                    #         f"[ChartWidget] 主力合约映射匹配: 图表={chart_vt_symbol}, 持仓={position_vt_symbol} (通过映射 {main_symbol}->{actual_symbol})",
+                                    #         f"[持仓同步] 主力合约映射匹配: 图表={chart_vt_symbol}, 持仓={position_vt_symbol} (通过映射 {main_symbol}->{actual_symbol})",
                                     #         "ChartWidget"
                                     #     )
                                     break
@@ -113,8 +113,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
             if not matched:
                 if hasattr(self, '_main_engine') and self._main_engine:
                     self._main_engine.write_log(
-                        f"[ChartWidget] 持仓更新事件合约不匹配: 图表={chart_vt_symbol}, 持仓={position_vt_symbol}",
-                        "ChartWidget"
+                        f"[持仓同步] 持仓更新事件合约不匹配: 图表={chart_vt_symbol}, 持仓={position_vt_symbol}",
+                        "Chart"
                     )
                 return
         
@@ -122,8 +122,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
         if not self._drawing_order_controller:
             if hasattr(self, '_main_engine') and self._main_engine:
                 self._main_engine.write_log(
-                    f"[ChartWidget] 持仓更新事件: drawing_order_controller未初始化",
-                    "ChartWidget"
+                    f"[持仓同步] 持仓更新事件: drawing_order_controller未初始化",
+                    "Chart"
                 )
             return
         
@@ -134,8 +134,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
         if position.volume > 0 and position.volume == position.frozen:
             if hasattr(self, '_main_engine') and self._main_engine:
                 self._main_engine.write_log(
-                    f"[ChartWidget] 持仓全部冻结（可用=0），不更新盈亏但保留入场线: {position.vt_symbol} {position.direction.value}",
-                    "ChartWidget"
+                    f"[持仓同步] 持仓全部冻结（可用=0），不更新盈亏但保留入场线: {position.vt_symbol} {position.direction.value}",
+                    "Chart"
                 )
             # 不更新盈亏，但保留入场线，等待持仓解冻
             # 直接返回，不调用 _update_entry_line_pnl
@@ -147,7 +147,7 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
         # 注释调度准备日志，减少日志输出
         # if hasattr(self, '_main_engine') and self._main_engine:
         #     self._main_engine.write_log(
-        #         f"[ChartWidget] 准备更新入场线盈亏: 图表合约={chart_vt_symbol}, 持仓合约={position.vt_symbol}, "
+        #         f"[持仓同步] 准备更新入场线盈亏: 图表合约={chart_vt_symbol}, 持仓合约={position.vt_symbol}, "
         #         f"方向={position.direction.value}, volume={position.volume}, pnl={position.pnl}",
         #         "ChartWidget"
         #     )
@@ -159,7 +159,7 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
             # 注释主线程调用日志，减少日志输出
             # if hasattr(self, '_main_engine') and self._main_engine:
             #     self._main_engine.write_log(
-            #         f"[ChartWidget] 已在主线程，直接调用 _update_entry_line_pnl",
+            #         f"[持仓同步] 已在主线程，直接调用 _update_entry_line_pnl",
             #         "ChartWidget"
             #     )
             self._update_entry_line_pnl(position)
@@ -168,7 +168,7 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
             # 注释信号槽调度日志，减少日志输出
             # if hasattr(self, '_main_engine') and self._main_engine:
             #     self._main_engine.write_log(
-            #         f"[ChartWidget] 不在主线程，使用信号槽调度到主线程",
+            #         f"[持仓同步] 不在主线程，使用信号槽调度到主线程",
             #         "ChartWidget"
             #     )
             self._signal_position_update.emit(position)
@@ -180,7 +180,7 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
         
         if hasattr(self, '_main_engine') and self._main_engine:
             self._main_engine.write_log(
-                f"[ChartWidget] 清除冻结持仓的入场线: {position.vt_symbol} {position.direction.value} "
+                f"[持仓同步] 清除冻结持仓的入场线: {position.vt_symbol} {position.direction.value} "
                 f"volume={position.volume} frozen={position.frozen}",
                 "ChartWidget"
             )
@@ -195,8 +195,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                 lines_to_delete.add(line_id)
                 if hasattr(self, '_main_engine') and self._main_engine:
                     self._main_engine.write_log(
-                        f"[ChartWidget] 标记删除冻结持仓的入场线: {line_id} (方向={line_direction})",
-                        "ChartWidget"
+                        f"[持仓同步] 标记删除冻结持仓的入场线: {line_id} (方向={line_direction})",
+                        "Chart"
                     )
         
         # 删除所有标记的线及其关联的止损止盈线
@@ -207,8 +207,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                 deleted_count += 1
                 if hasattr(self, '_main_engine') and self._main_engine:
                     self._main_engine.write_log(
-                        f"[ChartWidget] 已删除冻结持仓的入场线: {line_id}",
-                        "ChartWidget"
+                        f"[持仓同步] 已删除冻结持仓的入场线: {line_id}",
+                        "Chart"
                     )
                 
                 # 清理订单映射（如果存在）
@@ -235,8 +235,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                                         deleted_count += 1
                                         if hasattr(self, '_main_engine') and self._main_engine:
                                             self._main_engine.write_log(
-                                                f"[ChartWidget] 已删除关联止损线: {stop_loss_info['line_id']}",
-                                                "ChartWidget"
+                                                f"[持仓同步] 已删除关联止损线: {stop_loss_info['line_id']}",
+                                                "Chart"
                                             )
                                 take_profit_info = relations.get("take_profit")
                                 if take_profit_info and take_profit_info.get("line_id"):
@@ -244,8 +244,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                                         deleted_count += 1
                                         if hasattr(self, '_main_engine') and self._main_engine:
                                             self._main_engine.write_log(
-                                                f"[ChartWidget] 已删除关联止盈线: {take_profit_info['line_id']}",
-                                                "ChartWidget"
+                                                f"[持仓同步] 已删除关联止盈线: {take_profit_info['line_id']}",
+                                                "Chart"
                                             )
                                 # 清理该挂单线的关联关系
                                 self._drawing_order_controller._pending_line_relations.pop(pending_line_id, None)
@@ -253,7 +253,7 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
         
         if hasattr(self, '_main_engine') and self._main_engine:
             self._main_engine.write_log(
-                f"[ChartWidget] 冻结持仓清除完成: 共删除 {deleted_count} 条价格线",
+                f"[持仓同步] 冻结持仓清除完成: 共删除 {deleted_count} 条价格线",
                 "ChartWidget"
             )
     
@@ -279,7 +279,7 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
             # if hasattr(self, '_main_engine') and self._main_engine:
             #     available_volume = position.volume - position.frozen
             #     self._main_engine.write_log(
-            #         f"[ChartWidget] _update_entry_line_pnl 回调开始执行: {position.vt_symbol} {position.direction.value} "
+            #         f"[持仓同步] _update_entry_line_pnl 回调开始执行: {position.vt_symbol} {position.direction.value} "
             #         f"volume={position.volume} frozen={position.frozen} available={available_volume} pnl={position.pnl}",
             #         "ChartWidget"
             #     )
@@ -298,7 +298,7 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
         # if last_summary != current_summary:
         #     if hasattr(self, '_main_engine') and self._main_engine:
         #         self._main_engine.write_log(
-        #             f"[ChartWidget] 更新入场线盈亏: 持仓方向={position_direction}, 持仓数量={position.volume}, "
+        #             f"[持仓同步] 更新入场线盈亏: 持仓方向={position_direction}, 持仓数量={position.volume}, "
         #             f"冻结={position.frozen}, 可用={available_volume}, 盈亏={position.pnl}, "
         #             f"入场线数量={entry_line_count}, 总价格线数量={len(all_lines)}",
         #             "ChartWidget"
@@ -312,8 +312,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
         if position.volume == 0:
             if hasattr(self, '_main_engine') and self._main_engine:
                 self._main_engine.write_log(
-                    f"[ChartWidget] 检测到持仓为0，开始清除{position_direction}方向的入场线和持仓记录",
-                    "ChartWidget"
+                    f"检测到持仓为0，开始清除{position_direction}方向的入场线和持仓记录",
+                    "Chart"
                 )
         
             if holding:
@@ -322,14 +322,14 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                 self._position_holdings.pop(position_direction, None)
                 if hasattr(self, '_main_engine') and self._main_engine:
                     self._main_engine.write_log(
-                        f"[ChartWidget] 持仓为0，已清空{position_direction}方向的持仓记录",
-                        "ChartWidget"
+                        f"持仓为0，已清空{position_direction}方向的持仓记录",
+                        "Chart"
                     )
             else:
                 if hasattr(self, '_main_engine') and self._main_engine:
                     self._main_engine.write_log(
-                        f"[ChartWidget] 持仓为0，但{position_direction}方向没有持仓记录（可能通过trade UI平仓），仍将删除入场线",
-                        "ChartWidget"
+                        f"持仓为0，但{position_direction}方向没有持仓记录（可能通过trade UI平仓），仍将删除入场线",
+                        "Chart"
                     )
         
             # 删除该方向的所有入场线（无论是否有持仓记录）
@@ -341,14 +341,14 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                         lines_to_delete.append(line_id)
                         if hasattr(self, '_main_engine') and self._main_engine:
                             self._main_engine.write_log(
-                                f"[ChartWidget] 标记删除入场线: {line_id} (方向={line_direction}, 匹配={line_direction == position_direction})",
-                                "ChartWidget"
+                                f"[持仓同步] 标记删除入场线: {line_id} (方向={line_direction}, 匹配={line_direction == position_direction})",
+                                "Chart"
                             )
         
             if hasattr(self, '_main_engine') and self._main_engine:
                 self._main_engine.write_log(
-                    f"[ChartWidget] 找到 {len(lines_to_delete)} 条{position_direction}方向的入场线待删除",
-                    "ChartWidget"
+                    f"[持仓同步] 找到 {len(lines_to_delete)} 条{position_direction}方向的入场线待删除",
+                    "Chart"
                 )
         
             deleted_count = 0
@@ -378,8 +378,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                                     deleted_count += 1
                                     if hasattr(self, '_main_engine') and self._main_engine:
                                         self._main_engine.write_log(
-                                            f"[ChartWidget] 已删除关联止损线: {stop_loss_line_id}",
-                                            "ChartWidget"
+                                            f"[持仓同步] 已删除关联止损线: {stop_loss_line_id}",
+                                            "Chart"
                                         )
                     
                         # 删除止盈线
@@ -401,8 +401,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                                     deleted_count += 1
                                     if hasattr(self, '_main_engine') and self._main_engine:
                                         self._main_engine.write_log(
-                                            f"[ChartWidget] 已删除关联止盈线: {take_profit_line_id}",
-                                            "ChartWidget"
+                                            f"[持仓同步] 已删除关联止盈线: {take_profit_line_id}",
+                                            "Chart"
                                         )
                     
                         # 清理关联关系
@@ -418,23 +418,23 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                             self._first_plot.removeItem(line)
                             if hasattr(self, '_main_engine') and self._main_engine:
                                 self._main_engine.write_log(
-                                    f"[ChartWidget] 已从plot中移除入场线: {line_id}",
-                                    "ChartWidget"
+                                    f"[持仓同步] 已从plot中移除入场线: {line_id}",
+                                    "Chart"
                                 )
                         except Exception as e:
                             if hasattr(self, '_main_engine') and self._main_engine:
-                                self._main_engine.write_log(
-                                    f"[ChartWidget] 从plot移除入场线失败: {line_id}, 错误: {str(e)}",
-                                    "ChartWidget"
-                                )
+                                    self._main_engine.write_log(
+                                        f"[持仓同步] 从plot移除入场线失败: {line_id}, 错误: {str(e)}",
+                                        "Chart"
+                                    )
                 
                     # 然后从管理器中删除
                     if self._price_line_manager.delete_line(line_id):
                         deleted_count += 1
                         if hasattr(self, '_main_engine') and self._main_engine:
                             self._main_engine.write_log(
-                                f"[ChartWidget] 已删除入场线: {line_id}",
-                                "ChartWidget"
+                                f"[持仓同步] 已删除入场线: {line_id}",
+                                "Chart"
                             )
                         # 清理订单映射
                         if hasattr(self, '_drawing_order_controller') and self._drawing_order_controller:
@@ -445,20 +445,20 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                     else:
                         if hasattr(self, '_main_engine') and self._main_engine:
                             self._main_engine.write_log(
-                                f"[ChartWidget] 警告: 从管理器删除入场线失败: {line_id}",
-                                "ChartWidget"
+                                f"[持仓同步] 警告: 从管理器删除入场线失败: {line_id}",
+                                "Chart"
                             )
                 else:
                     if hasattr(self, '_main_engine') and self._main_engine:
                         self._main_engine.write_log(
-                            f"[ChartWidget] 警告: 无法获取入场线: {line_id}",
-                            "ChartWidget"
+                            f"[持仓同步] 警告: 无法获取入场线: {line_id}",
+                            "Chart"
                         )
         
             if hasattr(self, '_main_engine') and self._main_engine:
                 self._main_engine.write_log(
-                    f"[ChartWidget] 持仓为0，已删除 {deleted_count} 条{position_direction}方向的价格线（包括入场线及关联的止损/止盈线，共找到 {len(lines_to_delete)} 条入场线）",
-                    "ChartWidget"
+                    f"[持仓同步] 持仓为0，已删除 {deleted_count} 条{position_direction}方向的价格线（包括入场线及关联的止损/止盈线，共找到 {len(lines_to_delete)} 条入场线）",
+                    "Chart"
                 )
             return
         
@@ -478,8 +478,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
             
                 if hasattr(self, '_main_engine') and self._main_engine:
                     self._main_engine.write_log(
-                        f"[ChartWidget] {position_direction}方向没有持仓记录，但从现有入场线创建持仓记录（找到 {len(entry_lines_for_direction)} 条入场线）",
-                        "ChartWidget"
+                        f"[持仓同步] {position_direction}方向没有持仓记录，但从现有入场线创建持仓记录（找到 {len(entry_lines_for_direction)} 条入场线）",
+                        "Chart"
                     )
             
                 # 从现有入场线创建持仓记录（使用入场线价格和实际持仓手数）
@@ -499,8 +499,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                 
                     if hasattr(self, '_main_engine') and self._main_engine:
                         self._main_engine.write_log(
-                            f"[ChartWidget] 警告: 有多条入场线但只有一条持仓记录，使用第一条入场线价格 {entry_price}，手数 {position.volume}",
-                            "ChartWidget"
+                            f"[持仓同步] 警告: 有多条入场线但只有一条持仓记录，使用第一条入场线价格 {entry_price}，手数 {position.volume}",
+                            "Chart"
                         )
             else:
                 # 没有入场线也没有持仓记录，但持仓数量>0，应该根据持仓信息创建入场线
@@ -544,8 +544,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                             if not created_line_id:
                                 if hasattr(self, '_main_engine') and self._main_engine:
                                     self._main_engine.write_log(
-                                        f"[ChartWidget] 警告: 创建入场线失败，返回的line_id为空",
-                                        "ChartWidget"
+                                        f"[持仓同步] 警告: 创建入场线失败，返回的line_id为空",
+                                        "Chart"
                                     )
                                 return
                         
@@ -554,8 +554,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                             if not created_line:
                                 if hasattr(self, '_main_engine') and self._main_engine:
                                     self._main_engine.write_log(
-                                        f"[ChartWidget] 警告: 创建入场线后无法从manager获取: {created_line_id}",
-                                        "ChartWidget"
+                                        f"[持仓同步] 警告: 创建入场线后无法从manager获取: {created_line_id}",
+                                        "Chart"
                                     )
                                 return
                         
@@ -576,16 +576,16 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                         
                             if hasattr(self, '_main_engine') and self._main_engine:
                                 self._main_engine.write_log(
-                                    f"[ChartWidget] 已根据持仓信息恢复入场线: {created_line_id}, 价格={entry_price}, 手数={position.volume}, 方向={position_direction}",
-                                    "ChartWidget"
+                                    f"[持仓同步] 已根据持仓信息恢复入场线: {created_line_id}, 价格={entry_price}, 手数={position.volume}, 方向={position_direction}",
+                                    "Chart"
                                 )
                         
                             # 验证持仓记录中的入场线ID
                             entry_line_ids = holding.get_entry_line_ids()
                             if hasattr(self, '_main_engine') and self._main_engine:
                                 self._main_engine.write_log(
-                                    f"[ChartWidget] 验证: 持仓记录中的入场线ID列表={entry_line_ids}, 期望包含={created_line_id}",
-                                    "ChartWidget"
+                                    f"[持仓同步] 验证: 持仓记录中的入场线ID列表={entry_line_ids}, 期望包含={created_line_id}",
+                                    "Chart"
                                 )
                         
                             # 创建入场线后，继续执行后续的更新逻辑（不要return）
@@ -594,23 +594,23 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                         else:
                             if hasattr(self, '_main_engine') and self._main_engine:
                                 self._main_engine.write_log(
-                                    f"[ChartWidget] 无法恢复入场线: drawing_order_controller未初始化",
-                                    "ChartWidget"
+                                    f"[持仓同步] 无法恢复入场线: drawing_order_controller未初始化",
+                                    "Chart"
                                 )
                             return
                     else:
                         if hasattr(self, '_main_engine') and self._main_engine:
                             self._main_engine.write_log(
-                                f"[ChartWidget] 无法恢复入场线: 持仓价格和当前价格都为0",
-                                "ChartWidget"
+                                f"[持仓同步] 无法恢复入场线: 持仓价格和当前价格都为0",
+                                "Chart"
                             )
                         return
                 else:
                     # 持仓数量为0，跳过
                     if hasattr(self, '_main_engine') and self._main_engine:
                         self._main_engine.write_log(
-                            f"[ChartWidget] {position_direction}方向没有持仓记录也没有入场线，且持仓数量为0，跳过更新",
-                            "ChartWidget"
+                            f"[持仓同步] {position_direction}方向没有持仓记录也没有入场线，且持仓数量为0，跳过更新",
+                            "Chart"
                         )
                     return
         
@@ -627,7 +627,7 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
             # 注释持仓变化检查日志，减少日志输出
             # if hasattr(self, '_main_engine') and self._main_engine:
             #     self._main_engine.write_log(
-            #         f"[ChartWidget] 持仓变化检查: 持仓记录总手数={holding_total_volume}, 实际持仓手数={position.volume}, "
+            #         f"[持仓同步] 持仓变化检查: 持仓记录总手数={holding_total_volume}, 实际持仓手数={position.volume}, "
             #         f"持仓记录数量={len(holding.get_all_entries())}",
             #         "ChartWidget"
             #     )
@@ -646,7 +646,7 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
             # 注释平仓检测日志，减少日志输出
             # if hasattr(self, '_main_engine') and self._main_engine:
             #     self._main_engine.write_log(
-            #         f"[ChartWidget] 检测到平仓: 平仓手数={close_volume}, 持仓记录总手数={holding_total_volume}, "
+            #         f"[持仓同步] 检测到平仓: 平仓手数={close_volume}, 持仓记录总手数={holding_total_volume}, "
             #         f"实际持仓手数={position.volume}",
             #         "ChartWidget"
             #     )
@@ -662,7 +662,7 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
             # 注释移除持仓记录日志，减少日志输出
             # if hasattr(self, '_main_engine') and self._main_engine:
             #     self._main_engine.write_log(
-            #         f"[ChartWidget] 已移除 {len(closed_entries)} 条持仓记录",
+            #         f"[持仓同步] 已移除 {len(closed_entries)} 条持仓记录",
             #         "ChartWidget"
             #     )
         
@@ -673,7 +673,7 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                     # 注释删除入场线日志，减少日志输出
                     # if hasattr(self, '_main_engine') and self._main_engine:
                     #     self._main_engine.write_log(
-                    #         f"[ChartWidget] 已删除已平仓的入场线: {line_id} (价格={closed_entry.price}, 手数={closed_entry.volume})",
+                    #         f"[持仓同步] 已删除已平仓的入场线: {line_id} (价格={closed_entry.price}, 手数={closed_entry.volume})",
                     #         "ChartWidget"
                     #     )
                     pass
@@ -690,9 +690,9 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
             # 实际持仓手数大于持仓记录总手数，可能是新开仓（通过 trade UI）
             if hasattr(self, '_main_engine') and self._main_engine:
                 self._main_engine.write_log(
-                    f"[ChartWidget] 实际持仓手数大于持仓记录总手数，可能是新开仓: "
+                    f"[持仓同步] 实际持仓手数大于持仓记录总手数，可能是新开仓: "
                     f"持仓记录总手数={holding_total_volume}, 实际持仓手数={position.volume}",
-                    "ChartWidget"
+                    "Chart"
                 )
         
         # 重新获取持仓管理对象（可能已被修改）
@@ -700,8 +700,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
         if not holding or holding.is_empty():
             if hasattr(self, '_main_engine') and self._main_engine:
                 self._main_engine.write_log(
-                    f"[ChartWidget] {position_direction}方向持仓记录为空，跳过更新",
-                    "ChartWidget"
+                    f"[持仓同步] {position_direction}方向持仓记录为空，跳过更新",
+                    "Chart"
                 )
             return
         
@@ -748,11 +748,11 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
             # 注释持仓统计和入场线获取日志，减少日志输出
             # if hasattr(self, '_main_engine') and self._main_engine:
             #     self._main_engine.write_log(
-            #         f"[ChartWidget] 持仓统计: 方向={position_direction}, 加权均价={avg_price:.2f}, 总手数={total_volume}, 浮动盈亏={position.pnl}",
+            #         f"[持仓同步] 持仓统计: 方向={position_direction}, 加权均价={avg_price:.2f}, 总手数={total_volume}, 浮动盈亏={position.pnl}",
             #         "ChartWidget"
             #     )
             #     self._main_engine.write_log(
-            #         f"[ChartWidget] 从PriceLineManager获取入场线: {len(entry_lines)} 条（方向={position_direction}）",
+            #         f"[持仓同步] 从PriceLineManager获取入场线: {len(entry_lines)} 条（方向={position_direction}）",
             #         "ChartWidget"
             #     )
             self._position_update_cache[cache_key_stats] = current_stats
@@ -761,8 +761,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
         if not entry_lines and position.volume > 0:
             if hasattr(self, '_main_engine') and self._main_engine:
                 self._main_engine.write_log(
-                    f"[ChartWidget] 持仓记录中的入场线ID都不存在，但持仓数量>0，需要重新创建入场线",
-                    "ChartWidget"
+                    f"[持仓同步] 持仓记录中的入场线ID都不存在，但持仓数量>0，需要重新创建入场线",
+                    "Chart"
                 )
             # 清空持仓记录，重新创建
             holding.clear()
@@ -804,14 +804,14 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                         # 使用 % 格式化避免 loguru 的二次格式化问题
                         self._main_engine.write_log(
                             "[ChartWidget] 已创建入场线: %s, 价格=%.2f, 手数=%.1f" % (created_line_id, entry_price, position.volume),
-                            "ChartWidget"
+                            "Chart"
                         )
                 else:
                     if hasattr(self, '_main_engine') and self._main_engine:
                         # 使用 % 格式化避免 loguru 的二次格式化问题
                         self._main_engine.write_log(
                             "[ChartWidget] 创建入场线失败: %s" % created_line_id,
-                            "ChartWidget"
+                            "Chart"
                         )
                     return
         
@@ -819,8 +819,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
         if not entry_lines:
             if hasattr(self, '_main_engine') and self._main_engine:
                 self._main_engine.write_log(
-                    f"[ChartWidget] {position_direction}方向没有入场线，跳过更新",
-                    "ChartWidget"
+                    f"[持仓同步] {position_direction}方向没有入场线，跳过更新",
+                    "Chart"
                 )
             return
         
@@ -838,8 +838,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
         if to_remove:
             if hasattr(self, '_main_engine') and self._main_engine:
                 self._main_engine.write_log(
-                    f"[ChartWidget] 发现孤儿ID，从PositionHolding中移除: {list(to_remove)}",
-                    "ChartWidget"
+                    f"[持仓同步] 发现孤儿ID，从PositionHolding中移除: {list(to_remove)}",
+                    "Chart"
                 )
             # 从PositionHolding中移除孤儿ID
             holding._entries = [e for e in holding._entries if e.line_id not in to_remove]
@@ -847,8 +847,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
         if to_add:
             if hasattr(self, '_main_engine') and self._main_engine:
                 self._main_engine.write_log(
-                    f"[ChartWidget] 发现新入场线，添加到PositionHolding: {list(to_add)}",
-                    "ChartWidget"
+                    f"[持仓同步] 发现新入场线，添加到PositionHolding: {list(to_add)}",
+                    "Chart"
                 )
             # 将新入场线添加到PositionHolding
             for line_id in to_add:
@@ -908,8 +908,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
             main_line.set_price(avg_price, price_precision=0)
             if hasattr(self, '_main_engine') and self._main_engine:
                 self._main_engine.write_log(
-                    f"[ChartWidget] 更新合并显示线价格: {main_line_id} {old_price:.2f} -> {avg_price:.2f}",
-                    "ChartWidget"
+                    f"[持仓同步] 更新合并显示线价格: {main_line_id} {old_price:.2f} -> {avg_price:.2f}",
+                    "Chart"
                 )
         
         # 更新盈亏和手数
@@ -933,19 +933,19 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                 label_text = main_line._create_label(avg_price, PriceLineType.ENTRY, price_precision, position_direction)
                 self._main_engine.write_log(
                     f"[入场线盈亏] {main_line_id}: {label_text}",
-                    "ChartWidget"
+                    "Chart"
                 )
                 
                 # 注释标签更新验证日志，减少日志输出
                 # if main_line.label is not None:
                 #     # 检查标签文本（InfLineLabel没有text()方法，但我们可以通过其他方式验证）
                 #     self._main_engine.write_log(
-                #         f"[ChartWidget] 入场线 {main_line_id} 标签已更新，价格={avg_price}, 手数={new_volume}, 盈亏={new_pnl}",
+                #         f"[持仓同步] 入场线 {main_line_id} 标签已更新，价格={avg_price}, 手数={new_volume}, 盈亏={new_pnl}",
                 #         "ChartWidget"
                 #     )
                 # else:
                 #     self._main_engine.write_log(
-                #         f"[ChartWidget] 警告: 入场线 {main_line_id} 的label为None，无法显示更新",
+                #         f"[持仓同步] 警告: 入场线 {main_line_id} 的label为None，无法显示更新",
                 #         "ChartWidget"
                 #     )
             self._position_update_cache[cache_key_line] = current_line_data
@@ -974,8 +974,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                         stop_loss_line.setVisible(True)  # 确保可见
                         if hasattr(self, '_main_engine') and self._main_engine:
                             self._main_engine.write_log(
-                                f"[ChartWidget] 合并显示：为入场线 {line_id} 的止损线 {stop_loss_line_id} 设置手数 {entry_volume}，确保可见",
-                                "ChartWidget"
+                                f"[持仓同步] 合并显示：为入场线 {line_id} 的止损线 {stop_loss_line_id} 设置手数 {entry_volume}，确保可见",
+                                "Chart"
                             )
             
                 # 设置止盈线手数（即使 entry_volume == 0，也要确保止盈线可见）
@@ -988,16 +988,16 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                         take_profit_line.setVisible(True)  # 确保可见
                         if hasattr(self, '_main_engine') and self._main_engine:
                             self._main_engine.write_log(
-                                f"[ChartWidget] 合并显示：为入场线 {line_id} 的止盈线 {take_profit_line_id} 设置手数 {entry_volume}，确保可见",
-                                "ChartWidget"
+                                f"[持仓同步] 合并显示：为入场线 {line_id} 的止盈线 {take_profit_line_id} 设置手数 {entry_volume}，确保可见",
+                                "Chart"
                             )
         
             # 隐藏入场线（通过设置不可见）
             line.setVisible(False)
             if hasattr(self, '_main_engine') and self._main_engine:
                 self._main_engine.write_log(
-                    f"[ChartWidget] 已隐藏入场线: {line_id} (保留原始信息，手数={entry_volume})",
-                    "ChartWidget"
+                    f"[持仓同步] 已隐藏入场线: {line_id} (保留原始信息，手数={entry_volume})",
+                    "Chart"
                 )
         
         # 确保合并显示线可见
@@ -1035,7 +1035,7 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                     # 注释确保止损线可见日志，减少日志输出
                     # if hasattr(self, '_main_engine') and self._main_engine:
                     #     self._main_engine.write_log(
-                    #         f"[ChartWidget] 合并显示：确保止损线 {stop_loss_line_id} 可见（关联到合并显示线 {main_line_id}，手数={main_entry_volume}）",
+                    #         f"[持仓同步] 合并显示：确保止损线 {stop_loss_line_id} 可见（关联到合并显示线 {main_line_id}，手数={main_entry_volume}）",
                     #         "ChartWidget"
                     #     )
         
@@ -1050,7 +1050,7 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                     # 注释确保止盈线可见日志，减少日志输出
                     # if hasattr(self, '_main_engine') and self._main_engine:
                     #     self._main_engine.write_log(
-                    #         f"[ChartWidget] 合并显示：确保止盈线 {take_profit_line_id} 可见（关联到合并显示线 {main_line_id}，手数={main_entry_volume}）",
+                    #         f"[持仓同步] 合并显示：确保止盈线 {take_profit_line_id} 可见（关联到合并显示线 {main_line_id}，手数={main_entry_volume}）",
                     #         "ChartWidget"
                     #     )
         
@@ -1093,8 +1093,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                         should_clear_all = False
                         if hasattr(self, '_main_engine') and self._main_engine:
                             self._main_engine.write_log(
-                                f"[ChartWidget] 持仓数为0，但存在其他方向持仓: {pos.vt_symbol} {pos.direction.value} volume={pos.volume}，不清除所有入场线",
-                                "ChartWidget"
+                                f"[持仓同步] 持仓数为0，但存在其他方向持仓: {pos.vt_symbol} {pos.direction.value} volume={pos.volume}，不清除所有入场线",
+                                "Chart"
                             )
                         break
         
@@ -1102,8 +1102,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
             if should_clear_all:
                 if hasattr(self, '_main_engine') and self._main_engine:
                     self._main_engine.write_log(
-                        f"[ChartWidget] 持仓数为0，且所有方向持仓都为0，开始清除所有入场线、止损线和止盈线",
-                        "ChartWidget"
+                        f"[持仓同步] 持仓数为0，且所有方向持仓都为0，开始清除所有入场线、止损线和止盈线",
+                        "Chart"
                     )
             
                 # 收集所有需要删除的线ID
@@ -1116,8 +1116,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                         lines_to_delete.append(line_id)
                         if hasattr(self, '_main_engine') and self._main_engine:
                             self._main_engine.write_log(
-                                f"[ChartWidget] 标记删除入场线: {line_id} (方向={line.get_direction()})",
-                                "ChartWidget"
+                                f"[持仓同步] 标记删除入场线: {line_id} (方向={line.get_direction()})",
+                                "Chart"
                             )
                     
                         # 通过关联关系查找并标记关联的止损线和止盈线
@@ -1126,8 +1126,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                         
                             if hasattr(self, '_main_engine') and self._main_engine:
                                 self._main_engine.write_log(
-                                    f"[ChartWidget] 入场线 {line_id} 的关联关系: {relations}",
-                                    "ChartWidget"
+                                    f"[持仓同步] 入场线 {line_id} 的关联关系: {relations}",
+                                    "Chart"
                                 )
                         
                             # 标记止损线
@@ -1137,20 +1137,20 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                                     lines_to_delete.append(stop_loss_line_id)
                                     if hasattr(self, '_main_engine') and self._main_engine:
                                         self._main_engine.write_log(
-                                            f"[ChartWidget] 通过关联关系标记删除止损线: {stop_loss_line_id} (关联到入场线 {line_id})",
-                                            "ChartWidget"
+                                            f"[持仓同步] 通过关联关系标记删除止损线: {stop_loss_line_id} (关联到入场线 {line_id})",
+                                            "Chart"
                                         )
                                 else:
                                     if hasattr(self, '_main_engine') and self._main_engine:
                                         self._main_engine.write_log(
-                                            f"[ChartWidget] 止损线 {stop_loss_line_id} 已在删除列表中",
-                                            "ChartWidget"
+                                            f"[持仓同步] 止损线 {stop_loss_line_id} 已在删除列表中",
+                                            "Chart"
                                         )
                             else:
                                 if hasattr(self, '_main_engine') and self._main_engine:
                                     self._main_engine.write_log(
-                                        f"[ChartWidget] 入场线 {line_id} 没有关联的止损线",
-                                        "ChartWidget"
+                                        f"[持仓同步] 入场线 {line_id} 没有关联的止损线",
+                                        "Chart"
                                     )
                         
                             # 标记止盈线
@@ -1160,26 +1160,26 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                                     lines_to_delete.append(take_profit_line_id)
                                     if hasattr(self, '_main_engine') and self._main_engine:
                                         self._main_engine.write_log(
-                                            f"[ChartWidget] 通过关联关系标记删除止盈线: {take_profit_line_id} (关联到入场线 {line_id})",
-                                            "ChartWidget"
+                                            f"[持仓同步] 通过关联关系标记删除止盈线: {take_profit_line_id} (关联到入场线 {line_id})",
+                                            "Chart"
                                         )
                                 else:
                                     if hasattr(self, '_main_engine') and self._main_engine:
                                         self._main_engine.write_log(
-                                            f"[ChartWidget] 止盈线 {take_profit_line_id} 已在删除列表中",
-                                            "ChartWidget"
+                                            f"[持仓同步] 止盈线 {take_profit_line_id} 已在删除列表中",
+                                            "Chart"
                                         )
                             else:
                                 if hasattr(self, '_main_engine') and self._main_engine:
                                     self._main_engine.write_log(
-                                        f"[ChartWidget] 入场线 {line_id} 没有关联的止盈线",
-                                        "ChartWidget"
+                                        f"[持仓同步] 入场线 {line_id} 没有关联的止盈线",
+                                        "Chart"
                                     )
                         else:
                             if hasattr(self, '_main_engine') and self._main_engine:
                                 self._main_engine.write_log(
-                                    f"[ChartWidget] 入场线 {line_id} 没有关联关系记录",
-                                    "ChartWidget"
+                                    f"[持仓同步] 入场线 {line_id} 没有关联关系记录",
+                                    "Chart"
                                 )
             
                 # 查找所有未关联的止损线和止盈线（作为兜底，确保所有止损/止盈线都被删除）
@@ -1189,8 +1189,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                         lines_to_delete.append(line_id)
                         if hasattr(self, '_main_engine') and self._main_engine:
                             self._main_engine.write_log(
-                                f"[ChartWidget] 标记删除未关联的{line_type.value}线: {line_id} (方向={line.get_direction()})",
-                                "ChartWidget"
+                                f"[持仓同步] 标记删除未关联的{line_type.value}线: {line_id} (方向={line.get_direction()})",
+                                "Chart"
                             )
             
                 # 删除所有标记的线
@@ -1206,8 +1206,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                         # 线不存在，跳过
                         if hasattr(self, '_main_engine') and self._main_engine:
                             self._main_engine.write_log(
-                                f"[ChartWidget] 警告：标记删除的线 {line_id} 不存在，跳过",
-                                "ChartWidget"
+                                f"[持仓同步] 警告：标记删除的线 {line_id} 不存在，跳过",
+                                "Chart"
                             )
                         continue
                 
@@ -1229,8 +1229,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                         except Exception as e:
                             if hasattr(self, '_main_engine') and self._main_engine:
                                 self._main_engine.write_log(
-                                    f"[ChartWidget] 从plot移除线 {line_id} 失败: {str(e)}",
-                                    "ChartWidget"
+                                    f"[持仓同步] 从plot移除线 {line_id} 失败: {str(e)}",
+                                    "Chart"
                                 )
                 
                     # 从管理器中删除
@@ -1247,8 +1247,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                     
                         if hasattr(self, '_main_engine') and self._main_engine:
                             self._main_engine.write_log(
-                                f"[ChartWidget] 已删除{line_type.value}线: {line_id}",
-                                "ChartWidget"
+                                f"[持仓同步] 已删除{line_type.value}线: {line_id}",
+                                "Chart"
                             )
                     
                         # 清理订单映射（如果存在）
@@ -1267,23 +1267,23 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                     else:
                         if hasattr(self, '_main_engine') and self._main_engine:
                             self._main_engine.write_log(
-                                f"[ChartWidget] 警告：删除{line_type.value}线 {line_id} 失败",
-                                "ChartWidget"
+                                f"[持仓同步] 警告：删除{line_type.value}线 {line_id} 失败",
+                                "Chart"
                             )
             
                 if hasattr(self, '_main_engine') and self._main_engine:
                     self._main_engine.write_log(
-                        f"[ChartWidget] 持仓数为0，已清除 {deleted_count} 条价格线 "
+                        f"[持仓同步] 持仓数为0，已清除 {deleted_count} 条价格线 "
                         f"(入场线={deleted_entry_count}, 止损线={deleted_stop_loss_count}, 止盈线={deleted_take_profit_count})",
-                        "ChartWidget"
+                        "Chart"
                     )
                 return
             else:
                 # 只清除与当前持仓方向匹配的入场线
                 if hasattr(self, '_main_engine') and self._main_engine:
                     self._main_engine.write_log(
-                        f"[ChartWidget] 持仓数为0，但存在其他方向持仓，只清除{position_direction}方向的入场线",
-                        "ChartWidget"
+                        f"[持仓同步] 持仓数为0，但存在其他方向持仓，只清除{position_direction}方向的入场线",
+                        "Chart"
                     )
             
                 # 只清除与当前持仓方向匹配的入场线
@@ -1296,8 +1296,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                         lines_to_delete.append(line_id)
                         if hasattr(self, '_main_engine') and self._main_engine:
                             self._main_engine.write_log(
-                                f"[ChartWidget] 标记删除{position_direction}方向入场线: {line_id}",
-                                "ChartWidget"
+                                f"[持仓同步] 标记删除{position_direction}方向入场线: {line_id}",
+                                "Chart"
                             )
                     
                         # 通过关联关系查找并标记关联的止损线和止盈线
@@ -1310,8 +1310,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                                 lines_to_delete.append(stop_loss_line_id)
                                 if hasattr(self, '_main_engine') and self._main_engine:
                                     self._main_engine.write_log(
-                                        f"[ChartWidget] 通过关联关系标记删除止损线: {stop_loss_line_id} (关联到入场线 {line_id})",
-                                        "ChartWidget"
+                                        f"[持仓同步] 通过关联关系标记删除止损线: {stop_loss_line_id} (关联到入场线 {line_id})",
+                                        "Chart"
                                     )
                         
                             # 标记止盈线
@@ -1320,8 +1320,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                                 lines_to_delete.append(take_profit_line_id)
                                 if hasattr(self, '_main_engine') and self._main_engine:
                                     self._main_engine.write_log(
-                                        f"[ChartWidget] 通过关联关系标记删除止盈线: {take_profit_line_id} (关联到入场线 {line_id})",
-                                        "ChartWidget"
+                                        f"[持仓同步] 通过关联关系标记删除止盈线: {take_profit_line_id} (关联到入场线 {line_id})",
+                                        "Chart"
                                     )
                 
                     # 只清除匹配方向的未关联的止损线和止盈线（作为兜底）
@@ -1329,8 +1329,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                         lines_to_delete.append(line_id)
                         if hasattr(self, '_main_engine') and self._main_engine:
                             self._main_engine.write_log(
-                                f"[ChartWidget] 标记删除{position_direction}方向未关联的{line_type.value}线: {line_id}",
-                                "ChartWidget"
+                                f"[持仓同步] 标记删除{position_direction}方向未关联的{line_type.value}线: {line_id}",
+                                "Chart"
                             )
             
                 # 删除标记的线
@@ -1346,8 +1346,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                         # 线不存在，跳过
                         if hasattr(self, '_main_engine') and self._main_engine:
                             self._main_engine.write_log(
-                                f"[ChartWidget] 警告：标记删除的线 {line_id} 不存在，跳过",
-                                "ChartWidget"
+                                f"[持仓同步] 警告：标记删除的线 {line_id} 不存在，跳过",
+                                "Chart"
                             )
                         continue
                 
@@ -1369,8 +1369,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                         except Exception as e:
                             if hasattr(self, '_main_engine') and self._main_engine:
                                 self._main_engine.write_log(
-                                    f"[ChartWidget] 从plot移除线 {line_id} 失败: {str(e)}",
-                                    "ChartWidget"
+                                    f"[持仓同步] 从plot移除线 {line_id} 失败: {str(e)}",
+                                    "Chart"
                                 )
                 
                     # 从管理器中删除
@@ -1387,8 +1387,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                     
                         if hasattr(self, '_main_engine') and self._main_engine:
                             self._main_engine.write_log(
-                                f"[ChartWidget] 已删除{line_type.value}线: {line_id}",
-                                "ChartWidget"
+                                f"[持仓同步] 已删除{line_type.value}线: {line_id}",
+                                "Chart"
                             )
                     
                         # 清理订单映射
@@ -1405,15 +1405,15 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                     else:
                         if hasattr(self, '_main_engine') and self._main_engine:
                             self._main_engine.write_log(
-                                f"[ChartWidget] 警告：删除{line_type.value}线 {line_id} 失败",
-                                "ChartWidget"
+                                f"[持仓同步] 警告：删除{line_type.value}线 {line_id} 失败",
+                                "Chart"
                             )
             
                 if hasattr(self, '_main_engine') and self._main_engine:
                     self._main_engine.write_log(
-                        f"[ChartWidget] 已清除 {deleted_count} 条{position_direction}方向的价格线 "
+                        f"[持仓同步] 已清除 {deleted_count} 条{position_direction}方向的价格线 "
                         f"(入场线={deleted_entry_count}, 止损线={deleted_stop_loss_count}, 止盈线={deleted_take_profit_count})",
-                        "ChartWidget"
+                        "Chart"
                     )
                 return
         
@@ -1466,7 +1466,7 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
             # 注释获取所有持仓、匹配持仓、查找入场线的详细日志，减少日志输出
             # if hasattr(self, '_main_engine') and self._main_engine:
             #     self._main_engine.write_log(
-            #         f"[ChartWidget] 获取所有持仓: 总数={len(all_positions)}, 当前持仓方向={position_direction}, 当前持仓数量={position.volume}",
+            #         f"[持仓同步] 获取所有持仓: 总数={len(all_positions)}, 当前持仓方向={position_direction}, 当前持仓数量={position.volume}",
             #         "ChartWidget"
             #     )
             #     for pos in all_positions:
@@ -1492,11 +1492,11 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
             #         if matched:
             #             pos_direction = "long" if pos.direction.value == "多" else "short"
             #             self._main_engine.write_log(
-            #                 f"[ChartWidget] 匹配持仓: {pos.vt_symbol} {pos.direction.value} {pos.volume}手 -> position_map[{pos_direction}]={pos.volume}",
+            #                 f"[持仓同步] 匹配持仓: {pos.vt_symbol} {pos.direction.value} {pos.volume}手 -> position_map[{pos_direction}]={pos.volume}",
             #                 "ChartWidget"
             #             )
             #     self._main_engine.write_log(
-            #         f"[ChartWidget] 查找入场线: 总入场线数量={len(entry_lines)}, 持仓方向={position_direction}, "
+            #         f"[持仓同步] 查找入场线: 总入场线数量={len(entry_lines)}, 持仓方向={position_direction}, "
             #         f"持仓数量={position.volume}, 冻结={position.frozen}, 可用={available_volume}, 持仓映射={position_map_items}",
             #         "ChartWidget"
             #     )
@@ -1518,7 +1518,7 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
             # 检查入场线的日志只在变化时输出（注释掉，避免刷屏）
             # if hasattr(self, '_main_engine') and self._main_engine:
             #     self._main_engine.write_log(
-            #         f"[ChartWidget] 检查入场线 {line_id}: 方向={direction}, 持仓方向={position_direction}, 匹配={direction == position_direction}, 持仓数量={position.volume}",
+            #         f"[持仓同步] 检查入场线 {line_id}: 方向={direction}, 持仓方向={position_direction}, 匹配={direction == position_direction}, 持仓数量={position.volume}",
             #         "ChartWidget"
             #     )
         
@@ -1532,8 +1532,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                 lines_to_delete.append((line_id, direction))
                 if hasattr(self, '_main_engine') and self._main_engine:
                     self._main_engine.write_log(
-                        f"[ChartWidget] 标记删除入场线 {line_id}: 方向={direction}的持仓为0 (当前持仓更新: {position.volume}, 持仓映射中的值={line_position_volume})",
-                        "ChartWidget"
+                        f"[持仓同步] 标记删除入场线 {line_id}: 方向={direction}的持仓为0 (当前持仓更新: {position.volume}, 持仓映射中的值={line_position_volume})",
+                        "Chart"
                     )
                 continue
         
@@ -1543,8 +1543,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                 lines_to_delete.append((line_id, direction))
                 if hasattr(self, '_main_engine') and self._main_engine:
                     self._main_engine.write_log(
-                        f"[ChartWidget] 标记删除入场线 {line_id}: 方向={direction}的持仓为0或不存在 (持仓映射中的值={line_position_volume})",
-                        "ChartWidget"
+                        f"[持仓同步] 标记删除入场线 {line_id}: 方向={direction}的持仓为0或不存在 (持仓映射中的值={line_position_volume})",
+                        "Chart"
                     )
                 continue
         
@@ -1558,16 +1558,16 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
             if len(matching_entry_lines) > 1:
                 if hasattr(self, '_main_engine') and self._main_engine:
                     self._main_engine.write_log(
-                        f"[ChartWidget] 发现 {len(matching_entry_lines)} 条匹配方向的入场线，将更新第一条，删除其他",
-                        "ChartWidget"
+                        f"[持仓同步] 发现 {len(matching_entry_lines)} 条匹配方向的入场线，将更新第一条，删除其他",
+                        "Chart"
                     )
                 # 只保留第一条，其他标记为删除
                 for i, (line_id, line) in enumerate(matching_entry_lines[1:], start=1):
                     lines_to_delete.append((line_id, position_direction))
                     if hasattr(self, '_main_engine') and self._main_engine:
                         self._main_engine.write_log(
-                            f"[ChartWidget] 标记删除重复入场线 {line_id} (保留第一条)",
-                            "ChartWidget"
+                            f"[持仓同步] 标记删除重复入场线 {line_id} (保留第一条)",
+                            "Chart"
                         )
         
             # 更新第一条入场线
@@ -1585,7 +1585,7 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                 # 注释更新入场线盈亏和手数日志，减少日志输出（已在合并显示线处打印）
                 # if hasattr(self, '_main_engine') and self._main_engine:
                 #     self._main_engine.write_log(
-                #         f"[ChartWidget] 更新入场线 {line_id} 盈亏和手数: 盈亏={old_pnl} -> {position.pnl}, 手数={old_volume} -> {position.volume}",
+                #         f"[持仓同步] 更新入场线 {line_id} 盈亏和手数: 盈亏={old_pnl} -> {position.pnl}, 手数={old_volume} -> {position.volume}",
                 #         "ChartWidget"
                 #     )
                 
@@ -1598,15 +1598,15 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                     #     price_precision = 0  # 默认整数显示
                     #     label_text = line._create_label(line._price, line._line_type, price_precision, line._direction)
                     #     self._main_engine.write_log(
-                    #         f"[ChartWidget] 已更新入场线 {line_id} 标签: {label_text}",
+                    #         f"[持仓同步] 已更新入场线 {line_id} 标签: {label_text}",
                     #         "ChartWidget"
                     #     )
                     pass
                 else:
                     if hasattr(self, '_main_engine') and self._main_engine:
                         self._main_engine.write_log(
-                            f"[ChartWidget] 警告: 入场线 {line_id} 的label为None，无法更新显示",
-                            "ChartWidget"
+                            f"[持仓同步] 警告: 入场线 {line_id} 的label为None，无法更新显示",
+                            "Chart"
                         )
                 self._position_update_cache[cache_key_entry] = current_entry_data
             elif line.label is not None:
@@ -1617,26 +1617,26 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
         # if hasattr(self, '_price_line_database') and self._price_line_database and hasattr(self, '_main_engine') and self._main_engine:
         #     debug_info = self._price_line_database.debug_print_all_lines_and_relations(vt_symbol=self._vt_symbol)
         #     self._main_engine.write_log(
-        #         f"[ChartWidget] 删除入场线前，数据库状态:\n{debug_info}",
+        #         f"[持仓同步] 删除入场线前，数据库状态:\n{debug_info}",
         #         "ChartWidget"
         #     )
         
         # 添加详细日志
         # if hasattr(self, '_main_engine') and self._main_engine:
         #     self._main_engine.write_log(
-        #         f"[ChartWidget] 准备删除入场线: lines_to_delete数量={len(lines_to_delete)}, "
+        #         f"[持仓同步] 准备删除入场线: lines_to_delete数量={len(lines_to_delete)}, "
         #         f"持仓方向={position_direction}, 持仓数量={position.volume}, 持仓映射={list(position_map.items()) if position_map else []}",
         #         "ChartWidget"
         #     )
         #     if lines_to_delete:
         #         for line_id, line_direction in lines_to_delete:
         #             self._main_engine.write_log(
-        #                 f"[ChartWidget] 待删除入场线: {line_id}, 方向={line_direction}",
+        #                 f"[持仓同步] 待删除入场线: {line_id}, 方向={line_direction}",
         #                 "ChartWidget"
         #             )
         #     else:
         #         self._main_engine.write_log(
-        #             f"[ChartWidget] 警告: lines_to_delete为空，没有入场线需要删除",
+        #             f"[持仓同步] 警告: lines_to_delete为空，没有入场线需要删除",
         #             "ChartWidget"
         #         )
         
@@ -1657,8 +1657,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                     related_lines_to_delete.append(("stop_loss", stop_loss_line_id))
                     if hasattr(self, '_main_engine') and self._main_engine:
                         self._main_engine.write_log(
-                            f"[ChartWidget] 通过关联关系标记删除止损线: {stop_loss_line_id} (关联到入场线 {line_id})",
-                            "ChartWidget"
+                            f"[持仓同步] 通过关联关系标记删除止损线: {stop_loss_line_id} (关联到入场线 {line_id})",
+                            "Chart"
                         )
             
                 # 标记止盈线
@@ -1667,8 +1667,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                     related_lines_to_delete.append(("take_profit", take_profit_line_id))
                     if hasattr(self, '_main_engine') and self._main_engine:
                         self._main_engine.write_log(
-                            f"[ChartWidget] 通过关联关系标记删除止盈线: {take_profit_line_id} (关联到入场线 {line_id})",
-                            "ChartWidget"
+                            f"[持仓同步] 通过关联关系标记删除止盈线: {take_profit_line_id} (关联到入场线 {line_id})",
+                            "Chart"
                         )
         
             # 先删除关联的止损线和止盈线
@@ -1682,8 +1682,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                         except Exception as e:
                             if hasattr(self, '_main_engine') and self._main_engine:
                                 self._main_engine.write_log(
-                                    f"[ChartWidget] 从plot移除{relation_type}线 {related_line_id} 失败: {str(e)}",
-                                    "ChartWidget"
+                                    f"[持仓同步] 从plot移除{relation_type}线 {related_line_id} 失败: {str(e)}",
+                                    "Chart"
                                 )
                 
                     # 从管理器中删除
@@ -1695,29 +1695,29 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                                 self._price_line_database.delete_relations_by_related_line_id(related_line_id)
                                 if hasattr(self, '_main_engine') and self._main_engine:
                                     self._main_engine.write_log(
-                                        f"[ChartWidget] 已清理数据库中的{relation_type}线关联关系: {related_line_id}",
-                                        "ChartWidget"
+                                        f"[持仓同步] 已清理数据库中的{relation_type}线关联关系: {related_line_id}",
+                                        "Chart"
                                     )
                     
                         if relation_type == "stop_loss":
                             deleted_stop_loss_count += 1
                             if hasattr(self, '_main_engine') and self._main_engine:
                                 self._main_engine.write_log(
-                                    f"[ChartWidget] 已删除关联止损线: {related_line_id}",
-                                    "ChartWidget"
+                                    f"[持仓同步] 已删除关联止损线: {related_line_id}",
+                                    "Chart"
                                 )
                         elif relation_type == "take_profit":
                             deleted_take_profit_count += 1
                             if hasattr(self, '_main_engine') and self._main_engine:
                                 self._main_engine.write_log(
-                                    f"[ChartWidget] 已删除关联止盈线: {related_line_id}",
-                                    "ChartWidget"
+                                    f"[持仓同步] 已删除关联止盈线: {related_line_id}",
+                                    "Chart"
                                 )
                 else:
                     if hasattr(self, '_main_engine') and self._main_engine:
                         self._main_engine.write_log(
-                            f"[ChartWidget] 警告：关联的{relation_type}线 {related_line_id} 不存在",
-                            "ChartWidget"
+                            f"[持仓同步] 警告：关联的{relation_type}线 {related_line_id} 不存在",
+                            "Chart"
                         )
         
             # 删除入场线
@@ -1730,8 +1730,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                     except Exception as e:
                         if hasattr(self, '_main_engine') and self._main_engine:
                             self._main_engine.write_log(
-                                f"[ChartWidget] 从plot移除入场线 {line_id} 失败: {str(e)}",
-                                "ChartWidget"
+                                f"[持仓同步] 从plot移除入场线 {line_id} 失败: {str(e)}",
+                                "Chart"
                             )
             
                 # 从管理器中删除
@@ -1740,12 +1740,12 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                     deleted_entry_count += 1
                     if hasattr(self, '_main_engine') and self._main_engine:
                         self._main_engine.write_log(
-                            f"[ChartWidget] 已从plot中移除入场线: {line_id}",
-                            "ChartWidget"
+                            f"[持仓同步] 已从plot中移除入场线: {line_id}",
+                            "Chart"
                         )
                         self._main_engine.write_log(
-                            f"[ChartWidget] 已删除入场线: {line_id}",
-                            "ChartWidget"
+                            f"[持仓同步] 已删除入场线: {line_id}",
+                            "Chart"
                         )
                 
                     # 清理关联关系
@@ -1769,21 +1769,21 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                 else:
                     if hasattr(self, '_main_engine') and self._main_engine:
                         self._main_engine.write_log(
-                            f"[ChartWidget] 警告：删除入场线 {line_id} 失败",
-                            "ChartWidget"
+                            f"[持仓同步] 警告：删除入场线 {line_id} 失败",
+                            "Chart"
                         )
             else:
                 if hasattr(self, '_main_engine') and self._main_engine:
                     self._main_engine.write_log(
-                        f"[ChartWidget] 警告：入场线 {line_id} 不存在",
-                        "ChartWidget"
+                        f"[持仓同步] 警告：入场线 {line_id} 不存在",
+                        "Chart"
                     )
         
         # 删除后再次打印数据库状态（用于调试）
         # if hasattr(self, '_price_line_database') and self._price_line_database and hasattr(self, '_main_engine') and self._main_engine:
         #     debug_info = self._price_line_database.debug_print_all_lines_and_relations(vt_symbol=self._vt_symbol)
         #     self._main_engine.write_log(
-        #         f"[ChartWidget] 删除入场线后，数据库状态:\n{debug_info}",
+        #         f"[持仓同步] 删除入场线后，数据库状态:\n{debug_info}",
         #         "ChartWidget"
         #     )
         
@@ -1791,7 +1791,7 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
         # if updated_count > 0 or deleted_count > 0:
         #     if hasattr(self, '_main_engine') and self._main_engine:
         #         self._main_engine.write_log(
-        #             f"[ChartWidget] 盈亏更新完成: 共更新 {updated_count} 条入场线，删除 {deleted_count} 条价格线 "
+        #             f"[持仓同步] 盈亏更新完成: 共更新 {updated_count} 条入场线，删除 {deleted_count} 条价格线 "
         #             f"(入场线={deleted_entry_count}, 止损线={deleted_stop_loss_count}, 止盈线={deleted_take_profit_count})",
         #             "ChartWidget"
         #         )
@@ -1837,8 +1837,8 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
             
             if hasattr(self, '_main_engine') and self._main_engine and entries_data:
                 self._main_engine.write_log(
-                    f"[ChartWidget] 从数据库加载了 {len(entries_data)} 条{direction}方向的持仓记录",
-                    "ChartWidget"
+                    f"[持仓同步] 从数据库加载了 {len(entries_data)} 条{direction}方向的持仓记录",
+                    "Chart"
                 )
     
     def _sync_position_on_load(self) -> None:
@@ -1900,22 +1900,47 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                 # 持仓为0，清除该方向的所有入场线
                 if hasattr(self, '_main_engine') and self._main_engine:
                     self._main_engine.write_log(
-                        f"[ChartWidget] 加载时同步持仓：{direction}方向持仓为0，清除对应入场线",
-                        "ChartWidget"
+                        f"[持仓同步] 加载时同步持仓：{direction}方向持仓为0，清除对应入场线",
+                        "Chart"
                     )
                 
                 # 复用现有的清除逻辑：创建一个虚拟的持仓对象
                 from vnpy.trader.object import PositionData
                 from vnpy.trader.constant import Direction, Exchange
                 
-                # 解析exchange
-                exchange = Exchange.SHFE
+                # 解析exchange：优先从chart_vt_symbol解析，失败时从main_engine获取合约信息
+                exchange = None
                 if '.' in chart_vt_symbol:
                     exchange_str = chart_vt_symbol.split('.')[1]
                     try:
                         exchange = Exchange(exchange_str)
                     except ValueError:
-                        pass
+                        # 解析失败，尝试从main_engine获取合约信息
+                        if hasattr(self, '_main_engine') and self._main_engine:
+                            try:
+                                contract = self._main_engine.get_contract(chart_vt_symbol)
+                                if contract:
+                                    exchange = contract.exchange
+                                    if hasattr(self, '_main_engine') and self._main_engine:
+                                        self._main_engine.write_log(
+                                            f"[持仓同步] 从合约信息获取exchange: {chart_vt_symbol} -> {exchange.value}",
+                                            "Chart"
+                                        )
+                            except Exception as e:
+                                if hasattr(self, '_main_engine') and self._main_engine:
+                                    self._main_engine.write_log(
+                                        f"[持仓同步] 警告: 无法从chart_vt_symbol或合约信息获取exchange: {chart_vt_symbol}, 错误: {str(e)}",
+                                        "Chart"
+                                    )
+                
+                # 如果仍然无法确定exchange，记录警告并使用默认值
+                if exchange is None:
+                    if hasattr(self, '_main_engine') and self._main_engine:
+                        self._main_engine.write_log(
+                            f"[持仓同步] 警告: 无法确定exchange，使用默认值SHFE（可能不正确）: {chart_vt_symbol}",
+                            "Chart"
+                        )
+                    exchange = Exchange.HKFE  # 默认值，但会记录警告
                 
                 virtual_position = PositionData(
                     symbol=chart_vt_symbol.split('.')[0] if '.' in chart_vt_symbol else chart_vt_symbol,

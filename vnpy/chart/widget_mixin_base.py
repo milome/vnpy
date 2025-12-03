@@ -32,14 +32,20 @@ class ChartWidgetMixinBase:
         """
         return getattr(self, "_vt_symbol", None)
     
-    def _log(self, message: str, source: str = "ChartWidget") -> None:
+    def _log(self, message: str, category: str | None = None, source: str = "Chart") -> None:
         """统一的日志记录方法
         
         Args:
-            message: 日志消息
-            source: 日志来源标识，默认为 "ChartWidget"
+            message: 日志消息（不应包含 [ChartWidget] 等前缀）
+            category: 日志分类标签（如 "持仓同步"、"入场线盈亏" 等），可选
+            source: 日志来源标识，默认为 "Chart"（简洁版本）
         """
         main_engine = self._get_main_engine()
         if main_engine:
-            main_engine.write_log(f"[{source}] {message}", source)
+            # 如果有分类标签，添加分类前缀；否则直接使用消息
+            if category:
+                formatted_message = f"[{category}] {message}"
+            else:
+                formatted_message = message
+            main_engine.write_log(formatted_message, source)
 

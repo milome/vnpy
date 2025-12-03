@@ -129,7 +129,7 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
                                         f"[ChartWidget] 画线下单检测到平仓行为: 订单方向={direction.value}, "
                                         f"订单手数={order_volume}, 反向持仓方向={opposite_direction.value}, "
                                         f"反向持仓手数={pos.volume}, 标记为平仓订单",
-                                        "ChartWidget"
+                                        "Chart"
                                     )
                                 break
                     else:
@@ -153,7 +153,7 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
                                                                 f"订单方向={direction.value}, 订单手数={order_volume}, "
                                                                 f"反向持仓方向={opposite_direction.value}, 反向持仓手数={pos.volume}, "
                                                                 f"标记为平仓订单",
-                                                                "ChartWidget"
+                                                                "Chart"
                                                             )
                                                         break
                                     if is_closing_order:
@@ -227,7 +227,7 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
                             if main_engine:
                                 main_engine.write_log(
                                     f"[DEBUG widget_trigger] 准备访问 _pending_line_relations: line_id类型={type(line_id).__name__}, line_id值={line_id}",
-                                    "ChartWidget"
+                                    "Chart"
                                 )
                             try:
                                 # 确保 _pending_line_relations 是字典类型
@@ -238,7 +238,7 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
                                         if main_engine:
                                             main_engine.write_log(
                                                 f"[DEBUG widget_trigger] _pending_line_relations 示例键类型: {[type(k).__name__ for k in sample_keys]}, 示例键值: {sample_keys}",
-                                                "ChartWidget"
+                                                "Chart"
                                             )
                                     relations = controller._pending_line_relations.get(line_id, {})
                                 else:
@@ -246,14 +246,14 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
                                     if main_engine:
                                         main_engine.write_log(
                                             f"[ChartWidget] 警告: _pending_line_relations 不是字典类型: {type(controller._pending_line_relations)}",
-                                            "ChartWidget"
+                                            "Chart"
                                         )
                             except Exception as rel_error:
                                 relations = {}
                                 if main_engine:
                                     main_engine.write_log(
                                         f"[ChartWidget] 获取挂单关联关系失败: {str(rel_error)}, line_id类型={type(line_id).__name__}, line_id值={line_id}",
-                                        "ChartWidget"
+                                        "Chart"
                                     )
                             
                             if relations and self._price_line_manager:
@@ -304,21 +304,21 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
                             if main_engine:
                                 main_engine.write_log(
                                     f"[ChartWidget] 警告: send_order 返回了 None",
-                                    "ChartWidget"
+                                    "Chart"
                                 )
-                            vt_orderid = None
+                            # vt_orderid 已经是 None，不需要再次赋值
                         elif not isinstance(vt_orderid, str):
                             if main_engine:
                                 main_engine.write_log(
                                     f"[ChartWidget] 警告: send_order 返回了非字符串类型: {type(vt_orderid)}, 值: {vt_orderid}",
-                                    "ChartWidget"
+                                    "Chart"
                                 )
                             # 尝试转换为字符串（排除字典和其他不可哈希类型）
                             if isinstance(vt_orderid, dict):
                                 if main_engine:
                                     main_engine.write_log(
                                         f"[ChartWidget] 错误: send_order 返回了字典类型，无法转换为字符串键: {vt_orderid}",
-                                        "ChartWidget"
+                                        "Chart"
                                     )
                                 vt_orderid = None
                             else:
@@ -328,7 +328,7 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
                                     if main_engine:
                                         main_engine.write_log(
                                             f"[ChartWidget] 错误: 无法将 vt_orderid 转换为字符串: {str(e)}, 类型: {type(vt_orderid)}, 值: {vt_orderid}",
-                                            "ChartWidget"
+                                            "Chart"
                                         )
                                     vt_orderid = None
                         
@@ -338,7 +338,7 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
                             if main_engine:
                                 main_engine.write_log(
                                     f"[DEBUG widget_trigger] 准备调用 link_line_to_order: line_id={line_id}, vt_orderid类型={type(vt_orderid).__name__}, vt_orderid值={vt_orderid}",
-                                    "ChartWidget"
+                                    "Chart"
                                 )
                             # 使用 controller 的方法关联订单和挂单线（更安全）
                             if hasattr(controller, 'link_line_to_order'):
@@ -348,7 +348,7 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
                                     if main_engine:
                                         main_engine.write_log(
                                             f"[DEBUG widget_trigger] link_line_to_order 发生 TypeError: {str(e)}, vt_orderid类型={type(vt_orderid).__name__}, vt_orderid值={vt_orderid}",
-                                            "ChartWidget"
+                                            "Chart"
                                         )
                                     raise
                             else:
@@ -364,7 +364,7 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
                             if main_engine:
                                 main_engine.write_log(
                                     f"[ChartWidget] 警告: 无法关联订单和挂单线，vt_orderid 无效: {vt_orderid}",
-                                    "ChartWidget"
+                                    "Chart"
                                 )
                     
                     # 监听订单成交事件，创建入场线和成交标记
@@ -901,7 +901,7 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
                                         main_engine.write_log(
                                             f"[ChartWidget] 触发止盈: 通过主力合约映射找到持仓 "
                                             f"(图表={vt_symbol}, 实际={actual_vt_symbol})",
-                                            "ChartWidget"
+                                            "Chart"
                                         )
                                     break
                         if position and position.volume > 0:

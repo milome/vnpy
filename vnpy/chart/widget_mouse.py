@@ -863,9 +863,9 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                                     if hasattr(self, '_main_engine') and self._main_engine:
                                         line_type_name = "止损" if line_type == PriceLineType.STOP_LOSS else "止盈"
                                         self._main_engine.write_log(
-                                            f"[ChartWidget] 从入场线创建{line_type_name}线: 价格={final_price:.2f}, "
+                                            f"[入场线管理] 从入场线创建{line_type_name}线: 价格={final_price:.2f}, "
                                             f"入场线ID={entry_line_id}, 手数={entry_volume}",
-                                            "ChartWidget"
+                                            "Chart"
                                         )
                                 
                                 # 存储入场线和止损/止盈线的关联关系
@@ -898,8 +898,8 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                                                 self._price_line_database.delete_relations_by_related_line_id(old_stop_loss_id)
                                             if hasattr(self, '_main_engine') and self._main_engine:
                                                 self._main_engine.write_log(
-                                                    f"[ChartWidget] 已删除旧的止损线关联: {entry_line_id} -> {old_stop_loss_id}",
-                                                    "ChartWidget"
+                                                    f"[入场线管理] 已删除旧的止损线关联: {entry_line_id} -> {old_stop_loss_id}",
+                                                    "Chart"
                                                 )
                                     
                                     self._entry_line_relations[entry_line_id]["stop_loss"] = new_line_id
@@ -911,13 +911,13 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                                         if hasattr(self, '_main_engine') and self._main_engine:
                                             if success:
                                                 self._main_engine.write_log(
-                                                    f"[ChartWidget] 已保存止损线关联关系到数据库: {entry_line_id} -> {new_line_id}",
-                                                    "ChartWidget"
+                                                    f"[入场线管理] 已保存止损线关联关系到数据库: {entry_line_id} -> {new_line_id}",
+                                                    "Chart"
                                                 )
                                             else:
                                                 self._main_engine.write_log(
-                                                    f"[ChartWidget] 警告：保存止损线关联关系到数据库失败: {entry_line_id} -> {new_line_id}",
-                                                    "ChartWidget"
+                                                    f"[入场线管理] 警告：保存止损线关联关系到数据库失败: {entry_line_id} -> {new_line_id}",
+                                                    "Chart"
                                                 )
                                 elif line_type == PriceLineType.TAKE_PROFIT:
                                     # 如果已有旧的止盈线关联，先清理旧的关联关系和数据库记录
@@ -1157,9 +1157,9 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
         # 添加调试日志
         if hasattr(self, '_main_engine') and self._main_engine:
             self._main_engine.write_log(
-                f"[ChartWidget] 双击事件: 场景位置={scene_pos}, 价格线数量={len(all_lines)}, "
+                f"[鼠标事件] 双击事件: 场景位置={scene_pos}, 价格线数量={len(all_lines)}, "
                 f"找到价格线={clicked_line is not None}",
-                "ChartWidget"
+                "Chart"
             )
         
         if clicked_line:
@@ -1168,8 +1168,8 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
             # 添加调试日志
             if hasattr(self, '_main_engine') and self._main_engine:
                 self._main_engine.write_log(
-                    f"[ChartWidget] 双击事件: 找到价格线类型={line_type.value if hasattr(line_type, 'value') else line_type}",
-                    "ChartWidget"
+                    f"[鼠标事件] 双击事件: 找到价格线类型={line_type.value if hasattr(line_type, 'value') else line_type}",
+                    "Chart"
                 )
             
             # 如果找到的是止损/止盈线，检查附近是否有入场线（优先处理入场线）
@@ -1208,8 +1208,8 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                             if nearby_entry_line:
                                 if hasattr(self, '_main_engine') and self._main_engine:
                                     self._main_engine.write_log(
-                                        f"[ChartWidget] 双击事件: 找到止损/止盈线，但附近有入场线（距离={min_entry_distance:.2f}），优先处理入场线",
-                                        "ChartWidget"
+                                        f"[鼠标事件] 双击事件: 找到止损/止盈线，但附近有入场线（距离={min_entry_distance:.2f}），优先处理入场线",
+                                        "Chart"
                                     )
                                 clicked_line = nearby_entry_line
                                 line_type = PriceLineType.ENTRY
@@ -1236,8 +1236,8 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                     line_id = lid
                     if hasattr(self, '_main_engine') and self._main_engine:
                         self._main_engine.write_log(
-                            f"[ChartWidget] 双击事件: 通过对象引用找到line_id={line_id}",
-                            "ChartWidget"
+                            f"[鼠标事件] 双击事件: 通过对象引用找到line_id={line_id}",
+                            "Chart"
                         )
                     break
             
@@ -1250,18 +1250,18 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                         line_id = lid
                         if hasattr(self, '_main_engine') and self._main_engine:
                             self._main_engine.write_log(
-                                f"[ChartWidget] 双击事件: 通过价格和类型匹配找到line_id={line_id} "
+                                f"[鼠标事件] 双击事件: 通过价格和类型匹配找到line_id={line_id} "
                                 f"(价格={clicked_price}, 类型={line_type.value if hasattr(line_type, 'value') else line_type}, 方向={clicked_direction})",
-                                "ChartWidget"
+                                "Chart"
                             )
                         break
             
             # 添加调试日志
             if hasattr(self, '_main_engine') and self._main_engine:
                 self._main_engine.write_log(
-                    f"[ChartWidget] 双击事件: line_id={line_id}, 价格线管理器中的线数量={len(self._price_line_manager.get_all_lines())}, "
+                    f"[鼠标事件] 双击事件: line_id={line_id}, 价格线管理器中的线数量={len(self._price_line_manager.get_all_lines())}, "
                     f"点击的价格={clicked_price}, 方向={clicked_direction}",
-                    "ChartWidget"
+                    "Chart"
                 )
             
             if line_id:
@@ -1346,9 +1346,9 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                     if hasattr(self, '_main_engine') and self._main_engine:
                         drawing_enabled = self._drawing_order_controller.is_enabled() if self._drawing_order_controller else False
                         self._main_engine.write_log(
-                            f"[ChartWidget] 双击入场线: line_id={line_id}, 画线下单状态={drawing_enabled}, "
+                            f"[鼠标事件] 双击入场线: line_id={line_id}, 画线下单状态={drawing_enabled}, "
                             f"入场线价格={clicked_line.get_price()}, 方向={clicked_line.get_direction()}, 手数={clicked_line.get_volume()}",
-                            "ChartWidget"
+                            "Chart"
                         )
                     
                     # 只有在画线下单未启动时才触发平仓
@@ -1360,8 +1360,8 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                             if current_time - last_time < self._double_click_debounce_ttl:
                                 if hasattr(self, '_main_engine') and self._main_engine:
                                     self._main_engine.write_log(
-                                        f"[ChartWidget] 双击入场线防抖：入场线 {line_id} 在 {current_time - last_time:.2f} 秒前已触发平仓，跳过重复操作",
-                                        "ChartWidget"
+                                        f"[鼠标事件] 双击入场线防抖：入场线 {line_id} 在 {current_time - last_time:.2f} 秒前已触发平仓，跳过重复操作",
+                                        "Chart"
                                     )
                                 return
                         
@@ -1370,8 +1370,8 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                         
                         if hasattr(self, '_main_engine') and self._main_engine:
                             self._main_engine.write_log(
-                                f"[ChartWidget] 画线下单未启用，准备触发平仓",
-                                "ChartWidget"
+                                f"[鼠标事件] 画线下单未启用，准备触发平仓",
+                                "Chart"
                             )
                         # 获取入场线的方向和手数
                         direction_str = clicked_line.get_direction()
@@ -1379,8 +1379,8 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                         
                         if hasattr(self, '_main_engine') and self._main_engine:
                             self._main_engine.write_log(
-                                f"[ChartWidget] 双击入场线平仓: 方向={direction_str}, 入场线手数={entry_volume}",
-                                "ChartWidget"
+                                f"[鼠标事件] 双击入场线平仓: 方向={direction_str}, 入场线手数={entry_volume}",
+                                "Chart"
                             )
                         
                         # 如果入场线手数为0或很小，尝试从 PositionHolding 获取总持仓手数
@@ -1469,8 +1469,8 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                         if not self._main_engine or not self._vt_symbol:
                             if self._main_engine:
                                 self._main_engine.write_log(
-                                    f"[ChartWidget] 双击入场线平仓失败：缺少必要信息",
-                                    "ChartWidget"
+                                    f"[鼠标事件] 双击入场线平仓失败：缺少必要信息",
+                                    "Chart"
                                 )
                             return
                         
@@ -1498,8 +1498,8 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                         if opponent_price <= 0:
                             if self._main_engine:
                                 self._main_engine.write_log(
-                                    f"[ChartWidget] 双击入场线平仓失败：无法获取有效对手价",
-                                    "ChartWidget"
+                                    f"[鼠标事件] 双击入场线平仓失败：无法获取有效对手价",
+                                    "Chart"
                                 )
                             return
                         

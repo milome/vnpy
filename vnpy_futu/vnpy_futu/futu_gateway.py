@@ -255,6 +255,10 @@ class FutuGateway(BaseGateway):
             "min_order_to_first_trade_ms": 0.0,  # 最小首次成交耗时
             "min_order_to_fill_ms": 0.0,  # 最小完全成交耗时
         }
+        
+        # 所有订单的下单时间记录（用于统计耗时）
+        # orderid -> 下单时间戳
+        self._order_time_map: dict[str, float] = {}
 
         self.thread: Thread = Thread(target=self.query_data)
 
@@ -1691,7 +1695,8 @@ class FutuGateway(BaseGateway):
                     if isinstance(order_id_value, dict):
                         # order_id 是字典类型（异常情况）
                         self.write_log(
-                            f"警告: order_id 是字典类型: {order_id_value}，尝试提取订单ID"
+                            f"警告: order_id 是字典类型: {order_id_value}，尝试提取订单ID",
+                            "FUTU"
                         )
                         # 尝试从字典中提取订单ID
                         # 可能的键名：order_id, id, orderId 等
@@ -1705,20 +1710,23 @@ class FutuGateway(BaseGateway):
                     else:
                         # order_id 是其他类型
                         self.write_log(
-                            f"警告: order_id 是未知类型: {type(order_id_value)}, 值: {order_id_value}，尝试转换为字符串"
+                            f"警告: order_id 是未知类型: {type(order_id_value)}, 值: {order_id_value}，尝试转换为字符串",
+                            "FUTU"
                         )
                         orderid = str(order_id_value)
                     break
         except Exception as e:
             self.write_log(
-                f"错误: 从返回数据中提取订单ID时发生异常: {str(e)}, 数据: {data}"
+                f"错误: 从返回数据中提取订单ID时发生异常: {str(e)}, 数据: {data}",
+                "FUTU"
             )
             return ""
 
         # ✅ 验证 orderid 是否有效
         if not orderid:
             self.write_log(
-                f"错误: 无法从返回数据中获取订单ID，数据: {data.to_dict() if hasattr(data, 'to_dict') else data}"
+                f"错误: 无法从返回数据中获取订单ID，数据: {data.to_dict() if hasattr(data, 'to_dict') else data}",
+                "FUTU"
             )
             return ""
 
@@ -1747,7 +1755,11 @@ class FutuGateway(BaseGateway):
             self.chase_stats["total_orders"] += 1
 
             self.write_log(f"启用智能追价: {req.symbol} 订单{orderid} - "
-                          f"重试{chase_config.max_retry_times}次")
+                         f"重试{chase_config.max_retry_times}次")
+        else:
+            # ✅ 记录普通订单的下单时间（用于统计耗时）
+            # 追价订单使用 ChaseOrder.original_order_time，不需要记录到这里
+            self._order_time_map[orderid] = time()
 
         # ⚠️ [调试] 打印最终返回的 vt_orderid
         self.write_log(f"[DEBUG send_order] ⭐ 最终返回的 vt_orderid: 类型={type(order.vt_orderid).__name__}, 值={order.vt_orderid}")
@@ -1987,25 +1999,38 @@ class FutuGateway(BaseGateway):
         """订单状态更新处理"""
         orderid = self._normalize_orderid(order.orderid) or order.orderid
 
+        # 先获取追价订单（如果需要）
+        chase_order = self._safe_get_chase_order(orderid)
+
         # 检查订单完全成交时立即更新持仓信息
         if order.status == Status.ALLTRADED:
+            elapsed_info = ""
+            
+            # 计算订单耗时（优先使用追价订单的原始时间，否则使用普通订单时间）
+            if chase_order:
+                # 追价订单：使用原始下单时间
+                if chase_order.fill_time is None:
+                    chase_order.fill_time = time()
+                    # 计算委托到完全成交耗时（使用原始下单时间，统计总耗时）
+                    elapsed_ms = (chase_order.fill_time - chase_order.original_order_time) * 1000
+                    self.chase_stats["order_to_fill_times"].append(elapsed_ms)
+                    # 更新统计
+                    self._update_time_statistics()
+                    # 将耗时信息添加到日志中
+                    elapsed_info = f"，完全成交耗时: {elapsed_ms:.1f}ms（从原始下单开始）"
+            elif orderid in self._order_time_map:
+                # 普通订单：使用记录的下单时间
+                order_time = self._order_time_map.pop(orderid)  # 获取并删除，避免重复清理
+                fill_time = time()
+                elapsed_ms = (fill_time - order_time) * 1000
+                elapsed_info = f"，完全成交耗时: {elapsed_ms:.1f}ms"
+            
             # 订单完全成交后立即查询最新持仓
-            self.write_log(f"订单 {orderid} 完全成交，立即更新持仓信息")
+            self.write_log(f"订单 {orderid} 完全成交，立即更新持仓信息{elapsed_info}")
             self.query_position()
 
         # 检查是否是追价订单
-        chase_order = self._safe_get_chase_order(orderid)
         if chase_order:
-            
-            # 记录完全成交时间（用于耗时统计）
-            if order.status == Status.ALLTRADED and chase_order.fill_time is None:
-                chase_order.fill_time = time()
-                # 计算委托到完全成交耗时（使用原始下单时间，统计总耗时）
-                elapsed_ms = (chase_order.fill_time - chase_order.original_order_time) * 1000
-                self.chase_stats["order_to_fill_times"].append(elapsed_ms)
-                # 更新统计
-                self._update_time_statistics()
-                self.write_log(f"订单{orderid}完全成交耗时: {elapsed_ms:.1f}ms（从原始下单开始）")
 
             # 如果订单被拒绝且还能继续追价，则启动追价
             if (order.status in [Status.REJECTED, Status.CANCELLED] and
@@ -2029,7 +2054,7 @@ class FutuGateway(BaseGateway):
                     # 遍历所有chase_orders，查找是否有相同symbol、direction、offset的订单（可能是重委托前的旧订单）
                     # 注意：这里不删除，因为可能误删其他订单，只记录日志
                     self.write_log(f"订单{orderid}状态为{order.status.value}，但不在追价列表中（可能已被移除或已重委托）")
-            
+        
             # 检查未成交超时触发追价（订单状态为NOTTRADED或PARTTRADED且超过阈值）
             elif (order.status in [Status.NOTTRADED, Status.PARTTRADED] and
                   not chase_order.is_chasing and
@@ -2042,6 +2067,13 @@ class FutuGateway(BaseGateway):
                         sleep(0.1)  # 短暂延迟
                         self.start_chase_order(orderid, order.vt_symbol, order.direction)
                     Thread(target=delayed_chase).start()
+        
+        # ✅ 清理普通订单的时间记录（订单结束状态时清理，避免内存泄漏）
+        # 注意：追价订单不记录在_order_time_map中（使用ChaseOrder.original_order_time），只清理普通订单
+        if (order.status in [Status.ALLTRADED, Status.CANCELLED, Status.REJECTED] 
+            and not chase_order  # 跳过追价订单
+            and orderid in self._order_time_map):
+            del self._order_time_map[orderid]
 
     def _update_time_statistics(self) -> None:
         """更新耗时统计指标"""
