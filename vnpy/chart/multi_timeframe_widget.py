@@ -1186,6 +1186,16 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
             )
 
         self._realtime_enabled = True
+        
+        if hasattr(self, '_main_engine') and self._main_engine:
+            self._main_engine.write_log(
+                f"[多周期实时] 实时更新功能已启用 - "
+                f"bg_1m: {self._bg_1m is not None}, "
+                f"bg_5m: {self._bg_5m is not None}, "
+                f"bg_1h: {self._bg_1h is not None}, "
+                f"bg_4h: {self._bg_4h is not None}"
+            )
+        
         logger.info("[多周期] 实时更新功能已启用")
 
     def update_tick(self, tick: TickData) -> None:
@@ -1195,10 +1205,23 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         Args:
             tick: Tick数据
         """
+        if hasattr(self, '_main_engine') and self._main_engine:
+            self._main_engine.write_log(
+                f"[多周期Tick] 收到tick - 价格: {tick.last_price}, 时间: {tick.datetime}, "
+                f"realtime_enabled: {self._realtime_enabled}, bg_1m: {self._bg_1m is not None}"
+            )
+        
         if not self._realtime_enabled or not self._bg_1m:
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log(
+                    f"[多周期Tick] ⚠️ 实时更新未启用或 bg_1m 未初始化，跳过处理"
+                )
             return
 
         # 传递给1分钟BarGenerator，触发级联更新
+        if hasattr(self, '_main_engine') and self._main_engine:
+            self._main_engine.write_log("[多周期Tick] 传递给 bg_1m.update_tick()")
+        
         self._bg_1m.update_tick(tick)
 
         # 确保 tick 数据传递给价格突破监控（T055, T056）
@@ -1217,8 +1240,18 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         更新主图（1分钟K线），并传递给大周期BarGenerator
         同时检查并更新正在构建的大周期K线（实时更新）
         """
+        if hasattr(self, '_main_engine') and self._main_engine:
+            self._main_engine.write_log(
+                f"[多周期Bar] 1分钟K线回调 - 时间: {bar.datetime}, "
+                f"开: {bar.open_price}, 高: {bar.high_price}, "
+                f"低: {bar.low_price}, 收: {bar.close_price}"
+            )
+        
         # 更新主图（1分钟K线）
         self._chart.update_bar(bar)
+        
+        if hasattr(self, '_main_engine') and self._main_engine:
+            self._main_engine.write_log("[多周期Bar] 主图已更新")
 
         # 传递给大周期BarGenerator
         if self._bg_5m:
