@@ -3386,8 +3386,17 @@ class ChartWindow(QtWidgets.QWidget):
                     self._record_performance_metric("price_breakthrough", breakthrough_latency_ms)
 
         # Update stop loss/take profit line monitoring (real-time stop loss/take profit feature)
-        if self.chart and self.chart._price_line_manager:
-            all_lines = self.chart._price_line_manager.get_all_lines()
+        # ✅ 支持多周期模式：检查多周期图表的价格线
+        chart_to_check = None
+        if self.display_mode == "multi" and self.multi_timeframe_widget:
+            # 多周期模式：检查多周期图表
+            chart_to_check = self.multi_timeframe_widget._chart if hasattr(self.multi_timeframe_widget, '_chart') else self.chart
+        else:
+            # 单周期模式：检查单周期图表
+            chart_to_check = self.chart
+        
+        if chart_to_check and chart_to_check._price_line_manager:
+            all_lines = chart_to_check._price_line_manager.get_all_lines()
             from vnpy.chart.price_line import PriceLineType
 
             # 处理止损线（不提前过滤，让内部方法判断是否激活）
@@ -3400,7 +3409,7 @@ class ChartWindow(QtWidgets.QWidget):
                 try:
                     # 调用触发方法，方法内部会检查激活状态和价格是否触及止损线
                     # 未激活的线会在内部静默跳过（不记录日志，避免刷屏）
-                    self.chart.trigger_stop_loss_close(line_id, line, tick)
+                    chart_to_check.trigger_stop_loss_close(line_id, line, tick)
                 except Exception as e:
                     if self.main_engine:
                         self.main_engine.write_log(
@@ -3418,7 +3427,7 @@ class ChartWindow(QtWidgets.QWidget):
                 try:
                     # 调用触发方法，方法内部会检查激活状态和价格是否触及止盈线
                     # 未激活的线会在内部静默跳过（不记录日志，避免刷屏）
-                    self.chart.trigger_take_profit_close(line_id, line, tick)
+                    chart_to_check.trigger_take_profit_close(line_id, line, tick)
                 except Exception as e:
                     if self.main_engine:
                         self.main_engine.write_log(
