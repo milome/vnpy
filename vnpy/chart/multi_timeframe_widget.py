@@ -1291,17 +1291,26 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         
         self._bg_1m.update_tick(tick)
         
-        # 检查BarGenerator的状态
-        if hasattr(self, '_main_engine') and self._main_engine:
-            if self._bg_1m.bar:
+        # ✅ 实时更新正在构建的1分钟K线（每次tick都更新）
+        if self._bg_1m.bar:
+            # 更新主图（实时显示正在构建的K线）
+            self._chart.update_bar(self._bg_1m.bar)
+            
+            # 强制刷新显示
+            candle_plot = self._chart.get_plot("candle")
+            if candle_plot:
+                candle_plot.update()
+            self._chart.update()
+            
+            if hasattr(self, '_main_engine') and self._main_engine:
                 self._main_engine.write_log(
-                    f"[多周期Tick处理] bg_1m.bar 存在 - "
-                    f"时间: {self._bg_1m.bar.datetime}, "
-                    f"开: {self._bg_1m.bar.open_price}, "
+                    f"[多周期实时] 更新正在构建的K线 - "
+                    f"时间: {self._bg_1m.bar.datetime.strftime('%H:%M:%S')}, "
                     f"收: {self._bg_1m.bar.close_price}"
                 )
-            else:
-                self._main_engine.write_log("[多周期Tick处理] ⚠️ bg_1m.bar 为 None")
+        else:
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log("[多周期实时] ⚠️ bg_1m.bar 为 None，等待第一个tick初始化")
 
         # 确保 tick 数据传递给价格突破监控（T055, T056）
         if self._chart and hasattr(self._chart, '_breakthrough_monitor') and self._chart._breakthrough_monitor:
