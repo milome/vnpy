@@ -25,7 +25,8 @@ class PriceLineData:
         direction: str,
         vt_symbol: str,
         vt_orderid: Optional[str] = None,
-        created_at: Optional[datetime] = None
+        created_at: Optional[datetime] = None,
+        entry_line_id: Optional[str] = None  # ✅ 添加 entry_line_id 字段
     ) -> None:
         """
         Initialize price line data.
@@ -38,6 +39,7 @@ class PriceLineData:
             vt_symbol: VT symbol for the chart
             vt_orderid: Optional VT order ID if linked to an order
             created_at: Creation timestamp
+            entry_line_id: Optional entry line ID (for stop loss/take profit lines)
         """
         self.line_id = line_id
         self.price = price
@@ -45,6 +47,7 @@ class PriceLineData:
         self.direction = direction
         self.vt_symbol = vt_symbol
         self.vt_orderid = vt_orderid
+        self.entry_line_id = entry_line_id  # ✅ 保存 entry_line_id
         self.created_at = created_at or datetime.now()
 
     def to_dict(self) -> dict:
@@ -56,7 +59,8 @@ class PriceLineData:
             "direction": self.direction,
             "vt_symbol": self.vt_symbol,
             "vt_orderid": self.vt_orderid,
-            "created_at": self.created_at.isoformat()
+            "created_at": self.created_at.isoformat(),
+            "entry_line_id": self.entry_line_id  # ✅ 保存 entry_line_id
         }
 
     @classmethod
@@ -69,7 +73,8 @@ class PriceLineData:
             direction=data["direction"],
             vt_symbol=data["vt_symbol"],
             vt_orderid=data.get("vt_orderid"),
-            created_at=datetime.fromisoformat(data.get("created_at", datetime.now().isoformat()))
+            created_at=datetime.fromisoformat(data.get("created_at", datetime.now().isoformat())),
+            entry_line_id=data.get("entry_line_id")  # ✅ 加载 entry_line_id
         )
 
 

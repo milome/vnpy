@@ -86,13 +86,19 @@ class ChartWidgetDatabaseMixin(ChartWidgetMixinBase):
                 if self._drawing_order_controller:
                     vt_orderid = self._drawing_order_controller.get_order_id_for_line(line_id)
                 
+                # ✅ Get entry_line_id (for stop loss/take profit lines)
+                entry_line_id = None
+                if hasattr(line, 'entry_line_id'):
+                    entry_line_id = line.entry_line_id
+                
                 line_data = PriceLineData(
                     line_id=line_id,
                     price=line.get_price(),
                     line_type=line.get_line_type(),
                     direction=line.get_direction(),
                     vt_symbol=self._vt_symbol,
-                    vt_orderid=vt_orderid
+                    vt_orderid=vt_orderid,
+                    entry_line_id=entry_line_id  # ✅ 保存 entry_line_id
                 )
                 line_data_list.append(line_data)
             
@@ -123,6 +129,12 @@ class ChartWidgetDatabaseMixin(ChartWidgetMixinBase):
                     line_id=line_data.line_id,
                     movable=(line_data.line_type == PriceLineType.PENDING)
                 )
+                
+                # ✅ Restore entry_line_id (for stop loss/take profit lines)
+                if line_data.entry_line_id:
+                    line = self.get_price_line_manager().get_line(line_id)
+                    if line and hasattr(line, 'entry_line_id'):
+                        line.entry_line_id = line_data.entry_line_id
                 
                 # Link to order if exists
                 if line_data.vt_orderid and self._drawing_order_controller:
