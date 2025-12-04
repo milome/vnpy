@@ -258,11 +258,12 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
             db_latest_raw = existing_bars[-1].datetime
             
             # 打印原始时间戳（转换前）
-            logger.info(f"[时区调试] === 原始时间戳（转换前） ===")
-            logger.info(f"[时区调试] 数据库最早原始: {db_earliest_raw} (tzinfo={db_earliest_raw.tzinfo})")
-            logger.info(f"[时区调试] 数据库最新原始: {db_latest_raw} (tzinfo={db_latest_raw.tzinfo})")
-            logger.info(f"[时区调试] 用户起始原始: {user_start} (tzinfo={user_start.tzinfo})")
-            logger.info(f"[时区调试] 用户结束原始: {user_end} (tzinfo={user_end.tzinfo})")
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log(f"[时区调试] === 原始时间戳（转换前） ===")
+                self._main_engine.write_log(f"[时区调试] 数据库最早原始: {db_earliest_raw} (tzinfo={db_earliest_raw.tzinfo})")
+                self._main_engine.write_log(f"[时区调试] 数据库最新原始: {db_latest_raw} (tzinfo={db_latest_raw.tzinfo})")
+                self._main_engine.write_log(f"[时区调试] 用户起始原始: {user_start} (tzinfo={user_start.tzinfo})")
+                self._main_engine.write_log(f"[时区调试] 用户结束原始: {user_end} (tzinfo={user_end.tzinfo})")
             
             # ✅ 时区统一处理：统一使用数据库配置的时区进行比较
             # 获取数据库时区配置，根据 database.py 的 convert_tz()，
@@ -270,7 +271,8 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
             db_tz_name = SETTINGS.get("database.timezone", "Asia/Shanghai")
             database_tz = pytz.timezone(db_tz_name)
             
-            logger.info(f"[时区调试] 数据库时区配置: {db_tz_name}")
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log(f"[时区调试] 数据库时区配置: {db_tz_name}")
             
             # 将所有 datetime 统一转换到数据库时区
             db_earliest = db_earliest_raw
@@ -297,22 +299,23 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
                 user_end = user_end.astimezone(database_tz)
             
             # 打印转换后的时间戳
-            logger.info(f"[时区调试] === 转换后时间戳（统一到{db_tz_name}） ===")
-            logger.info(f"[时区调试] 数据库最早: {db_earliest}")
-            logger.info(f"[时区调试] 数据库最新: {db_latest}")
-            logger.info(f"[时区调试] 用户起始: {user_start}")
-            logger.info(f"[时区调试] 用户结束: {user_end}")
-            
-            # 打印时间差
-            data_age = user_end - db_latest
-            time_gap = user_start - db_earliest
-            logger.info(f"[时区调试] === 时间差分析 ===")
-            logger.info(f"[时区调试] 数据年龄 (user_end - db_latest): {data_age} ({data_age.total_seconds()/3600:.2f} 小时)")
-            logger.info(f"[时区调试] 时间间隙 (user_start - db_earliest): {time_gap}")
-            
-            logger.info(f"[多周期] 数据库时区: {db_tz_name}")
-            logger.info(f"[多周期] 数据库范围: {db_earliest} ~ {db_latest}")
-            logger.info(f"[多周期] 用户选择范围: {user_start} ~ {user_end}")
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log(f"[时区调试] === 转换后时间戳（统一到{db_tz_name}） ===")
+                self._main_engine.write_log(f"[时区调试] 数据库最早: {db_earliest}")
+                self._main_engine.write_log(f"[时区调试] 数据库最新: {db_latest}")
+                self._main_engine.write_log(f"[时区调试] 用户起始: {user_start}")
+                self._main_engine.write_log(f"[时区调试] 用户结束: {user_end}")
+                
+                # 打印时间差
+                data_age = user_end - db_latest
+                time_gap = user_start - db_earliest
+                self._main_engine.write_log(f"[时区调试] === 时间差分析 ===")
+                self._main_engine.write_log(f"[时区调试] 数据年龄 (user_end - db_latest): {data_age} ({data_age.total_seconds()/3600:.2f} 小时)")
+                self._main_engine.write_log(f"[时区调试] 时间间隙 (user_start - db_earliest): {time_gap}")
+                
+                self._main_engine.write_log(f"[多周期] 数据库时区: {db_tz_name}")
+                self._main_engine.write_log(f"[多周期] 数据库范围: {db_earliest} ~ {db_latest}")
+                self._main_engine.write_log(f"[多周期] 用户选择范围: {user_start} ~ {user_end}")
             
             # 策略2：数据库最新数据 < 1小时前 → 下载最近7天
             data_age = user_end - db_latest
@@ -574,11 +577,12 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         database = get_database()
 
         # 添加详细的调试信息
-        logger.info("[多周期] _load_data_and_build_items 开始执行（分步并行加载）")
-        logger.info(f"[多周期] 当前合约: {self._vt_symbol}")
-        logger.info(f"[多周期] 当前交易所: {self._exchange}")
-        logger.info(f"[多周期] 用户选择时间范围: {self._start} ~ {self._end}")
-        logger.info(f"[多周期] 重要：所有周期都使用用户选择的完整时间范围")
+        if hasattr(self, '_main_engine') and self._main_engine:
+            self._main_engine.write_log("[多周期] _load_data_and_build_items 开始执行（分步并行加载）")
+            self._main_engine.write_log(f"[多周期] 当前合约: {self._vt_symbol}")
+            self._main_engine.write_log(f"[多周期] 当前交易所: {self._exchange}")
+            self._main_engine.write_log(f"[多周期] 用户选择时间范围: {self._start} ~ {self._end}")
+            self._main_engine.write_log(f"[多周期] 重要：所有周期都使用用户选择的完整时间范围")
 
         # ============================================================
         # 第一步：先加载1分钟数据（必需，其他周期依赖于它）
@@ -593,8 +597,9 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         if progress_callback:
             progress_callback("正在加载1分钟K线数据...", 5)
         
-        logger.info("[多周期] 开始加载1分钟K线数据")
-        logger.info(f"[多周期] 用户指定范围: {self._start} ~ {self._end}")
+        if hasattr(self, '_main_engine') and self._main_engine:
+            self._main_engine.write_log("[多周期] 开始加载1分钟K线数据")
+            self._main_engine.write_log(f"[多周期] 用户指定范围: {self._start} ~ {self._end}")
         
         try:
             # 步骤1：从数据库加载用户指定的完整范围
@@ -605,7 +610,8 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
                 start=self._start,
                 end=self._end,
             )
-            logger.info(f"[多周期] 从数据库加载: {len(one_minute_bars) if one_minute_bars else 0} 条")
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log(f"[多周期] 从数据库加载: {len(one_minute_bars) if one_minute_bars else 0} 条")
             
             # 步骤2：分析数据库状态，决定是否需要从FUTU下载
             download_start, need_download = self._check_data_completeness(
