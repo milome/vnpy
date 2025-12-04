@@ -4227,11 +4227,7 @@ class ChartWindow(QtWidgets.QWidget):
             # 确保widget在布局中且有正确的父窗口
             if self.multi_timeframe_widget.parent() != self:
                 self.multi_timeframe_widget.setParent(self)
-            # 同步数据到多周期模式（在显示之前）
-            self.sync_data_to_multi_timeframe()
-            # 启用实时更新（T037）
-            if hasattr(self.multi_timeframe_widget, 'enable_realtime'):
-                self.multi_timeframe_widget.enable_realtime()
+            
             # 启用画线交易功能（T049-T052）
             if hasattr(self.multi_timeframe_widget, 'enable_drawing_order'):
                 self.multi_timeframe_widget.enable_drawing_order(
@@ -4245,11 +4241,14 @@ class ChartWindow(QtWidgets.QWidget):
                     if chart and hasattr(chart, 'set_drawing_mode_changed_callback'):
                         chart.set_drawing_mode_changed_callback(self._on_drawing_mode_changed)
             
-            # 提示用户加载数据
-            self.main_engine.write_log(
-                "[多周期] 已切换到多周期模式，请选择起始时间后点击'加载'按钮",
-                "ChartWindow"
-            )
+            # ✅ 先启用实时更新（在加载数据之前）
+            if hasattr(self.multi_timeframe_widget, 'enable_realtime'):
+                self.multi_timeframe_widget.enable_realtime()
+                self.main_engine.write_log("[多周期] 实时更新已启用", "ChartWindow")
+            
+            # ✅ 自动加载数据（使用默认时间范围）
+            self.main_engine.write_log("[多周期] 开始自动加载数据（使用默认时间范围）", "ChartWindow")
+            self._load_multi_timeframe_data()
             # 同步价格线从单周期图表到多周期图表
             # 注意：只同步入场线和已激活的止损止盈线，不同步挂单止损止盈线
             if self.chart and self.chart._price_line_manager:
