@@ -1292,22 +1292,82 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         self._bg_1m.update_tick(tick)
         
         # ✅ 实时更新正在构建的1分钟K线（每次tick都更新）
+        # 使用与单周期一致的逻辑，包括开盘价修正
         if self._bg_1m.bar:
+            from vnpy.trader.object import BarData
+            from copy import copy
+            
+            # 创建K线副本（避免修改原始bar）
+            bar: BarData = copy(self._bg_1m.bar)
+            bar.datetime = bar.datetime.replace(second=0, microsecond=0)
+            
+            # 开盘价修正逻辑（与单周期一致）
+            bar_minute_start = bar.datetime.replace(second=0, microsecond=0)
+            correct_open_price = None
+            need_correct = False
+            
+            # 判断是否需要修正：如果tick的秒数>0，说明该分钟已经开始
+            tick_second = tick.datetime.second
+            if tick_second > 0:
+                need_correct = True
+            else:
+                need_correct = True  # 仍然检查是否有更准确的参照物
+            
+            # 查找正确的开盘价
+            if need_correct:
+                # 方法1：检查历史数据中的该分钟K线
+                if hasattr(self, '_main_manager') and self._main_manager:
+                    all_bars = self._main_manager.get_all_bars()
+                    if all_bars:
+                        for history_bar in reversed(all_bars):
+                            if history_bar.datetime == bar_minute_start:
+                                correct_open_price = history_bar.open_price
+                                if hasattr(self, '_main_engine') and self._main_engine:
+                                    self._main_engine.write_log(
+                                        f"[多周期实时] 1分钟K线({bar_minute_start.strftime('%H:%M')}) "
+                                        f"从历史数据获取开盘价: {correct_open_price}"
+                                    )
+                                break
+                
+                # 方法2：如果历史数据中没有，尝试从数据库查询
+                if not correct_open_price:
+                    try:
+                        from vnpy.trader.database import get_database
+                        from vnpy.trader.constant import Interval
+                        from datetime import timedelta
+                        
+                        database = get_database()
+                        minute_end = bar_minute_start + timedelta(minutes=1)
+                        db_bars = database.load_bar_data(
+                            symbol=self._vt_symbol,
+                            exchange=self._exchange,
+                            interval=Interval.MINUTE,
+                            start=bar_minute_start,
+                            end=minute_end
+                        )
+                        
+                        if db_bars and len(db_bars) > 0:
+                            correct_open_price = db_bars[0].open_price
+                            if hasattr(self, '_main_engine') and self._main_engine:
+                                self._main_engine.write_log(
+                                    f"[多周期实时] 1分钟K线({bar_minute_start.strftime('%H:%M')}) "
+                                    f"从数据库获取开盘价: {correct_open_price}"
+                                )
+                    except Exception:
+                        pass
+            
+            # 应用修正后的开盘价
+            if correct_open_price:
+                bar.open_price = correct_open_price
+            
             # 更新主图（实时显示正在构建的K线）
-            self._chart.update_bar(self._bg_1m.bar)
+            self._chart.update_bar(bar)
             
             # 强制刷新显示
             candle_plot = self._chart.get_plot("candle")
             if candle_plot:
                 candle_plot.update()
             self._chart.update()
-            
-            if hasattr(self, '_main_engine') and self._main_engine:
-                self._main_engine.write_log(
-                    f"[多周期实时] 更新正在构建的K线 - "
-                    f"时间: {self._bg_1m.bar.datetime.strftime('%H:%M:%S')}, "
-                    f"收: {self._bg_1m.bar.close_price}"
-                )
         else:
             if hasattr(self, '_main_engine') and self._main_engine:
                 self._main_engine.write_log("[多周期实时] ⚠️ bg_1m.bar 为 None，等待第一个tick初始化")
