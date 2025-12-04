@@ -903,6 +903,15 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                                                 )
                                     
                                     self._entry_line_relations[entry_line_id]["stop_loss"] = new_line_id
+                                    
+                                    # ✅ 同步设置止损线的 entry_line_id 属性（确保属性和关联表一致）
+                                    new_stop_loss_line = manager.get_line(new_line_id)
+                                    if new_stop_loss_line:
+                                        if hasattr(new_stop_loss_line, 'set_associated_entry_line_id'):
+                                            new_stop_loss_line.set_associated_entry_line_id(entry_line_id)
+                                        elif hasattr(new_stop_loss_line, 'entry_line_id'):
+                                            new_stop_loss_line.entry_line_id = entry_line_id
+                                    
                                     # 保存关联关系到数据库
                                     if self._price_line_database:
                                         success = self._price_line_database.save_relation(
@@ -947,6 +956,15 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                                                 )
                                     
                                     self._entry_line_relations[entry_line_id]["take_profit"] = new_line_id
+                                    
+                                    # ✅ 同步设置止盈线的 entry_line_id 属性（确保属性和关联表一致）
+                                    new_take_profit_line = manager.get_line(new_line_id)
+                                    if new_take_profit_line:
+                                        if hasattr(new_take_profit_line, 'set_associated_entry_line_id'):
+                                            new_take_profit_line.set_associated_entry_line_id(entry_line_id)
+                                        elif hasattr(new_take_profit_line, 'entry_line_id'):
+                                            new_take_profit_line.entry_line_id = entry_line_id
+                                    
                                     # 保存关联关系到数据库
                                     if self._price_line_database:
                                         success = self._price_line_database.save_relation(

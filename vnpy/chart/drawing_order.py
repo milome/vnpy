@@ -1292,6 +1292,12 @@ class DrawingOrderController:
                         # 将止损线关联到入场线
                         self._widget._entry_line_relations[new_line_id]["stop_loss"] = stop_loss_line_id
                         
+                        # ✅ 同步设置止损线的 entry_line_id 属性（确保属性和关联表一致）
+                        if hasattr(stop_loss_line, 'set_associated_entry_line_id'):
+                            stop_loss_line.set_associated_entry_line_id(new_line_id)
+                        elif hasattr(stop_loss_line, 'entry_line_id'):
+                            stop_loss_line.entry_line_id = new_line_id
+                        
                         # ✅ 激活止损线：设置创建时间，使其可以被触发检查
                         # 挂单成交后，关联的止损线才被激活
                         from time import time
@@ -1373,6 +1379,12 @@ class DrawingOrderController:
                         
                         # 将止盈线关联到入场线
                         self._widget._entry_line_relations[new_line_id]["take_profit"] = take_profit_line_id
+                        
+                        # ✅ 同步设置止盈线的 entry_line_id 属性（确保属性和关联表一致）
+                        if hasattr(take_profit_line, 'set_associated_entry_line_id'):
+                            take_profit_line.set_associated_entry_line_id(new_line_id)
+                        elif hasattr(take_profit_line, 'entry_line_id'):
+                            take_profit_line.entry_line_id = new_line_id
                         
                         # ✅ 激活止盈线：设置创建时间，使其可以被触发检查
                         # 挂单成交后，关联的止盈线才被激活
