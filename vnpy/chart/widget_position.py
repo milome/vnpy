@@ -356,8 +356,11 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                 line = self._price_line_manager.get_line(line_id)
                 if line:
                     # 删除关联的止损线和止盈线
+                    # 方法1：从 _entry_line_relations 查找关联关系
+                    relations_found = False
                     if hasattr(self, '_entry_line_relations') and line_id in self._entry_line_relations:
                         relations = self._entry_line_relations[line_id]
+                        relations_found = True
                     
                         # 删除止损线
                         stop_loss_line_id = relations.get("stop_loss")
@@ -410,6 +413,65 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                     
                         # 从数据库删除关联关系
                         if self._price_line_database:
+                            self._price_line_database.delete_relation(line_id)
+                    
+                    # 方法2：如果没有找到关联关系（例如恢复的入场线），从数据库查找
+                    if not relations_found and self._price_line_database:
+                        if hasattr(self, '_main_engine') and self._main_engine:
+                            self._main_engine.write_log(
+                                f"[持仓同步] 入场线 {line_id} 在内存中没有关联关系，尝试从数据库查找",
+                                "Chart"
+                            )
+                        
+                        db_relations = self._price_line_database.get_related_lines(line_id)
+                        if db_relations:
+                            if hasattr(self, '_main_engine') and self._main_engine:
+                                self._main_engine.write_log(
+                                    f"[持仓同步] 从数据库找到关联关系: {db_relations}",
+                                    "Chart"
+                                )
+                            
+                            # 删除止损线
+                            stop_loss_line_id = db_relations.get("stop_loss")
+                            if stop_loss_line_id:
+                                stop_loss_line = self._price_line_manager.get_line(stop_loss_line_id)
+                                if stop_loss_line:
+                                    if self._first_plot:
+                                        try:
+                                            self._first_plot.removeItem(stop_loss_line)
+                                        except Exception:
+                                            pass
+                                    if self._price_line_database:
+                                        self._price_line_database.delete_line(stop_loss_line_id)
+                                    if self._price_line_manager.delete_line(stop_loss_line_id):
+                                        deleted_count += 1
+                                        if hasattr(self, '_main_engine') and self._main_engine:
+                                            self._main_engine.write_log(
+                                                f"[持仓同步] 已删除关联止损线（从数据库找到）: {stop_loss_line_id}",
+                                                "Chart"
+                                            )
+                            
+                            # 删除止盈线
+                            take_profit_line_id = db_relations.get("take_profit")
+                            if take_profit_line_id:
+                                take_profit_line = self._price_line_manager.get_line(take_profit_line_id)
+                                if take_profit_line:
+                                    if self._first_plot:
+                                        try:
+                                            self._first_plot.removeItem(take_profit_line)
+                                        except Exception:
+                                            pass
+                                    if self._price_line_database:
+                                        self._price_line_database.delete_line(take_profit_line_id)
+                                    if self._price_line_manager.delete_line(take_profit_line_id):
+                                        deleted_count += 1
+                                        if hasattr(self, '_main_engine') and self._main_engine:
+                                            self._main_engine.write_log(
+                                                f"[持仓同步] 已删除关联止盈线（从数据库找到）: {take_profit_line_id}",
+                                                "Chart"
+                                            )
+                            
+                            # 从数据库删除关联关系
                             self._price_line_database.delete_relation(line_id)
                 
                     # 先从 plot 中移除（如果存在）

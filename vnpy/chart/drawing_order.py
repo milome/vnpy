@@ -116,6 +116,11 @@ class DrawingOrderController:
                     "DrawingOrderController"
                 )
         
+        # ✅ 注意：不删除挂单止损止盈线
+        # 挂单止损止盈线应该保留，即使关闭画线下单功能
+        # 这些线是用户设置的交易辅助线，不应该因为关闭画线下单功能而被删除
+        # 只有当挂单线被删除（例如双击删除挂单）时，才会删除关联的止损止盈线
+        
         # Restore cursor
         if self._widget:
             self._widget.setCursor(QtCore.Qt.CursorShape.ArrowCursor)

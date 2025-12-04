@@ -107,7 +107,7 @@ class PriceLineDragHandler:
                 
                 # Get plot height in pixels
                 plot_height = view_box.height()
-                if plot_height > 0:
+                if plot_height > 0 and y_height > 0:
                     price_per_pixel = y_height / plot_height
                     distance_pixels = distance / price_per_pixel
 

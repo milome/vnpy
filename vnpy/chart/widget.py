@@ -406,6 +406,9 @@ class ChartWidget(
                     "ChartWidget"
                 )
             
+            # 清理未关联的挂单止损止盈线（这些线不应该自动加载）
+            self._cleanup_pending_stop_profit_lines()
+            
             # 加载关联关系
             self._load_line_relations()
             
@@ -418,6 +421,112 @@ class ChartWidget(
         
         if self._drawing_order_controller:
             self._drawing_order_controller.set_vt_symbol(vt_symbol)
+    
+    def _cleanup_pending_stop_profit_lines(self) -> None:
+        """
+        清理未关联到入场线的挂单止损止盈线
+        
+        这些线是之前画线下单时创建的，但不应该在加载数据时自动显示。
+        用户启用画线下单功能时，会重新创建这些线。
+        
+        重要：不应该删除正在使用的挂单止损止盈线（关联到挂单线的）
+        """
+        from vnpy.chart.price_line import PriceLineType
+        
+        if not self._price_line_manager:
+            return
+        
+        all_lines = self._price_line_manager.get_all_lines()
+        
+        # 收集所有入场线ID和挂单线ID
+        entry_line_ids = set()
+        pending_line_ids = set()
+        
+        for line_id, line in all_lines.items():
+            line_type = line.get_line_type()
+            if line_type == PriceLineType.ENTRY:
+                entry_line_ids.add(line_id)
+            elif line_type == PriceLineType.PENDING:
+                pending_line_ids.add(line_id)
+        
+        lines_to_remove = []
+        
+        for line_id, line in all_lines.items():
+            line_type = line.get_line_type()
+            
+            # 只清理未关联到入场线或挂单线的止损止盈线
+            if line_type in [PriceLineType.STOP_LOSS, PriceLineType.TAKE_PROFIT]:
+                # 检查是否关联到入场线（已激活）
+                has_entry = hasattr(line, 'entry_line_id') and line.entry_line_id and line.entry_line_id in entry_line_ids
+                
+                # 检查是否关联到挂单线（正在使用）
+                # 注意：挂单止损止盈线是通过 _pending_line_relations 字典关联的，没有 pending_line_id 属性
+                has_pending = False
+                if hasattr(self, '_drawing_order_controller') and self._drawing_order_controller:
+                    if hasattr(self._drawing_order_controller, '_pending_line_relations'):
+                        # 遍历 _pending_line_relations，检查当前止损止盈线是否在某个挂单线的关联中
+                        for pending_id, relations in self._drawing_order_controller._pending_line_relations.items():
+                            if pending_id in pending_line_ids:  # 挂单线仍然存在
+                                # 检查当前止损止盈线是否是这个挂单线的关联线
+                                if relations.get('stop_loss', {}).get('line_id') == line_id:
+                                    has_pending = True
+                                    break
+                                if relations.get('take_profit', {}).get('line_id') == line_id:
+                                    has_pending = True
+                                    break
+                
+                # 检查是否在关联关系中（备用检查）
+                has_relation = False
+                if hasattr(self, '_entry_line_relations'):
+                    for entry_id, relations in self._entry_line_relations.items():
+                        if line_id in relations.values():
+                            has_relation = True
+                            break
+                
+                # 只有三者都没有才删除（真正的孤儿线）
+                if not has_entry and not has_pending and not has_relation:
+                    lines_to_remove.append(line_id)
+                    if hasattr(self, '_main_engine') and self._main_engine:
+                        self._main_engine.write_log(
+                            f"[ChartWidget] 清理孤儿{line_type.value}线: {line_id}（无入场线、无挂单线、无关联关系）",
+                            "ChartWidget"
+                        )
+                else:
+                    # 有关联关系，保留
+                    if hasattr(self, '_main_engine') and self._main_engine:
+                        reason = []
+                        if has_entry:
+                            reason.append(f"关联入场线={line.entry_line_id}")
+                        if has_pending:
+                            reason.append("关联挂单线")  # 不访问 pending_line_id 属性（不存在）
+                        if has_relation:
+                            reason.append("在关联关系中")
+                        self._main_engine.write_log(
+                            f"[ChartWidget] 保留{line_type.value}线: {line_id} ({', '.join(reason)})",
+                            "ChartWidget"
+                        )
+        
+        # 删除这些线
+        for line_id in lines_to_remove:
+            line = self._price_line_manager.get_line(line_id)
+            if line:
+                # 从 plot 移除
+                if self._first_plot:
+                    try:
+                        self._first_plot.removeItem(line)
+                    except Exception:
+                        pass
+                # 从管理器删除
+                self._price_line_manager.delete_line(line_id)
+                # 从数据库删除
+                if self._price_line_database:
+                    self._price_line_database.delete_line(line_id)
+        
+        if lines_to_remove and hasattr(self, '_main_engine') and self._main_engine:
+            self._main_engine.write_log(
+                f"[ChartWidget] 已清理 {len(lines_to_remove)} 条未关联的挂单止损止盈线",
+                "ChartWidget"
+            )
     
     def _get_main_contract_mapping(self, main_engine: object, force_refresh: bool = False) -> dict[str, str]:
         """
