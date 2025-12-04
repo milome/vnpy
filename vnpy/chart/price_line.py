@@ -92,6 +92,7 @@ class PriceLineItem(pg.InfiniteLine):
         self._order_volume: Optional[float] = None  # 挂单线的订单手数（仅PENDING类型）
         self._order_offset: Optional[str] = None  # 挂单线的开平类型（"OPEN"/"CLOSE"，仅PENDING类型）
         self._creation_time: Optional[float] = None  # 创建时间（秒，用于防止创建后立即触发）
+        self.entry_line_id: Optional[str] = None  # ✅ 关联的入场线ID（用于止损/止盈线）
 
     def _create_pen(
         self,
@@ -397,6 +398,15 @@ class PriceLineItem(pg.InfiniteLine):
             creation_time: 创建时间（秒），可以为None（表示未激活）
         """
         self._creation_time = creation_time
+    
+    def set_associated_entry_line_id(self, entry_line_id: Optional[str]) -> None:
+        """
+        设置关联的入场线ID（用于止损/止盈线）
+        
+        Args:
+            entry_line_id: 入场线ID
+        """
+        self.entry_line_id = entry_line_id
     
     def set_pnl_and_volume(self, pnl: float, volume: float) -> None:
         """同时设置浮动盈亏和持仓手数并更新标签"""
