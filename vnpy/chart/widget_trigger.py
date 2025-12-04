@@ -472,10 +472,26 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
         
         # 使用RLock保护，确保一次只有一个止损线触发平仓
         with self._stop_loss_trigger_lock:
-            # ✅ 防重复触发机制：检查是否已经触发过（防止短时间内重复触发）
+            # ✅ 检查是否正在拖拽价格线：如果正在拖拽，跳过触发（防止拖拽时误触发）
+            if hasattr(self, '_price_line_drag_handler') and self._price_line_drag_handler:
+                if self._price_line_drag_handler.is_dragging():
+                    # 静默跳过，不记录日志（避免拖拽时刷屏）
+                    return False
+            
+            # ✅ 检查拖拽保护期：如果拖拽结束后价格已突破，设置500ms保护期，防止拖拽后立即触发
             from time import time
-            trigger_key = f"stop_loss_{line_id}"
             current_time = time()
+            if hasattr(self, '_drag_protection_times') and self._drag_protection_times:
+                protection_end_time = self._drag_protection_times.get(line_id)
+                if protection_end_time and current_time < protection_end_time:
+                    # 在保护期内，跳过触发
+                    return False
+                elif protection_end_time and current_time >= protection_end_time:
+                    # 保护期已过，清除记录
+                    del self._drag_protection_times[line_id]
+            
+            # ✅ 防重复触发机制：检查是否已经触发过（防止短时间内重复触发）
+            trigger_key = f"stop_loss_{line_id}"
             
             # 检查是否已有触发记录（防抖：30秒内不重复触发，但要先检查未成交订单）
             if hasattr(self, '_trigger_records'):
@@ -789,10 +805,26 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
         
         # 使用RLock保护，确保一次只有一个止盈线触发平仓
         with self._take_profit_trigger_lock:
-            # ✅ 防重复触发机制：检查是否已经触发过（防止短时间内重复触发）
+            # ✅ 检查是否正在拖拽价格线：如果正在拖拽，跳过触发（防止拖拽时误触发）
+            if hasattr(self, '_price_line_drag_handler') and self._price_line_drag_handler:
+                if self._price_line_drag_handler.is_dragging():
+                    # 静默跳过，不记录日志（避免拖拽时刷屏）
+                    return False
+            
+            # ✅ 检查拖拽保护期：如果拖拽结束后价格已突破，设置500ms保护期，防止拖拽后立即触发
             from time import time
-            trigger_key = f"take_profit_{line_id}"
             current_time = time()
+            if hasattr(self, '_drag_protection_times') and self._drag_protection_times:
+                protection_end_time = self._drag_protection_times.get(line_id)
+                if protection_end_time and current_time < protection_end_time:
+                    # 在保护期内，跳过触发
+                    return False
+                elif protection_end_time and current_time >= protection_end_time:
+                    # 保护期已过，清除记录
+                    del self._drag_protection_times[line_id]
+            
+            # ✅ 防重复触发机制：检查是否已经触发过（防止短时间内重复触发）
+            trigger_key = f"take_profit_{line_id}"
             
             # 检查是否已有触发记录（防抖：30秒内不重复触发，但要先检查未成交订单）
             if hasattr(self, '_trigger_records'):
