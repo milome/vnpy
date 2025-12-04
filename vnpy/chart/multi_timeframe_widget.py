@@ -1333,7 +1333,6 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
                 if not correct_open_price:
                     try:
                         from vnpy.trader.database import get_database
-                        from vnpy.trader.constant import Interval
                         from datetime import timedelta
                         
                         database = get_database()
