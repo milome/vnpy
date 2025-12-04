@@ -298,6 +298,15 @@ class CrossIndexCandleItem(ChartItem):
         # 获取K线在1分钟时间轴上的索引范围
         start_ix, end_ix = self._get_bar_index_range(bar)
 
+        # ✅ 修复：当索引范围太小时（如5分钟K线刚开始的1-3分钟）
+        # 使用最小宽度避免画出小方块
+        index_width = end_ix - start_ix
+        min_width = 3.0  # 最小宽度：至少3个1分钟K线的宽度
+        
+        if index_width < min_width:
+            # 扩展到最小宽度（向右延伸）
+            end_ix = start_ix + min_width
+
         # 计算中心位置（用于影线）
         center_ix = (start_ix + end_ix) / 2.0
 
@@ -315,7 +324,7 @@ class CrossIndexCandleItem(ChartItem):
         fill_rect = QtCore.QRectF(
             start_ix,
             body_bottom,
-            max(1.0, end_ix - start_ix),  # 至少保证有一点宽度
+            end_ix - start_ix,  # 使用调整后的宽度
             body_top - body_bottom
         )
         painter.setPen(QtCore.Qt.NoPen)
