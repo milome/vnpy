@@ -2416,7 +2416,8 @@ class ChartWindow(QtWidgets.QWidget):
                 exchange=exchange,
                 start=start,
                 end=end,
-                parent=self
+                parent=self,
+                main_engine=self.main_engine  # ✅ 传入 main_engine
             )
             # 初始状态隐藏（在init_ui中添加到布局后会再次设置）
             self.multi_timeframe_widget.setVisible(False)
@@ -2977,12 +2978,15 @@ class ChartWindow(QtWidgets.QWidget):
             from vnpy.trader.event import EVENT_TICK
 
             # 注册 tick 事件监听（使用信号槽机制确保线程安全）
-            # 先检查是否已连接，避免重复连接
-            try:
-                self.signal_tick.disconnect(self.process_tick_event)
-            except (TypeError, RuntimeError):
-                # 连接不存在，这是正常的，继续注册
-                pass
+            # 先断开已有连接（如果存在），避免重复连接
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                try:
+                    self.signal_tick.disconnect(self.process_tick_event)
+                except (TypeError, RuntimeError):
+                    # 连接不存在或已经断开，这是正常的，继续注册
+                    pass
 
             # 先注销（如果已注册），避免重复注册
             try:
@@ -7848,11 +7852,14 @@ class ChartWindow(QtWidgets.QWidget):
                 from vnpy.trader.event import EVENT_TICK
                 self.event_engine.unregister(EVENT_TICK, self.signal_tick.emit)
                 # 断开信号连接（如果连接存在）
-                try:
-                    self.signal_tick.disconnect(self.process_tick_event)
-                except (TypeError, RuntimeError):
-                    # 连接不存在或已经断开，这是正常的，不需要记录错误
-                    pass
+                import warnings
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", RuntimeWarning)
+                    try:
+                        self.signal_tick.disconnect(self.process_tick_event)
+                    except (TypeError, RuntimeError):
+                        # 连接不存在或已经断开，这是正常的，不需要记录错误
+                        pass
                 if self.main_engine:
                     self.main_engine.write_log(
                         "[ChartWindow] 已注销 EVENT_TICK 事件监听器（signal_tick.emit）",

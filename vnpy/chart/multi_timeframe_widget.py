@@ -71,6 +71,7 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         style_1h: TimeframeStyle | None = None,
         style_4h: TimeframeStyle | None = None,
         parent: QtWidgets.QWidget | None = None,
+        main_engine: object | None = None,  # ✅ 添加 main_engine 参数
     ) -> None:
         super().__init__(parent)
 
@@ -78,6 +79,7 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         self._exchange: Exchange = exchange
         self._start: datetime = start
         self._end: datetime = end
+        self._main_engine: object | None = main_engine  # ✅ 保存 main_engine 引用
 
         # 样式对象：如未传入，则使用默认配置
         self._style_5m: TimeframeStyle = style_5m or TimeframeStyle(
