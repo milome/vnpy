@@ -4249,12 +4249,9 @@ class ChartWindow(QtWidgets.QWidget):
                     if chart and hasattr(chart, 'set_drawing_mode_changed_callback'):
                         chart.set_drawing_mode_changed_callback(self._on_drawing_mode_changed)
             
-            # ✅ 先启用实时更新（在加载数据之前）
-            if hasattr(self.multi_timeframe_widget, 'enable_realtime'):
-                self.multi_timeframe_widget.enable_realtime()
-                self.main_engine.write_log("[多周期] 实时更新已启用", "ChartWindow")
-            
             # ✅ 自动加载数据（使用默认时间范围）
+            # 注意：不在这里启用实时更新，因为数据加载时会清理BarGenerator
+            # 实时更新会在数据加载完成后自动启用
             self.main_engine.write_log("[多周期] 开始自动加载数据（使用默认时间范围）", "ChartWindow")
             self._load_multi_timeframe_data()
             # 同步价格线从单周期图表到多周期图表
