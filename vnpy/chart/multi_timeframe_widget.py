@@ -243,10 +243,7 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         
         情况2：user_start < db_earliest（用户选择的起始时间早于数据库最早时间）
           - 说明数据不全
-          - 如果差距 (db_earliest - user_start) >= 1小时：
-            → 全量下载（user_start ~ user_end）
-          - 如果差距 < 1小时：
-            → 只下载缺口（user_start ~ db_earliest）
+          - **无论差距大小，都全量下载**（user_start ~ user_end）
         
         Returns:
             (download_start, download_end, need_download): 下载起始时间、结束时间和是否需要下载
@@ -353,26 +350,16 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
             
             # ============================================================
             # 情况2：user_start < db_earliest（数据不全）
+            # 无论差距大小，都全量下载
             # ============================================================
             else:
                 time_gap = db_earliest - user_start
-                
-                if time_gap.total_seconds() >= 3600:  # 差距 >= 1小时
-                    # 全量下载
-                    if hasattr(self, '_main_engine') and self._main_engine:
-                        self._main_engine.write_log(
-                            f"[多周期] 情况2：数据不全，差距 {time_gap.total_seconds()/3600:.1f} 小时 >= 1小时，"
-                            f"全量下载: {user_start} ~ {user_end}"
-                        )
-                    return user_start, user_end, True
-                else:
-                    # 差距 < 1小时，只下载缺口
-                    if hasattr(self, '_main_engine') and self._main_engine:
-                        self._main_engine.write_log(
-                            f"[多周期] 情况2：数据不全，但差距 {time_gap.total_seconds()/60:.1f} 分钟 < 1小时，"
-                            f"只下载缺口: {user_start} ~ {db_earliest}"
-                        )
-                    return user_start, db_earliest, True  # 只下载缺口
+                if hasattr(self, '_main_engine') and self._main_engine:
+                    self._main_engine.write_log(
+                        f"[多周期] 情况2：数据不全（用户起始早于数据库最早 {time_gap.total_seconds()/60:.1f} 分钟），"
+                        f"全量下载: {user_start} ~ {user_end}"
+                    )
+                return user_start, user_end, True  # 全量下载
             
         except Exception as e:
             logger.warning(f"[多周期] 检查数据完整性失败: {e}，跳过下载")
