@@ -254,8 +254,15 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
             
             # 查询数据库中的最早和最新数据
             existing_bars.sort(key=lambda x: x.datetime)
-            db_earliest = existing_bars[0].datetime
-            db_latest = existing_bars[-1].datetime
+            db_earliest_raw = existing_bars[0].datetime
+            db_latest_raw = existing_bars[-1].datetime
+            
+            # 打印原始时间戳（转换前）
+            logger.info(f"[时区调试] === 原始时间戳（转换前） ===")
+            logger.info(f"[时区调试] 数据库最早原始: {db_earliest_raw} (tzinfo={db_earliest_raw.tzinfo})")
+            logger.info(f"[时区调试] 数据库最新原始: {db_latest_raw} (tzinfo={db_latest_raw.tzinfo})")
+            logger.info(f"[时区调试] 用户起始原始: {user_start} (tzinfo={user_start.tzinfo})")
+            logger.info(f"[时区调试] 用户结束原始: {user_end} (tzinfo={user_end.tzinfo})")
             
             # ✅ 时区统一处理：统一使用数据库配置的时区进行比较
             # 获取数据库时区配置，根据 database.py 的 convert_tz()，
@@ -263,7 +270,12 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
             db_tz_name = SETTINGS.get("database.timezone", "Asia/Shanghai")
             database_tz = pytz.timezone(db_tz_name)
             
+            logger.info(f"[时区调试] 数据库时区配置: {db_tz_name}")
+            
             # 将所有 datetime 统一转换到数据库时区
+            db_earliest = db_earliest_raw
+            db_latest = db_latest_raw
+            
             if db_earliest.tzinfo is None:
                 db_earliest = database_tz.localize(db_earliest)
             else:
@@ -283,6 +295,20 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
                 user_end = database_tz.localize(user_end)
             else:
                 user_end = user_end.astimezone(database_tz)
+            
+            # 打印转换后的时间戳
+            logger.info(f"[时区调试] === 转换后时间戳（统一到{db_tz_name}） ===")
+            logger.info(f"[时区调试] 数据库最早: {db_earliest}")
+            logger.info(f"[时区调试] 数据库最新: {db_latest}")
+            logger.info(f"[时区调试] 用户起始: {user_start}")
+            logger.info(f"[时区调试] 用户结束: {user_end}")
+            
+            # 打印时间差
+            data_age = user_end - db_latest
+            time_gap = user_start - db_earliest
+            logger.info(f"[时区调试] === 时间差分析 ===")
+            logger.info(f"[时区调试] 数据年龄 (user_end - db_latest): {data_age} ({data_age.total_seconds()/3600:.2f} 小时)")
+            logger.info(f"[时区调试] 时间间隙 (user_start - db_earliest): {time_gap}")
             
             logger.info(f"[多周期] 数据库时区: {db_tz_name}")
             logger.info(f"[多周期] 数据库范围: {db_earliest} ~ {db_latest}")

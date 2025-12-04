@@ -1287,7 +1287,7 @@ class TradingWidget(QtWidgets.QWidget):
             actual_contract = None
             symbol_part = vt_symbol.split('.')[0] if '.' in vt_symbol else vt_symbol
             exchange_part = exchange_value
-            
+
             # 尝试从所有gateway查找主力合约映射
             for gateway_name in self.main_engine.get_all_gateway_names():
                 gateway = self.main_engine.get_gateway(gateway_name)
@@ -1311,7 +1311,7 @@ class TradingWidget(QtWidgets.QWidget):
                                 break
                     if actual_contract:
                         break
-            
+
             # 如果仍然没有找到合约
             if not actual_contract:
                 self.name_line.setText("")
@@ -1363,7 +1363,7 @@ class TradingWidget(QtWidgets.QWidget):
 
         # 延迟100ms执行价格更新，确保订阅已生效
         Timer(0.1, delayed_price_update).start()
-    
+
     def process_contract_event(self, event: Event) -> None:
         """
         处理合约信息更新事件，如果当前设置的合约代码匹配，自动更新名称。
@@ -1371,15 +1371,15 @@ class TradingWidget(QtWidgets.QWidget):
         from ..object import ContractData
         from ..utility import get_digits
         contract: ContractData = event.data
-        
+
         # 检查是否是当前设置的合约
         symbol: str = str(self.symbol_line.text())
         if not symbol:
             return
-        
+
         exchange_value: str = str(self.exchange_combo.currentText())
         vt_symbol: str = f"{symbol}.{exchange_value}"
-        
+
         # 直接匹配
         if contract.vt_symbol == vt_symbol:
             self.name_line.setText(contract.name)
@@ -1390,11 +1390,11 @@ class TradingWidget(QtWidgets.QWidget):
             # 更新价格精度
             self.price_digits = get_digits(contract.pricetick)
             return
-        
+
         # 主力合约映射匹配：当前是主力合约，合约信息是实际合约
         symbol_part = vt_symbol.split('.')[0] if '.' in vt_symbol else vt_symbol
         contract_symbol_part = contract.vt_symbol.split('.')[0] if '.' in contract.vt_symbol else contract.vt_symbol
-        
+
         # 尝试从所有gateway查找主力合约映射
         for gateway_name in self.main_engine.get_all_gateway_names():
             gateway = self.main_engine.get_gateway(gateway_name)
@@ -2180,6 +2180,80 @@ class GlobalDialog(QtWidgets.QDialog):
         self.accept()
 
 
+class MultiTimeframeLoadProgressDialog(QtWidgets.QDialog):
+    """
+    多周期数据加载进度对话框（借鉴 DataManager 设计）
+    """
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("多周期数据加载")
+        self.setFixedSize(500, 300)
+        self.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
+        
+        # 进度条
+        self.progress_bar = QtWidgets.QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFormat("%p%")
+        
+        # 当前状态标签
+        self.status_label = QtWidgets.QLabel("准备加载多周期数据...")
+        self.status_label.setStyleSheet("font-weight: bold; font-size: 12px;")
+        
+        # 消息列表
+        self.message_list = QtWidgets.QTextEdit()
+        self.message_list.setReadOnly(True)
+        self.message_list.setStyleSheet(
+            "font-family: 'Consolas', 'Monaco', monospace; "
+            "font-size: 10px; "
+            "background-color: #1e1e1e; "
+            "color: #d4d4d4;"
+        )
+        
+        # 布局
+        layout = QtWidgets.QVBoxLayout()
+        layout.addWidget(self.status_label)
+        layout.addWidget(self.progress_bar)
+        layout.addWidget(QtWidgets.QLabel("加载详情:"))
+        layout.addWidget(self.message_list)
+        self.setLayout(layout)
+        
+        self.append_message("开始加载多周期数据...")
+    
+    def set_status(self, status: str):
+        """设置当前状态"""
+        self.status_label.setText(status)
+        self.append_message(status)
+        QtWidgets.QApplication.processEvents()
+    
+    def set_progress(self, value: int):
+        """设置进度值 (0-100)"""
+        self.progress_bar.setValue(value)
+        QtWidgets.QApplication.processEvents()
+    
+    def append_message(self, msg: str):
+        """追加消息"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.message_list.append(f"[{timestamp}] {msg}")
+        scrollbar = self.message_list.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+        QtWidgets.QApplication.processEvents()
+    
+    def set_completed(self):
+        """设置为完成状态"""
+        self.status_label.setText("✅ 加载完成！")
+        self.status_label.setStyleSheet("font-weight: bold; font-size: 12px; color: green;")
+        self.append_message("多周期数据加载完成！")
+    
+    def set_error(self, error_msg: str):
+        """设置为错误状态"""
+        self.status_label.setText("❌ 加载失败")
+        self.status_label.setStyleSheet("font-weight: bold; font-size: 12px; color: red;")
+        self.append_message(f"错误: {error_msg}")
+
+
 class ChartWindow(QtWidgets.QWidget):
     """
     K线图表窗口，作为独立窗口显示实时K线数据。
@@ -2256,6 +2330,12 @@ class ChartWindow(QtWidgets.QWidget):
         # 图表组件
         self.chart: ChartWidget = None
 
+        # 显示模式：单周期或多周期叠加
+        self.display_mode: str = "single"  # "single" 或 "multi"
+
+        # 多周期Widget实例（延迟初始化，在init_ui中创建）
+        self.multi_timeframe_widget = None  # type: Optional[MultiTimeframeWidget]
+
         # 历史数据加载状态
         self.history_loaded: bool = False
 
@@ -2277,13 +2357,13 @@ class ChartWindow(QtWidgets.QWidget):
         # 数据缺口状态
         self._has_data_gap: bool = False
         self._gap_info: str = ""
-        
+
         # Query cache for open prices (reduces database and Datafeed queries)
         # Format: (symbol: str, datetime: datetime) -> (open_price: float, timestamp: float)
         self._open_price_cache: dict[tuple[str, datetime], tuple[float, float]] = {}
         self._cache_ttl: int = 60  # Cache TTL: 60 seconds
         self._cache_max_size: int = 1000  # Maximum cache size: 1000 entries
-        
+
         # 注意：不再需要 _cached_datafeed，因为使用全局单例 DatafeedManager
         # Datafeed 连接现在由 DatafeedManager 管理，程序退出时自动关闭
 
@@ -2318,11 +2398,41 @@ class ChartWindow(QtWidgets.QWidget):
         }
         self._perf_log_interval: float = 60.0  # 每60秒记录一次性能统计
 
+        # 创建 MultiTimeframeWidget 实例（延迟加载数据，在模式切换时再加载）
+        # 使用默认值创建，后续在切换模式或合约时会更新
+        try:
+            from vnpy.chart.multi_timeframe_widget import MultiTimeframeWidget
+            from vnpy.trader.utility import extract_vt_symbol
+            from datetime import timedelta
+
+            # 使用默认值创建（后续会在切换模式时更新）
+            default_vt_symbol = self.DEFAULT_SYMBOL if self.DEFAULT_SYMBOL else "MHImain.HKFE"
+            symbol, exchange = extract_vt_symbol(default_vt_symbol)
+            end = datetime.now()
+            start = end - timedelta(days=7)  # 默认加载最近7天数据
+
+            self.multi_timeframe_widget = MultiTimeframeWidget(
+                vt_symbol=default_vt_symbol,
+                exchange=exchange,
+                start=start,
+                end=end,
+                parent=self
+            )
+            # 初始状态隐藏（在init_ui中添加到布局后会再次设置）
+            self.multi_timeframe_widget.setVisible(False)
+        except Exception as e:
+            # 如果创建失败，记录日志但不阻止初始化
+            self.main_engine.write_log(
+                f"[ChartWindow] 创建 MultiTimeframeWidget 失败: {e}",
+                "ChartWindow"
+            )
+            self.multi_timeframe_widget = None
+
         self.init_ui()
         self.register_event()
         # 连接更新数据完成信号槽（在主线程中）
         self.signal_update_data_complete.connect(self._on_update_data_complete)
-        
+
         # 默认加载合约数据（必须在init_ui()之后调用，因为需要symbol_line组件）
         self.load_default_symbol()
 
@@ -2350,7 +2460,7 @@ class ChartWindow(QtWidgets.QWidget):
                 # 缓存过期，删除
                 del self._open_price_cache[cache_key]
         return None
-    
+
     def _set_cached_open_price(self, symbol: str, bar_datetime: datetime, price: float) -> None:
         """
         Set cached open price for a symbol and bar datetime.
@@ -2365,11 +2475,11 @@ class ChartWindow(QtWidgets.QWidget):
         """
         cache_key = (symbol, bar_datetime)
         self._open_price_cache[cache_key] = (price, time.time())
-        
+
         # 如果缓存大小超过限制，清理过期缓存
         if len(self._open_price_cache) > self._cache_max_size:
             self._clean_expired_cache()
-    
+
     def _clean_expired_cache(self) -> None:
         """
         Clean up expired cache entries.
@@ -2385,7 +2495,7 @@ class ChartWindow(QtWidgets.QWidget):
         ]
         for key in expired_keys:
             del self._open_price_cache[key]
-    
+
     def _get_datafeed(self, show_error_dialog: bool = False, check_health: bool = False):
         """
         Get global singleton Datafeed instance.
@@ -2402,22 +2512,22 @@ class ChartWindow(QtWidgets.QWidget):
         """
         try:
             from vnpy.trader.datafeed_manager import get_global_datafeed, _datafeed_manager
-            
+
             # 如果需要检查健康状态（运行时断开检测）
             if check_health:
                 _datafeed_manager.check_connection_health(
                     write_log=self.main_engine.write_log,
                     show_error_dialog=show_error_dialog
                 )
-            
+
             # 使用全局单例 Datafeed
             datafeed = get_global_datafeed(
                 write_log=self.main_engine.write_log,
                 show_error_dialog=show_error_dialog
             )
-            
+
             return datafeed
-            
+
         except Exception as e:
             # 记录错误但不抛出异常
             if self.main_engine:
@@ -2440,22 +2550,22 @@ class ChartWindow(QtWidgets.QWidget):
         """
         try:
             result = {}
-            
+
             # Datafeed连接数：检查缓存的Datafeed实例
             datafeed_count = 0
             if self._cached_datafeed is not None:
                 datafeed_count = 1
             result["datafeed"] = datafeed_count
-            
+
             # 数据库连接数：尝试从数据库获取（如果支持）
             # 注意：大多数数据库驱动使用连接池，无法直接获取连接数
             # 这里只返回Datafeed连接数
             result["database"] = None  # 数据库连接数通常无法直接获取
-            
+
             return result
         except Exception:
             return None
-    
+
     def _log_connection_count(self) -> None:
         """
         Log connection count statistics.
@@ -2469,7 +2579,7 @@ class ChartWindow(QtWidgets.QWidget):
             if connection_count:
                 datafeed_count = connection_count.get("datafeed", 0)
                 database_count = connection_count.get("database", "N/A")
-                
+
                 # 检查是否接近限制（Futu OpenAPI限制为128）
                 futu_limit = 128
                 if datafeed_count is not None and datafeed_count > 0:
@@ -2493,7 +2603,7 @@ class ChartWindow(QtWidgets.QWidget):
                 self.main_engine.write_log(
                     f"[ChartWindow] 记录连接数失败: {e}"
                 )
-    
+
     def _check_connection_count_before_create(self) -> bool:
         """
         Check connection count before creating new connection.
@@ -2510,7 +2620,7 @@ class ChartWindow(QtWidgets.QWidget):
             if connection_count:
                 datafeed_count = connection_count.get("datafeed", 0)
                 futu_limit = 128
-                
+
                 # 如果Datafeed连接数接近限制，发出警告
                 if datafeed_count is not None and datafeed_count >= futu_limit * 0.8:  # 80%阈值
                     if self.main_engine:
@@ -2639,6 +2749,15 @@ class ChartWindow(QtWidgets.QWidget):
         # ChartWidget中的 _stop_loss_trigger_lock 和 _take_profit_trigger_lock
         # 保护的是"触发止损/止盈平仓"这个逻辑本身，无论是真实tickdata触发还是模拟触发
 
+        # 显示模式选择下拉框
+        self.mode_combo: QtWidgets.QComboBox = QtWidgets.QComboBox()
+        self.mode_combo.addItem("单周期")
+        self.mode_combo.addItem("多周期叠加")
+        self.mode_combo.setCurrentText("单周期")
+        self.mode_combo.setToolTip(_("选择显示模式：单周期或多周期叠加"))
+        self.mode_combo.setFixedWidth(100)
+        self.mode_combo.currentTextChanged.connect(self.on_mode_changed)
+
         # 周期选择下拉框
         self.interval_combo: QtWidgets.QComboBox = QtWidgets.QComboBox()
         for name in self.INTERVAL_MAP.keys():
@@ -2710,10 +2829,12 @@ class ChartWindow(QtWidgets.QWidget):
         self.update_data_button.clicked.connect(self.update_history_data)
         self.update_data_button.setToolTip(_("从数据库已有数据的结束日期开始，下载截止到当前最新日期的1分钟K线数据并补齐大周期"))
 
-        # 顶部布局 - 第一行：合约选择、周期、数据源
+        # 顶部布局 - 第一行：合约选择、模式、周期、数据源
         hbox1: QtWidgets.QHBoxLayout = QtWidgets.QHBoxLayout()
         hbox1.addWidget(QtWidgets.QLabel(_("合约:")))
         hbox1.addWidget(self.symbol_line, 1)
+        hbox1.addWidget(QtWidgets.QLabel(_("模式:")))
+        hbox1.addWidget(self.mode_combo)
         hbox1.addWidget(QtWidgets.QLabel(_("周期:")))
         hbox1.addWidget(self.interval_combo)
         hbox1.addWidget(QtWidgets.QLabel(_("数据源:")))
@@ -2725,6 +2846,14 @@ class ChartWindow(QtWidgets.QWidget):
         hbox1.addWidget(self.simulate_trade_button)
         hbox1.addWidget(self.simulate_stop_loss_button)
         hbox1.addWidget(self.simulate_take_profit_button)
+
+        # 多周期设置按钮（T065）
+        self.multi_timeframe_settings_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("多周期设置"))
+        self.multi_timeframe_settings_button.clicked.connect(self.show_multi_timeframe_settings)
+        self.multi_timeframe_settings_button.setToolTip(_("打开多周期K线显示设置对话框"))
+        self.multi_timeframe_settings_button.setFixedWidth(100)
+        self.multi_timeframe_settings_button.setVisible(False)  # 初始隐藏，只在多周期模式显示
+        hbox1.addWidget(self.multi_timeframe_settings_button)
 
         # 顶部布局 - 第二行：时间范围选择（结束时间默认为最新）
         hbox2: QtWidgets.QHBoxLayout = QtWidgets.QHBoxLayout()
@@ -2788,6 +2917,14 @@ class ChartWindow(QtWidgets.QWidget):
         chart_layout: QtWidgets.QHBoxLayout = QtWidgets.QHBoxLayout()
         chart_layout.setSpacing(5)
         chart_layout.addWidget(self.chart, 1)
+        # 将 multi_timeframe_widget 也添加到布局中（初始隐藏，与chart共享位置）
+        # 注意：两个widget在同一个位置，通过setVisible控制显示哪一个
+        if self.multi_timeframe_widget:
+            chart_layout.addWidget(self.multi_timeframe_widget, 1)
+            # 确保初始状态隐藏（在添加到布局后设置）
+            self.multi_timeframe_widget.setVisible(False)
+            # 确保widget在布局中（即使隐藏）
+            self.multi_timeframe_widget.setParent(self)
         chart_layout.addWidget(self.price_slider)
 
         # 底部时间滚动条布局（扩展更多空间）
@@ -2846,14 +2983,14 @@ class ChartWindow(QtWidgets.QWidget):
             except (TypeError, RuntimeError):
                 # 连接不存在，这是正常的，继续注册
                 pass
-            
+
             # 先注销（如果已注册），避免重复注册
             try:
                 self.event_engine.unregister(EVENT_TICK, self.signal_tick.emit)
             except (KeyError, ValueError):
                 # 未注册，这是正常的，继续注册
                 pass
-            
+
             self.signal_tick.connect(self.process_tick_event)
             self.event_engine.register(EVENT_TICK, self.signal_tick.emit)
 
@@ -2910,6 +3047,14 @@ class ChartWindow(QtWidgets.QWidget):
         if tick.vt_symbol != self.current_vt_symbol:
             return
 
+        # 如果当前是多周期模式，将tick数据路由到MultiTimeframeWidget（T035, T036）
+        if self.display_mode == "multi" and self.multi_timeframe_widget:
+            if hasattr(self.multi_timeframe_widget, 'update_tick'):
+                self.multi_timeframe_widget.update_tick(tick)
+            # 注意：多周期模式下，单周期模式的实时更新逻辑仍然执行
+            # 这样可以确保两种模式都能正常工作
+            # 但主要更新由MultiTimeframeWidget处理
+
         # 获取当前周期（无论历史数据是否加载完成，都需要知道当前周期）
         interval_enum = self._get_interval_enum()
         from vnpy.trader.constant import Interval
@@ -2923,37 +3068,37 @@ class ChartWindow(QtWidgets.QWidget):
                 self.bg.update_tick(tick)
 
                 # 实时更新当前K线（每次tick都更新，确保实时显示）
-                # 注意：bg.bar在第一个有效tick时会被创建，之后每次tick都会更新                                                                              
+                # 注意：bg.bar在第一个有效tick时会被创建，之后每次tick都会更新
                 if self.bg.bar:
                         from vnpy.trader.object import BarData
                         # 创建当前K线的副本用于实时更新（避免修改原始bar对象）
                         bar: BarData = copy(self.bg.bar)
                         # 规范化datetime（去掉秒和微秒，确保与历史数据一致）
                         bar.datetime = bar.datetime.replace(second=0, microsecond=0)
-                        
+
                         # For 1-minute interval, check and correct open price
-                        # 
+                        #
                         # 【开盘价定义】：1分钟K线的开盘价 = 该分钟第一个tick的last_price
-                        # 
+                        #
                         # 【判定是否需要修正】：
                         # 1. 如果当前tick的秒数 > 0，说明该分钟已经开始，第一个tick已经过去
                         #    BarGenerator创建K线时用的不是第一个tick，开盘价不正确，需要修正
                         # 2. 如果当前tick的秒数 = 0，说明可能是该分钟的第一个tick（或接近）
                         #    但为了安全起见，仍然检查是否有更准确的参照物
-                        # 
+                        #
                         # 【参照物（按优先级）】：
                         # 1. 保存的删除K线开盘价（最高优先级，来自历史数据，已完成）
                         # 2. 历史数据中的该分钟K线（已完成，开盘价来自完整tick数据）
                         # 3. 数据库中的该分钟K线（已完成，开盘价来自完整tick数据）
                         # 4. 该分钟第一个tick的last_price（通过查询tick数据获取）
-                        # 
+                        #
                         # 【判定改的对不对】：
                         # - 参照物的开盘价是从完整的历史数据生成的，理论上应该是正确的
                         # - 如果找不到参照物，只能使用BarGenerator的开盘价（可能不正确，但无法验证）
                         bar_minute_start = bar.datetime.replace(second=0, microsecond=0)
                         correct_open_price = None
                         need_correct = False
-                        
+
                         # 判断是否需要修正：如果tick的秒数>0，说明该分钟已经开始，第一个tick已过去
                         tick_second = tick.datetime.second
                         if tick_second > 0:
@@ -2968,12 +3113,12 @@ class ChartWindow(QtWidgets.QWidget):
                             # 可能是该分钟的第一个tick，但仍然检查是否有更准确的参照物
                             # （例如历史数据中的K线，可能是从更完整的tick数据生成的）
                             need_correct = True  # 仍然检查，但优先级较低
-                        
+
                         # 只有需要修正时才查找参照物
                         if need_correct:
                             # 方法1（最高优先级）：检查是否有保存的被删除K线的开盘价
                             # 参照物：删除前历史数据中的K线开盘价（已完成，理论上正确）
-                            if (hasattr(self, '_removed_minute_bar_open_price') and 
+                            if (hasattr(self, '_removed_minute_bar_open_price') and
                                 self._removed_minute_bar_open_price and
                                 hasattr(self, '_removed_minute_bar_datetime') and
                                 self._removed_minute_bar_datetime == bar_minute_start):
@@ -2985,7 +3130,7 @@ class ChartWindow(QtWidgets.QWidget):
                                 # 使用后清除，避免重复使用
                                 self._removed_minute_bar_open_price = None
                                 self._removed_minute_bar_datetime = None
-                            
+
                             # 方法2：检查历史数据中是否有该分钟的K线
                             # 参照物：历史数据中的K线开盘价（已完成，从完整tick数据生成，理论上正确）
                             if not correct_open_price and self.history_data:
@@ -3001,7 +3146,7 @@ class ChartWindow(QtWidgets.QWidget):
                                                 f"(参照物：历史K线，已完成)"
                                             )
                                         break
-                            
+
                             # 方法3：如果历史数据中没有，尝试从数据库加载该分钟的K线
                             # 参照物：数据库中的K线开盘价（已完成，从完整tick数据生成，理论上正确）
                             if not correct_open_price:
@@ -3016,10 +3161,10 @@ class ChartWindow(QtWidgets.QWidget):
                                         # 缓存未命中，查询数据库
                                         from vnpy.trader.database import get_database
                                         from vnpy.trader.constant import Interval
-                                        
+
                                         database = get_database()
                                         symbol, exchange = extract_vt_symbol(self.current_vt_symbol)
-                                        
+
                                         # 查询该分钟的K线数据
                                         minute_bars = database.load_bar_data(
                                             symbol,
@@ -3028,7 +3173,7 @@ class ChartWindow(QtWidgets.QWidget):
                                             bar_minute_start,
                                             bar_minute_start
                                         )
-                                        
+
                                         if minute_bars and len(minute_bars) > 0:
                                             # 找到该分钟的K线，使用其开盘价
                                             minute_bar = minute_bars[0]
@@ -3049,7 +3194,7 @@ class ChartWindow(QtWidgets.QWidget):
                                             "ChartWindow"
                                         )
                                     # Don't re-raise exception to ensure main flow continues
-                            
+
                             # 方法4（最后手段）：从tick数据恢复正确的开盘价
                             # 参照物：该分钟第一个tick的last_price（这是开盘价的准确定义）
                             # 如果前三种方法都无法获取，尝试从数据库或datafeed查询该分钟的历史tick数据
@@ -3067,10 +3212,10 @@ class ChartWindow(QtWidgets.QWidget):
                                         from vnpy.trader.database import get_database
                                         from vnpy.trader.constant import Interval
                                         from vnpy.trader.object import HistoryRequest
-                                        
+
                                         # 计算该分钟的时间范围
                                         minute_end = bar_minute_start + timedelta(minutes=1)
-                                        
+
                                         # 方法4.1：尝试从数据库加载该分钟的tick数据
                                         try:
                                             database = get_database()
@@ -3080,7 +3225,7 @@ class ChartWindow(QtWidgets.QWidget):
                                                 bar_minute_start,
                                                 minute_end
                                             )
-                                            
+
                                             if ticks:
                                                 # 按时间排序，找到第一个tick
                                                 ticks.sort(key=lambda x: x.datetime)
@@ -3104,7 +3249,7 @@ class ChartWindow(QtWidgets.QWidget):
                                                     "ChartWindow"
                                                 )
                                             # Continue with datafeed query, don't interrupt main flow
-                                        
+
                                         # 方法4.2：如果数据库没有，尝试从datafeed查询该分钟的tick数据
                                         # 注意：FUTU datafeed的query_tick_history会返回空列表（不会发API请求）
                                         # 其他支持tick数据查询的datafeed可以正常使用
@@ -3112,7 +3257,7 @@ class ChartWindow(QtWidgets.QWidget):
                                             try:
                                                 # Use cached Datafeed instance to avoid frequent connection creation
                                                 datafeed = self._get_datafeed()
-                                                
+
                                                 if datafeed:
                                                     req = HistoryRequest(
                                                         symbol=symbol,
@@ -3121,9 +3266,9 @@ class ChartWindow(QtWidgets.QWidget):
                                                         start=bar_minute_start,
                                                         end=minute_end
                                                     )
-                                                    
+
                                                     ticks = datafeed.query_tick_history(req, output=self.main_engine.write_log)
-                                                    
+
                                                     if ticks:
                                                         # 按时间排序，找到第一个tick
                                                         ticks.sort(key=lambda x: x.datetime)
@@ -3155,7 +3300,7 @@ class ChartWindow(QtWidgets.QWidget):
                                             "ChartWindow"
                                         )
                                     # Don't re-raise exception to ensure main flow continues
-                        
+
                         # 如果找到了参照物且开盘价不同，则使用参照物的开盘价
                         if correct_open_price and correct_open_price > 0:
                             if correct_open_price != bar.open_price:
@@ -3184,7 +3329,7 @@ class ChartWindow(QtWidgets.QWidget):
                             #     f"(可能不准确，因为该分钟已开始: {tick.datetime.strftime('%H:%M:%S')})"
                             # )
                             pass
-                        
+
                         # 更新图表显示（BarManager会自动处理新bar的添加和已有bar的更新）
                         # 这会实时更新最后一根K线的显示（如果bar已存在）或添加新K线（如果bar不存在）
                         # Performance monitoring - measure chart refresh latency
@@ -3277,6 +3422,54 @@ class ChartWindow(QtWidgets.QWidget):
             tick_update_end_time = time.perf_counter()
             tick_update_latency_ms = (tick_update_end_time - tick_update_start_time) * 1000
             self._record_performance_metric("tick_update", tick_update_latency_ms)
+
+    def on_mode_changed(self, text: str) -> None:
+        """模式选择改变时的处理（T015, T066, T067）"""
+        if text == "单周期":
+            self.switch_display_mode("single")
+        elif text == "多周期叠加":
+            self.switch_display_mode("multi")
+
+        # 更新控制面板可见性（T066, T067）
+        self._update_control_panel_visibility()
+
+    def _update_control_panel_visibility(self) -> None:
+        """
+        更新控制面板可见性（T066, T067）
+        
+        根据当前模式显示/隐藏相应的控制面板
+        """
+        if self.display_mode == "single":
+            # 单周期模式：显示单周期控制，隐藏多周期控制
+            if hasattr(self, 'interval_combo'):
+                self.interval_combo.setVisible(True)
+            if hasattr(self, 'multi_timeframe_settings_button'):
+                self.multi_timeframe_settings_button.setVisible(False)
+            # 隐藏 MultiTimeframeWidget 的控制面板
+            if self.multi_timeframe_widget:
+                # 获取控制面板（通过查找 control_layout）
+                # 注意：MultiTimeframeWidget 的控制面板在 layout 中
+                # 我们可以通过查找包含 control_layout 的 widget 来隐藏它
+                # 但更简单的方法是直接隐藏整个控制面板区域
+                # 由于控制面板是 MultiTimeframeWidget 的一部分，我们不需要单独隐藏
+                pass
+        else:
+            # 多周期模式：隐藏单周期控制，显示多周期控制
+            if hasattr(self, 'interval_combo'):
+                self.interval_combo.setVisible(False)
+            if hasattr(self, 'multi_timeframe_settings_button'):
+                self.multi_timeframe_settings_button.setVisible(True)
+
+    def show_multi_timeframe_settings(self) -> None:
+        """
+        显示多周期设置对话框（T064）
+        """
+        if not self.multi_timeframe_widget:
+            return
+
+        # 调用 MultiTimeframeWidget 的设置对话框
+        if hasattr(self.multi_timeframe_widget, 'show_settings_dialog'):
+            self.multi_timeframe_widget.show_settings_dialog()
 
     def on_interval_changed(self, text: str) -> None:
         """周期选择改变时的处理"""
@@ -3402,14 +3595,14 @@ class ChartWindow(QtWidgets.QWidget):
                 _("请先选择合约后再更新数据")
             )
             return
-        
+
         from threading import Thread
         from datetime import datetime, timedelta
         from tzlocal import get_localzone_name
         from vnpy.trader.utility import extract_vt_symbol, ZoneInfo
         from vnpy.trader.constant import Interval
         from vnpy.trader.database import get_database
-        
+
         # 验证vt_symbol格式
         if "." not in self.current_vt_symbol:
             QtWidgets.QMessageBox.warning(
@@ -3418,7 +3611,7 @@ class ChartWindow(QtWidgets.QWidget):
                 _("合约代码格式不正确，应为：合约代码.交易所（如：MHImain.HKFE）")
             )
             return
-        
+
         try:
             symbol, exchange = extract_vt_symbol(self.current_vt_symbol)
         except (ValueError, AttributeError) as e:
@@ -3432,7 +3625,7 @@ class ChartWindow(QtWidgets.QWidget):
                 "ChartWindow"
             )
             return
-        
+
         # 显示进度提示（在主线程中创建）
         self._update_progress_dialog = QtWidgets.QProgressDialog(
             _("正在更新数据，请稍候..."),
@@ -3445,7 +3638,7 @@ class ChartWindow(QtWidgets.QWidget):
         self._update_progress_dialog.setAutoClose(False)
         self._update_progress_dialog.setAutoReset(False)
         self._update_progress_dialog.show()
-        
+
         def _update():
             try:
                 # 1. 尝试通过DataManagerApp更新数据
@@ -3465,20 +3658,20 @@ class ChartWindow(QtWidgets.QWidget):
                                 break
                         except ImportError:
                             pass
-                
+
                 if datamanager_app:
                     # 尝试获取DataManager引擎
                     datamanager_engine = None
                     if hasattr(self.main_engine, 'engines'):
                         datamanager_engine = self.main_engine.engines.get("DataManager")
-                    
+
                     if datamanager_engine and hasattr(datamanager_engine, 'update_data'):
                         # 使用DataManager的更新数据功能
                         self.main_engine.write_log(
                             f"[ChartWindow] 使用DataManager更新数据: {self.current_vt_symbol}",
                             "ChartWindow"
                         )
-                        
+
                         # 构建更新参数（DataManager的update_data可能需要特定格式）
                         # 这里我们尝试调用update_data方法，传入当前合约信息
                         try:
@@ -3486,13 +3679,13 @@ class ChartWindow(QtWidgets.QWidget):
                             # 注意：DataManager的update_data可能不接受参数，而是更新所有合约
                             # 这里我们先尝试获取数据库最后日期，然后手动更新当前合约
                             database = get_database()
-                            
+
                             # 查询数据库中1分钟数据的最后日期
                             local_tz = ZoneInfo(get_localzone_name())
                             # 查询最近30天的数据来确定最后日期
                             end_date = datetime.now(local_tz)
                             start_date = end_date.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=30)
-                            
+
                             existing_bars = database.load_bar_data(
                                 symbol,
                                 exchange,
@@ -3500,7 +3693,7 @@ class ChartWindow(QtWidgets.QWidget):
                                 start_date,
                                 end_date
                             )
-                            
+
                             if existing_bars:
                                 # 找到最后一条数据的日期
                                 existing_bars.sort(key=lambda x: x.datetime)
@@ -3510,7 +3703,7 @@ class ChartWindow(QtWidgets.QWidget):
                             else:
                                 # 如果没有数据，从7天前开始下载
                                 update_start = end_date.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=7)
-                            
+
                             # 调用DataManager的下载方法（如果可用）
                             if hasattr(datamanager_engine, 'download_history_data'):
                                 self.main_engine.write_log(
@@ -3530,11 +3723,11 @@ class ChartWindow(QtWidgets.QWidget):
                                 self._download_and_save_minute_data(
                                     symbol, exchange, update_start, end_date, database
                                 )
-                            
+
                             # 发送完成信号（在主线程中处理UI更新）
                             self.signal_update_data_complete.emit(True, _("数据更新完成，已刷新图表"))
                             return
-                            
+
                         except Exception as e:
                             error_msg = str(e).replace("{", "{{").replace("}", "}}")
                             self.main_engine.write_log(
@@ -3542,16 +3735,16 @@ class ChartWindow(QtWidgets.QWidget):
                                 "ChartWindow"
                             )
                             # 如果DataManager方法失败，降级到直接下载
-                
+
                 # 2. 如果没有DataManager，直接实现数据更新逻辑
                 database = get_database()
                 local_tz = ZoneInfo(get_localzone_name())
                 end_date = datetime.now(local_tz)
-                
+
                 # 查询数据库中1分钟数据的最后日期
                 # 查询最近30天的数据来确定最后日期
                 start_query = end_date.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=30)
-                
+
                 existing_bars = database.load_bar_data(
                     symbol,
                     exchange,
@@ -3559,7 +3752,7 @@ class ChartWindow(QtWidgets.QWidget):
                     start_query,
                     end_date
                 )
-                
+
                 if existing_bars:
                     # 找到最后一条数据的日期
                     existing_bars.sort(key=lambda x: x.datetime)
@@ -3577,20 +3770,20 @@ class ChartWindow(QtWidgets.QWidget):
                         f"[ChartWindow] 数据库中没有1分钟数据，从 {update_start.strftime('%Y-%m-%d %H:%M')} 开始下载",
                         "ChartWindow"
                     )
-                
+
                 # 检查是否需要更新（如果最后数据已经是最新的，不需要更新）
                 if update_start >= end_date:
                     self.signal_update_data_complete.emit(False, _("数据已是最新，无需更新"))
                     return
-                
+
                 # 下载并保存1分钟数据
                 self._download_and_save_minute_data(
                     symbol, exchange, update_start, end_date, database
                 )
-                
+
                 # 发送完成信号（在主线程中处理UI更新）
                 self.signal_update_data_complete.emit(True, _("数据更新完成，已刷新图表"))
-                
+
             except Exception as e:
                 error_msg = str(e).replace("{", "{{").replace("}", "}}")
                 self.main_engine.write_log(
@@ -3605,11 +3798,11 @@ class ChartWindow(QtWidgets.QWidget):
                 # 发送错误信号（在主线程中处理UI更新）
                 error_message = _("更新数据失败: {}\n\n请检查数据服务配置或网络连接").format(str(e))
                 self.signal_update_data_complete.emit(False, error_message)
-        
+
         # 在后台线程执行更新
         thread = Thread(target=_update)
         thread.start()
-    
+
     def _on_update_data_complete(self, success: bool, message: str) -> None:
         """
         处理更新数据完成信号（在主线程中执行）
@@ -3622,7 +3815,7 @@ class ChartWindow(QtWidgets.QWidget):
         if hasattr(self, '_update_progress_dialog'):
             self._update_progress_dialog.close()
             delattr(self, '_update_progress_dialog')
-        
+
         # 显示消息
         if success:
             QtWidgets.QMessageBox.information(
@@ -3645,7 +3838,7 @@ class ChartWindow(QtWidgets.QWidget):
                     _("错误"),
                     message
                 )
-    
+
     def _download_and_save_minute_data(
         self,
         symbol: str,
@@ -3666,12 +3859,12 @@ class ChartWindow(QtWidgets.QWidget):
         """
         from vnpy.trader.object import HistoryRequest
         from vnpy.trader.constant import Interval
-        
+
         self.main_engine.write_log(
             f"[数据加载] 开始下载1分钟数据: {symbol}.{exchange.value} "
             f"从 {start.strftime('%Y-%m-%d %H:%M')} 到 {end.strftime('%Y-%m-%d %H:%M')}"
         )
-        
+
         # 使用全局单例 Datafeed（核心功能，失败时显示错误）
         datafeed = self._get_datafeed(show_error_dialog=True)
         if not datafeed:
@@ -3679,10 +3872,10 @@ class ChartWindow(QtWidgets.QWidget):
                 "[数据加载] Datafeed 服务不可用，无法下载数据"
             )
             raise Exception(_("Datafeed 服务不可用"))
-        
+
         # 使用全局单例，不需要关闭连接
         try:
-            
+
             # 创建历史数据请求
             req = HistoryRequest(
                 symbol=symbol,
@@ -3691,22 +3884,22 @@ class ChartWindow(QtWidgets.QWidget):
                 start=start,
                 end=end
             )
-            
+
             # 查询历史数据
             bars = datafeed.query_bar_history(req, output=self.main_engine.write_log)
-            
+
             if not bars:
                 self.main_engine.write_log(
-                    f"[ChartWindow] 未获取到1分钟数据，可能数据服务不支持该合约或时间范围内无数据",
+                    "[ChartWindow] 未获取到1分钟数据，可能数据服务不支持该合约或时间范围内无数据",
                     "ChartWindow"
                 )
                 raise Exception(_("未获取到数据"))
-            
+
             self.main_engine.write_log(
                 f"[ChartWindow] 成功获取 {len(bars)} 条1分钟K线数据",
                 "ChartWindow"
             )
-            
+
             # 保存到数据库
             if database.save_bar_data(bars):
                 self.main_engine.write_log(
@@ -3719,7 +3912,7 @@ class ChartWindow(QtWidgets.QWidget):
                     "ChartWindow"
                 )
                 raise Exception(_("保存数据到数据库失败"))
-            
+
             # ✅ 自动聚合大周期K线数据（5分钟、1小时、4小时）
             # 复用DataManager的聚合逻辑，确保严格按照港期时间边界划分规则（period_utils.py）进行聚合
             self._aggregate_larger_intervals_using_datamanager(symbol, exchange)
@@ -3728,10 +3921,10 @@ class ChartWindow(QtWidgets.QWidget):
             error_msg = str(e).replace("{", "{{").replace("}", "}}")
             self.main_engine.write_log(f"[数据加载] 加载失败: {error_msg}")
             raise
-        
+
         # 注意：不需要在 finally 中关闭 datafeed
         # 因为使用的是全局单例，由 DatafeedManager 管理生命周期
-    
+
     def _aggregate_larger_intervals_using_datamanager(
         self,
         symbol: str,
@@ -3753,7 +3946,7 @@ class ChartWindow(QtWidgets.QWidget):
         datamanager_engine = None
         if hasattr(self.main_engine, 'engines'):
             datamanager_engine = self.main_engine.engines.get("DataManager")
-        
+
         if datamanager_engine and hasattr(datamanager_engine, 'aggregate_5minute_bars'):
             # 使用DataManager的聚合方法（推荐方式）
             try:
@@ -3773,7 +3966,7 @@ class ChartWindow(QtWidgets.QWidget):
                     f"[ChartWindow] 聚合5分钟K线数据失败: {error_msg}",
                     "ChartWindow"
                 )
-            
+
             try:
                 self.main_engine.write_log(
                     f"[ChartWindow] 使用DataManager聚合1小时K线数据: {symbol}.{exchange.value}",
@@ -3791,7 +3984,7 @@ class ChartWindow(QtWidgets.QWidget):
                     f"[ChartWindow] 聚合1小时K线数据失败: {error_msg}",
                     "ChartWindow"
                 )
-            
+
             try:
                 self.main_engine.write_log(
                     f"[ChartWindow] 使用DataManager聚合4小时K线数据: {symbol}.{exchange.value}",
@@ -3832,6 +4025,52 @@ class ChartWindow(QtWidgets.QWidget):
         }
         return interval_map.get(self.current_interval, Interval.MINUTE)
 
+    def _get_future_bars_for_interval(self, interval: str) -> int:
+        """
+        根据周期获取未来空间K线数量（辅助方法，用于多周期模式）
+        
+        Args:
+            interval: 周期字符串（如 "1m", "5m", "1h", "4h"）
+        
+        Returns:
+            未来空间K线数量
+        """
+        from vnpy.trader.constant import Interval  # type: ignore
+
+        interval_map = {
+            "1m": Interval.MINUTE,
+            "5m": Interval.MINUTE_5,
+            "1h": Interval.HOUR,
+            "4h": Interval.HOUR_4,
+        }
+
+        interval_obj = interval_map.get(interval, Interval.MINUTE)
+        return self._calculate_future_bars(interval_obj)
+
+    def _calculate_future_bars(self, interval) -> int:
+        """
+        计算未来空间K线数量（内部辅助方法）
+        
+        Args:
+            interval: Interval 枚举值
+        
+        Returns:
+            未来空间K线数量
+        """
+        from vnpy.trader.constant import Interval  # type: ignore
+
+        # 根据周期计算未来空间（与原有逻辑一致）
+        if interval == Interval.MINUTE:
+            return 60  # 1分钟：显示未来60根K线
+        elif interval == Interval.MINUTE_5:
+            return 12  # 5分钟：显示未来12根K线
+        elif interval == Interval.HOUR:
+            return 4   # 1小时：显示未来4根K线
+        elif interval == Interval.HOUR_4:
+            return 1   # 4小时：显示未来1根K线
+        else:
+            return 60  # 默认值
+
     def _get_future_bars(self) -> int:
         """根据当前周期返回未来空间的K线数量"""
         # 未来2小时的空间，根据不同周期计算K线数量
@@ -3843,6 +4082,442 @@ class ChartWindow(QtWidgets.QWidget):
             "1d": 1       # 日线周期，预留1根
         }
         return future_bars_map.get(self.current_interval, 120)
+    
+    def _get_optimized_load_strategy(
+        self,
+        database,
+        symbol: str,
+        exchange: "Exchange",
+        user_start: "datetime",
+        end: "datetime"
+    ) -> tuple:
+        """
+        优化数据加载策略（针对1分钟周期）
+        
+        策略：
+        1. 查询数据库最早和最新数据时间
+        2. 如果用户选择早于数据库最早时间 → 数据不全 → 下载用户选择范围
+        3. 如果数据库最新数据很新（< 1小时） → 数据足够 → 不下载
+        4. 如果数据库最新数据较旧（>= 1小时） → 数据过期 → 下载最近7天
+        
+        Returns:
+            (optimized_start, need_download): 优化后的起始时间和是否需要下载
+        """
+        from datetime import timedelta
+        from vnpy.trader.constant import Interval
+        
+        try:
+            # 查询数据库最近90天的数据，用于分析
+            query_start = end - timedelta(days=90)
+            existing_bars = database.load_bar_data(
+                symbol=symbol,
+                exchange=exchange,
+                interval=Interval.MINUTE,
+                start=query_start,
+                end=end
+            )
+            
+            if existing_bars and len(existing_bars) > 0:
+                # 排序找到最早和最新数据
+                existing_bars.sort(key=lambda x: x.datetime)
+                db_earliest = existing_bars[0].datetime
+                db_latest = existing_bars[-1].datetime
+                
+                self.main_engine.write_log(
+                    f"[加载优化] 数据库状态: 最早={db_earliest}, 最新={db_latest}, 数据量={len(existing_bars)}"
+                )
+                self.main_engine.write_log(
+                    f"[加载优化] 用户选择: 起始={user_start}, 结束={end}"
+                )
+                
+                # 判断策略
+                if user_start < db_earliest:
+                    # 情况1：用户选择早于数据库 → 数据不全 → 下载用户选择范围
+                    self.main_engine.write_log(
+                        f"[加载优化] 策略1: 用户选择 {user_start} 早于数据库最早 {db_earliest}"
+                    )
+                    self.main_engine.write_log(
+                        f"[加载优化] 需要从 FUTU API 下载补齐数据"
+                    )
+                    return user_start, True
+                else:
+                    # 检查数据新鲜度
+                    data_age = end - db_latest
+                    
+                    if data_age < timedelta(hours=1):
+                        # 情况2：数据很新（< 1小时） → 不需要下载
+                        self.main_engine.write_log(
+                            f"[加载优化] 策略2: 数据库数据很新（最新数据距今 {data_age.total_seconds()/60:.1f} 分钟）"
+                        )
+                        self.main_engine.write_log(
+                            f"[加载优化] 跳过下载，直接使用数据库数据"
+                        )
+                        return user_start, False  # 不需要下载
+                    else:
+                        # 情况3：数据较旧（>= 1小时） → 下载最近7天
+                        optimized_start = end - timedelta(days=7)
+                        self.main_engine.write_log(
+                            f"[加载优化] 策略3: 数据库数据较旧（最新数据距今 {data_age.total_seconds()/3600:.1f} 小时）"
+                        )
+                        self.main_engine.write_log(
+                            f"[加载优化] 优化为下载最近7天: {optimized_start} ~ {end}"
+                        )
+                        return optimized_start, True
+            else:
+                # 数据库无数据 → 下载最近7天
+                optimized_start = end - timedelta(days=7)
+                self.main_engine.write_log(
+                    f"[加载优化] 策略4: 数据库无数据，下载最近7天: {optimized_start} ~ {end}"
+                )
+                return optimized_start, True
+                
+        except Exception as e:
+            self.main_engine.write_log(f"[加载优化] 分析数据库状态失败: {e}，使用用户选择时间")
+            return user_start, False
+
+    def switch_display_mode(self, mode: str) -> None:
+        """
+        切换显示模式（T011）
+        
+        Args:
+            mode: "single" 或 "multi"
+        """
+        if mode not in ["single", "multi"]:
+            self.main_engine.write_log(
+                f"[ChartWindow] 无效的显示模式: {mode}",
+                "ChartWindow"
+            )
+            return
+
+        if mode == self.display_mode:
+            # 已经是目标模式，无需切换
+            return
+
+        self.display_mode = mode
+
+        if mode == "single":
+            self._switch_to_single_timeframe_mode()
+        else:
+            self._switch_to_multi_timeframe_mode()
+
+    def _switch_to_single_timeframe_mode(self) -> None:
+        """切换到单周期模式（T012）"""
+        # 隐藏多周期Widget
+        if self.multi_timeframe_widget:
+            self.multi_timeframe_widget.setVisible(False)
+
+        # 显示单周期ChartWidget
+        if self.chart:
+            self.chart.setVisible(True)
+
+        # 禁用画线模式（根据澄清文档，切换时不保留画线状态）（T057）
+        if self.drawing_mode_button:
+            self.drawing_mode_button.setChecked(False)
+        if self.chart and self.chart.get_drawing_order_controller():
+            self.chart.get_drawing_order_controller().disable()
+
+    def _switch_to_multi_timeframe_mode(self) -> None:
+        """切换到多周期模式（T013）"""
+        # 隐藏单周期ChartWidget
+        if self.chart:
+            self.chart.setVisible(False)
+
+        # 显示多周期Widget
+        if self.multi_timeframe_widget:
+            # 确保widget在布局中且有正确的父窗口
+            if self.multi_timeframe_widget.parent() != self:
+                self.multi_timeframe_widget.setParent(self)
+            # 同步数据到多周期模式（在显示之前）
+            self.sync_data_to_multi_timeframe()
+            # 启用实时更新（T037）
+            if hasattr(self.multi_timeframe_widget, 'enable_realtime'):
+                self.multi_timeframe_widget.enable_realtime()
+            # 启用画线交易功能（T049-T052）
+            if hasattr(self.multi_timeframe_widget, 'enable_drawing_order'):
+                self.multi_timeframe_widget.enable_drawing_order(
+                    main_engine=self.main_engine,
+                    vt_symbol=self.current_vt_symbol,
+                    on_drawing_click=self._on_drawing_click
+                )
+                # 设置画线模式状态变化回调（用于ESC键退出等功能）
+                if hasattr(self.multi_timeframe_widget, '_chart'):
+                    chart = self.multi_timeframe_widget._chart
+                    if chart and hasattr(chart, 'set_drawing_mode_changed_callback'):
+                        chart.set_drawing_mode_changed_callback(self._on_drawing_mode_changed)
+            
+            # 提示用户加载数据
+            self.main_engine.write_log(
+                "[多周期] 已切换到多周期模式，请选择起始时间后点击'加载'按钮",
+                "ChartWindow"
+            )
+            # 同步价格线从单周期图表到多周期图表
+            # 注意：只同步入场线和已激活的止损止盈线，不同步挂单止损止盈线
+            if self.chart and self.chart._price_line_manager:
+                from vnpy.chart.price_line import PriceLineType
+                
+                single_chart_lines = self.chart._price_line_manager.get_all_lines()
+                if single_chart_lines and hasattr(self.multi_timeframe_widget, '_chart'):
+                    multi_chart = self.multi_timeframe_widget._chart
+                    if multi_chart and multi_chart._price_line_manager:
+                        multi_chart_manager = multi_chart._price_line_manager
+                        
+                        # 筛选需要同步的价格线
+                        synced_count = 0
+                        for line_id, line in single_chart_lines.items():
+                            line_type = line.get_line_type()
+                            
+                            # 只同步以下类型的线：
+                            # 1. 入场线（ENTRY）
+                            # 2. 已关联到入场线的止损止盈线
+                            should_sync = False
+                            
+                            if line_type == PriceLineType.ENTRY:
+                                # 入场线：始终同步
+                                should_sync = True
+                            elif line_type in [PriceLineType.STOP_LOSS, PriceLineType.TAKE_PROFIT]:
+                                # 止损止盈线：只同步已关联到入场线的（不同步挂单线）
+                                if hasattr(line, 'entry_line_id') and line.entry_line_id:
+                                    should_sync = True
+                                    self.main_engine.write_log(
+                                        f"[ChartWindow] 同步已激活的{line_type.value}线: {line_id} (关联到 {line.entry_line_id})"
+                                    )
+                                else:
+                                    # 这是挂单线，不同步
+                                    self.main_engine.write_log(
+                                        f"[ChartWindow] 跳过未激活的{line_type.value}线: {line_id} (挂单线，未关联入场线)"
+                                    )
+                            elif line_type == PriceLineType.PENDING:
+                                # 挂单线：始终同步
+                                should_sync = True
+                            
+                            if should_sync:
+                                if not multi_chart_manager.get_line(line_id):
+                                    # 如果多周期图表中还没有这条线，则添加
+                                    multi_chart_manager.add_line(line_id, line)
+                                    if multi_chart._first_plot:
+                                        multi_chart._first_plot.addItem(line)
+                                    synced_count += 1
+                        
+                        self.main_engine.write_log(f"[ChartWindow] 已同步 {synced_count} 条价格线到多周期图表（过滤了挂单止损止盈线）")
+            
+            # 显示widget（确保它在布局中可见）
+            # 注意：在Qt中，isVisible()会检查整个父窗口链的可见性
+            # 如果父窗口未显示，isVisible()可能返回False，但setVisible(True)会设置widget的可见状态
+            self.multi_timeframe_widget.setVisible(True)
+            self.multi_timeframe_widget.show()
+            # 强制更新布局和重绘
+            if hasattr(self, 'layout') and self.layout():
+                self.layout().update()
+            self.multi_timeframe_widget.update()
+            self.multi_timeframe_widget.repaint()
+        else:
+            self.main_engine.write_log(
+                "[ChartWindow] MultiTimeframeWidget 未初始化",
+                "ChartWindow"
+            )
+
+        # 禁用画线模式（根据澄清文档，切换时不保留画线状态）（T057）
+        if self.drawing_mode_button:
+            self.drawing_mode_button.setChecked(False)
+        # 禁用多周期模式的画线模式
+        if self.multi_timeframe_widget:
+            controller = self.multi_timeframe_widget.get_drawing_order_controller()
+            if controller:
+                controller.disable()
+
+    def _load_multi_timeframe_data(self) -> None:
+        """
+        多周期模式下独立加载数据
+        
+        不依赖单周期数据，完全独立加载：
+        1. 获取用户选择的时间范围
+        2. 调用 MultiTimeframeWidget.switch_symbol 独立加载
+        3. MultiTimeframeWidget 内部会检查数据完整性并下载
+        """
+        if not self.multi_timeframe_widget:
+            self.main_engine.write_log("[多周期加载] MultiTimeframeWidget 未初始化", "ChartWindow")
+            return
+        
+        if not self.current_vt_symbol:
+            self.main_engine.write_log("[多周期加载] 当前合约为空", "ChartWindow")
+            return
+        
+        # 提取 symbol 和 exchange
+        from vnpy.trader.utility import extract_vt_symbol
+        symbol, exchange = extract_vt_symbol(self.current_vt_symbol)
+        
+        # 获取用户选择的时间范围（从UI控件）
+        user_start = self.start_date_edit.dateTime().toPython()
+        end = datetime.now()
+        
+        self.main_engine.write_log(
+            f"[多周期加载] 合约: {symbol}, 交易所: {exchange}",
+            "ChartWindow"
+        )
+        self.main_engine.write_log(
+            f"[多周期加载] 用户选择范围: {user_start} ~ {end}",
+            "ChartWindow"
+        )
+        
+        # 创建进度对话框
+        from vnpy.trader.ui.widget import MultiTimeframeLoadProgressDialog
+        progress = MultiTimeframeLoadProgressDialog(self)
+        progress.setWindowTitle("多周期数据加载")
+        progress.show()
+        QtWidgets.QApplication.processEvents()
+        
+        def progress_callback(message: str, percent: int):
+            """进度回调"""
+            progress.update_progress(message, percent)
+            QtWidgets.QApplication.processEvents()
+        
+        # 异步调用 switch_symbol（避免UI卡顿）
+        def load_data():
+            try:
+                self.multi_timeframe_widget.switch_symbol(
+                    vt_symbol=symbol,
+                    exchange=exchange,
+                    start=user_start,
+                    end=end,
+                    progress_callback=progress_callback
+                )
+                progress.close()
+                self.main_engine.write_log("[多周期加载] 数据加载完成", "ChartWindow")
+            except Exception as e:
+                progress.close()
+                import traceback
+                self.main_engine.write_log(
+                    f"[多周期加载] 数据加载失败: {e}",
+                    "ChartWindow"
+                )
+                self.main_engine.write_log(
+                    f"[多周期加载] 错误堆栈: {traceback.format_exc()}",
+                    "ChartWindow"
+                )
+        
+        # 使用 QTimer 异步执行
+        QtCore.QTimer.singleShot(50, load_data)
+    
+    def sync_data_to_multi_timeframe(self) -> None:
+        """
+        准备多周期模式的数据加载（已废弃，保留以兼容）
+        
+        注意：现在多周期模式下使用 _load_multi_timeframe_data() 独立加载
+        不再自动同步单周期数据
+        """
+        if not self.multi_timeframe_widget:
+            self.main_engine.write_log(
+                "[ChartWindow] MultiTimeframeWidget 未初始化",
+                "ChartWindow"
+            )
+            return
+
+        if not self.current_vt_symbol:
+            self.main_engine.write_log(
+                "[ChartWindow] 当前合约为空",
+                "ChartWindow"
+            )
+            return
+
+        # 提示用户重新加载数据
+        self.main_engine.write_log(
+            "[多周期] 已切换到多周期模式，请选择起始时间后点击'加载'按钮",
+            "ChartWindow"
+        )
+
+        try:
+            from vnpy.trader.utility import extract_vt_symbol
+
+            symbol, exchange = extract_vt_symbol(self.current_vt_symbol)
+
+            # 从 history_data 获取时间范围
+            if self.history_data:
+                start_datetime = self.history_data[0].datetime
+                # 使用当前时间作为结束时间，而不是 history_data 的最后时间
+                # 原因：history_data 可能不包含最新的实时K线
+                end_datetime = datetime.now()
+
+                self.main_engine.write_log(
+                    f"[ChartWindow] 同步数据到多周期模式 - "
+                    f"合约: {self.current_vt_symbol}, "
+                    f"数据量: {len(self.history_data)}, "
+                    f"时间范围: {start_datetime} ~ {end_datetime}",
+                    "ChartWindow"
+                )
+            else:
+                # 如果没有 history_data，使用 start_datetime 和当前时间
+                start_datetime = self.start_datetime.dateTime().toPython()
+                end_datetime = datetime.now()
+
+                self.main_engine.write_log(
+                    f"[ChartWindow] 同步数据到多周期模式（使用时间范围）- "
+                    f"合约: {self.current_vt_symbol}, "
+                    f"时间范围: {start_datetime} ~ {end_datetime}",
+                    "ChartWindow"
+                )
+
+            # 如果MultiTimeframeWidget有switch_symbol方法，异步调用它
+            if hasattr(self.multi_timeframe_widget, 'switch_symbol'):
+                # 注意：MultiTimeframeWidget 的 load_bar_data 需要 symbol（不带交易所后缀）
+                # 而不是 vt_symbol（带交易所后缀）
+                self.main_engine.write_log(
+                    f"[ChartWindow] 准备加载多周期数据 - "
+                    f"symbol: {symbol}, exchange: {exchange}, "
+                    f"start: {start_datetime}, end: {end_datetime}",
+                    "ChartWindow"
+                )
+                
+                # 创建并显示进度对话框（借鉴 DataManager 设计）
+                progress = MultiTimeframeLoadProgressDialog(self)
+                progress.show()
+                
+                # 强制处理事件，确保进度对话框显示
+                QtWidgets.QApplication.processEvents()
+                
+                # 定义进度回调函数
+                def on_progress(message: str, progress_value: int):
+                    """进度回调，在主线程中更新UI"""
+                    progress.set_status(message)
+                    progress.set_progress(progress_value)
+                
+                # 使用 QTimer 在主线程中异步执行
+                def _load_multi_data():
+                    try:
+                        # 调用 switch_symbol，传入进度回调
+                        self.multi_timeframe_widget.switch_symbol(
+                            vt_symbol=symbol,
+                            exchange=exchange,
+                            start=start_datetime,
+                            end=end_datetime,
+                            progress_callback=on_progress
+                        )
+                        
+                        progress.set_completed()
+                        self.main_engine.write_log("[ChartWindow] 多周期数据加载完成")
+                        
+                        # 延迟关闭，让用户看到完成状态
+                        QtCore.QTimer.singleShot(800, progress.close)
+                        
+                    except Exception as e:
+                        error_msg = str(e).replace("{", "{{").replace("}", "}}")
+                        self.main_engine.write_log(f"[ChartWindow] 多周期数据加载失败: {error_msg}")
+                        progress.set_error(f"加载失败: {error_msg}")
+                        # 3秒后自动关闭
+                        QtCore.QTimer.singleShot(3000, progress.close)
+                
+                # 延迟 50ms 执行
+                QtCore.QTimer.singleShot(50, _load_multi_data)
+            else:
+                # 如果还没有switch_symbol方法，记录日志
+                self.main_engine.write_log(
+                    "[ChartWindow] MultiTimeframeWidget.switch_symbol() 方法尚未实现",
+                    "ChartWindow"
+                )
+        except Exception as e:
+            self.main_engine.write_log(
+                f"[ChartWindow] 同步数据到多周期模式失败: {e}",
+                "ChartWindow"
+            )
 
     def switch_chart(self) -> None:
         """
@@ -3933,8 +4608,11 @@ class ChartWindow(QtWidgets.QWidget):
         # 更新模拟功能按钮状态（切换合约时更新）
         self._update_simulate_buttons_state()
 
+        # 注意：不再自动同步数据到多周期
+        # 用户需要点击"加载"按钮来加载数据
         # 加载历史K线数据（最近7天的1分钟数据）
-        self.load_history_data(vt_symbol)
+        if self.display_mode != "multi":
+            self.load_history_data(vt_symbol)
 
         # 订阅行情数据（订阅后可能会收到tick数据，从而更新按钮状态）
         # 注意：这里不直接调用subscribe_tick，因为可能没有gateway
@@ -3942,7 +4620,15 @@ class ChartWindow(QtWidgets.QWidget):
 
     def refresh_chart(self) -> None:
         """刷新当前图表"""
-        if self.current_vt_symbol:
+        if not self.current_vt_symbol:
+            return
+        
+        # 检测当前显示模式
+        if self.display_mode == "multi" and self.multi_timeframe_widget:
+            # 多周期模式：独立加载（不依赖单周期）
+            self._load_multi_timeframe_data()
+        else:
+            # 单周期模式：使用原有逻辑
             self.history_loaded = False
             self.history_data = []
 
@@ -3972,6 +4658,8 @@ class ChartWindow(QtWidgets.QWidget):
 
             self.status_label.setStyleSheet("color: #888; font-size: 12px;")
             self.status_label.setText(_("正在刷新 {} 的数据...").format(self.current_vt_symbol))
+            
+            # 单周期模式：加载历史数据
             self.load_history_data(self.current_vt_symbol)
 
     def goto_latest(self) -> None:
@@ -4010,7 +4698,70 @@ class ChartWindow(QtWidgets.QWidget):
             )
 
     def goto_datetime(self) -> None:
-        """跳转到指定日期时间"""
+        """跳转到指定日期时间（T070）"""
+        # 如果当前是多周期模式，使用 MultiTimeframeWidget 的图表
+        if self.display_mode == "multi" and self.multi_timeframe_widget:
+            chart = self.multi_timeframe_widget._chart
+            # 获取多周期模式的历史数据（从主管理器）
+            if hasattr(self.multi_timeframe_widget, '_main_manager'):
+                all_bars = self.multi_timeframe_widget._main_manager.get_all_bars()
+                if not all_bars:
+                    return
+
+                # 获取目标日期时间
+                target_qdt = self.goto_date.dateTime()
+                target_py = target_qdt.toPython()
+
+                # 在历史数据中查找最接近的K线索引
+                target_ix = None
+                min_diff = None
+
+                for ix, bar in enumerate(all_bars):
+                    # 比较时间差（忽略时区）
+                    bar_dt = bar.datetime.replace(tzinfo=None)
+                    target_dt = target_py.replace(tzinfo=None) if hasattr(target_py, 'tzinfo') else target_py
+
+                    diff = abs((bar_dt - target_dt).total_seconds())
+
+                    if min_diff is None or diff < min_diff:
+                        min_diff = diff
+                        target_ix = ix
+
+                if target_ix is not None:
+                    # 计算滚动条位置（让目标K线显示在视图中央）
+                    visible_bars = chart._bar_count
+                    right_ix = target_ix + visible_bars // 2
+
+                    total_bars = len(all_bars)
+                    future_bars = self._get_future_bars_for_interval("1m")
+                    max_right_ix = total_bars + future_bars
+
+                    right_ix = max(visible_bars, min(max_right_ix, right_ix))
+
+                    # 更新图表视图
+                    chart._right_ix = right_ix
+                    chart._update_x_range()
+
+                    # 更新滚动条位置
+                    if max_right_ix > visible_bars:
+                        slider_value = int((right_ix - visible_bars) / (max_right_ix - visible_bars) * 100)
+                        slider_value = max(0, min(100, slider_value))
+                        self.time_slider.blockSignals(True)
+                        self.time_slider.setValue(slider_value)
+                        self.time_slider.blockSignals(False)
+
+                    # 更新状态
+                    bar = all_bars[target_ix]
+                    self.status_label.setText(
+                        _("已跳转到 {} | 索引 {}/{}").format(
+                            bar.datetime.strftime("%m-%d %H:%M"),
+                            target_ix + 1,
+                            total_bars
+                        )
+                    )
+            return
+
+        # 单周期模式：原有逻辑
         if not self.history_data:
             return
 
@@ -4067,7 +4818,44 @@ class ChartWindow(QtWidgets.QWidget):
             )
 
     def on_time_slider_changed(self, value: int) -> None:
-        """时间滚动条值改变时更新图表视图（横向滚动）"""
+        """时间滚动条值改变时更新图表视图（横向滚动）（T068, T069）"""
+        # 如果当前是多周期模式，使用 MultiTimeframeWidget 的图表
+        if self.display_mode == "multi" and self.multi_timeframe_widget:
+            chart = self.multi_timeframe_widget._chart
+            # 获取多周期模式的历史数据（从主管理器）
+            if hasattr(self.multi_timeframe_widget, '_main_manager'):
+                all_bars = self.multi_timeframe_widget._main_manager.get_all_bars()
+                total_bars = len(all_bars)
+                if total_bars == 0:
+                    return
+
+                # 获取当前显示的K线数量
+                visible_bars = chart._bar_count
+
+                # 根据当前周期获取未来空间K线数量（多周期模式使用1分钟周期）
+                future_bars = self._get_future_bars_for_interval("1m")
+
+                # 先确保图表的x轴限制已扩展
+                if hasattr(self, 'extend_chart_x_limit'):
+                    # 临时切换到 chart 以扩展限制
+                    original_chart = self.chart
+                    self.chart = chart
+                    self.extend_chart_x_limit()
+                    self.chart = original_chart
+
+                # 根据滚动条位置计算右边界索引
+                max_right_ix = total_bars + future_bars
+                min_right_ix = visible_bars
+
+                right_ix = int(min_right_ix + (max_right_ix - min_right_ix) * value / 100)
+                right_ix = max(visible_bars, min(max_right_ix, right_ix))
+
+                # 更新图表视图
+                chart._right_ix = right_ix
+                chart._update_x_range()
+            return
+
+        # 单周期模式：原有逻辑
         if not self.history_data:
             return
 
@@ -4134,9 +4922,9 @@ class ChartWindow(QtWidgets.QWidget):
                 self.time_slider.blockSignals(False)
 
     def load_history_data(self, vt_symbol: str) -> None:
-        """加载历史K线数据"""
+        """加载历史K线数据（已优化：智能下载策略）"""
         from threading import Thread
-        from datetime import datetime
+        from datetime import datetime, timedelta
         from tzlocal import get_localzone_name
 
         # 获取用户选择的起始时间
@@ -4160,7 +4948,7 @@ class ChartWindow(QtWidgets.QWidget):
 
                 # 起始时间使用用户选择，结束时间使用当前最新时间
                 local_tz = ZoneInfo(get_localzone_name())
-                start: datetime = start_py.replace(tzinfo=local_tz)
+                user_start: datetime = start_py.replace(tzinfo=local_tz)
                 end: datetime = datetime.now(local_tz)  # 结束时间始终为当前最新
 
                 data = None
@@ -4168,24 +4956,53 @@ class ChartWindow(QtWidgets.QWidget):
                 # 根据数据源加载数据
                 if data_source == self.DATA_SOURCE_CSV:
                     # 从CSV文件加载
-                    data = self._load_from_csv(csv_path, symbol, exchange, interval_enum, start, end)
+                    data = self._load_from_csv(csv_path, symbol, exchange, interval_enum, user_start, end)
                 else:
                     # 从数据库加载（用户选择了"从数据库加载"）
                     database = get_database()
+                    
+                    # 从数据库加载（用户选择了"从数据库加载"）
                     data = database.load_bar_data(
                         symbol,
                         exchange,
                         interval_enum,
-                        start,
+                        user_start,  # 始终使用用户选择的起始时间
                         end
                     )
+
+                    # ============================================================
+                    # 🚀 优化：智能下载策略（只针对1分钟周期）
+                    # 目的：减少从 FUTU API 下载的数据量
+                    # ============================================================
+                    if interval_enum == Interval.MINUTE:
+                        # 分析数据库状态，决定下载策略
+                        download_start, need_download = self._get_optimized_load_strategy(
+                            database, symbol, exchange, user_start, end
+                        )
+                        
+                        if need_download:
+                            # 需要从FUTU下载（数据不全或过期）
+                            # 注意：download_start 可能不同于 user_start
+                            # - 如果数据不全：download_start = user_start（全量下载）
+                            # - 如果数据较旧：download_start = now - 7天（只下载最近7天）
+                            self.main_engine.write_log(
+                                f"[加载优化] 需要从 FUTU API 下载数据 ({download_start} ~ {end})"
+                            )
+                            # 调用现有的补齐逻辑
+                            data = self._fill_missing_bars(
+                                data, symbol, exchange, interval_enum, download_start, end, database
+                            )
+                        else:
+                            self.main_engine.write_log(
+                                f"[加载优化] 数据库数据足够新（< 1小时），跳过下载"
+                            )
 
                     # 如果数据库中没有数据或数据不完整，根据周期类型进行处理
                     # 对于5分钟、1小时和4小时数据，尝试从1分钟数据自动合成补齐
                     if interval_enum in [Interval.MINUTE_5, Interval.HOUR, Interval.HOUR_4]:
                         # 检测数据中的缺失时间段并补齐
                         data = self._fill_missing_bars(
-                            data, symbol, exchange, interval_enum, start, end, database
+                            data, symbol, exchange, interval_enum, user_start, end, database
                         )
                     elif interval_enum == Interval.MINUTE and not data:
                         # 对于1分钟数据，如果数据库中没有数据，尝试从FUTU API获取
@@ -4203,7 +5020,7 @@ class ChartWindow(QtWidgets.QWidget):
                     # 检测并补齐gap
                     data = self._detect_and_fill_gap(data, vt_symbol, interval_enum)
 
-                # 发送历史数据更新信号
+                # 发送历史数据更新信号（仅用于单周期模式）
                 if data:
                     self.signal_history.emit(data)
                 else:
@@ -4600,12 +5417,12 @@ class ChartWindow(QtWidgets.QWidget):
 
             # 解析合约代码和交易所（提前解析，避免后面使用时未定义）
             symbol, exchange = extract_vt_symbol(vt_symbol)
-            
+
             # ✅ 对于1分钟和5分钟周期，排除当前时间周期，避免补齐未完成的K线
             # 这样可以确保最后几根K线的数据准确，不会被未完成的K线覆盖
             from vnpy.trader.period_utils import get_period_start
             gap_end = now
-            
+
             if interval == Interval.MINUTE:
                 # 1分钟周期：排除当前分钟
                 current_minute_start = get_period_start(now, Interval.MINUTE, exchange)
@@ -4819,7 +5636,7 @@ class ChartWindow(QtWidgets.QWidget):
                 show_error_dialog=False,  # 不在这里弹窗，由 check_health 处理
                 check_health=True  # 检查连接健康状态
             )
-            
+
             if datafeed is None:
                 # 全局 Datafeed 不可用 - 数据补齐失败，但不阻止查看已有数据
                 self.main_engine.write_log(
@@ -5277,14 +6094,14 @@ class ChartWindow(QtWidgets.QWidget):
             # ✅ 实时更新时，如果开盘价还没有被正确设置，尝试更新开盘价
             # 这对于从历史数据标记的当前K线很重要，因为历史数据的开盘价可能不准确
             # 只有在开盘价还没有被正确设置时才更新（避免覆盖已正确的开盘价）
-            if (self._current_bar.open_price <= 0 or 
+            if (self._current_bar.open_price <= 0 or
                 (hasattr(self, '_current_bar_open_price_updated') and not self._current_bar_open_price_updated)):
                 # 尝试获取正确的开盘价
                 correct_open_price = self.open_price_helper.get_period_open_price(
                     tick_period, interval, tick.vt_symbol, tick=tick,
                     minute_bar_generator=self.bg, history_data=self.history_data
                 )
-                
+
                 if correct_open_price and correct_open_price > 0:
                     if self._current_bar.open_price != correct_open_price:
                         old_open_price = self._current_bar.open_price
@@ -5415,7 +6232,7 @@ class ChartWindow(QtWidgets.QWidget):
         self.main_engine.write_log(
             f"[ChartWindow] process_history_data 被调用，数据量: {len(history) if history else 0}"
         )
-        
+
         if not history:
             self.status_label.setText(_("未找到历史数据，等待实时行情..."))
             self.history_loaded = True
@@ -5470,7 +6287,7 @@ class ChartWindow(QtWidgets.QWidget):
         # 更新图表（使用修正后的历史数据）
         self.chart.update_history(self.history_data)
         self.history_loaded = True
-        
+
         # 添加调试日志
         self.main_engine.write_log(
             f"[ChartWindow] 历史数据加载完成，已设置 history_loaded = True，"
@@ -5483,6 +6300,12 @@ class ChartWindow(QtWidgets.QWidget):
             end_time = self.history_data[-1].datetime.strftime("%m-%d %H:%M")
             self.time_start_label.setText(start_time)
             self.time_end_label.setText(end_time)
+
+        # 注意：不再自动同步数据到多周期模式
+        # 多周期模式下的数据加载由 _load_multi_timeframe_data() 独立处理
+        # if self.display_mode == "multi" and self.multi_timeframe_widget:
+        #     self.main_engine.write_log("[ChartWindow] 历史数据加载完成，同步到多周期模式")
+        #     self.sync_data_to_multi_timeframe()
 
         # 更新状态（显示周期和数据源）
         interval_name = self.interval_combo.currentText()
@@ -5634,8 +6457,6 @@ class ChartWindow(QtWidgets.QWidget):
                     bar_period = get_period_start(bar.datetime, bar.interval, exchange)
                     if bar_period == current_bar_period:
                         # 这是正在进行的当前K线，跳过修正（开盘价应该在实时更新时处理）
-                        bar_dt_str = bar.datetime.strftime('%Y-%m-%d %H:%M:%S')
-                        print(f"[DEBUG] _correct_all_bars_open_price: - 跳过正在进行的当前K线 | bar_dt={bar_dt_str}, 开盘价={bar.open_price}, 当前K线开盘价将在实时更新时处理")
                         continue
 
                 # 获取该周期第一根分钟K线的开盘价
@@ -5660,7 +6481,7 @@ class ChartWindow(QtWidgets.QWidget):
 
                 bar_dt_str = bar.datetime.strftime('%Y-%m-%d %H:%M:%S')
                 period_start_str = period_start.strftime('%Y-%m-%d %H:%M:%S')
-                print(f"[DEBUG] _correct_all_bars_open_price: 开始修正 | bar_dt={bar_dt_str}, period_start={period_start_str}, interval={bar.interval.value}, current_open_price={bar.open_price}, current_close_price={bar.close_price}")
+                # 开始修正K线开盘价
 
                 correct_open_price = self.open_price_helper.get_period_open_price(
                     period_start,  # 使用周期起始时间，而不是bar.datetime
@@ -5671,12 +6492,12 @@ class ChartWindow(QtWidgets.QWidget):
                     history_data=self.history_data
                 )
 
-                print(f"[DEBUG] _correct_all_bars_open_price: 获取到的开盘价 | correct_open_price={correct_open_price}, correct_open_price_time={period_start_str}, current_open_price={bar.open_price}, 是否不同={bar.open_price != correct_open_price if correct_open_price else 'N/A'}")
+                # 获取到的开盘价
 
                 # 如果无法获取correct_open_price，说明该周期第一根1分钟K线可能不存在
                 # 此时不应该修正，因为current_open_price可能已经是正确的（来自DataManager的合成逻辑）
                 if not correct_open_price or correct_open_price <= 0:
-                    print(f"[DEBUG] _correct_all_bars_open_price: ✗ 无法获取开盘价，跳过修正 | bar_dt={bar_dt_str}, correct_open_price={correct_open_price}, 保持current_open_price={bar.open_price}")
+                    # 无法获取开盘价，跳过修正
                     continue
 
                 # 如果获取到了正确的开盘价，且与当前开盘价不同，则更新
@@ -5688,13 +6509,13 @@ class ChartWindow(QtWidgets.QWidget):
                     # 而current_open_price已经正确，则不应该修正
                     # 这里通过比较差异来判断：如果差异很小（<1.0），可能是数据精度问题，不应该修正
                     # 或者，如果无法找到period_start对应的1分钟K线，说明它不存在，应该保持current_open_price
-                    print(f"[DEBUG] _correct_all_bars_open_price: 价格差异 | old_open={old_open_price}, new_open={correct_open_price}, 差异={price_diff}")
+                    # 价格差异计算
 
                     bar.open_price = correct_open_price
                     self.history_data[i] = bar
                     corrected_count += 1
 
-                    print(f"[DEBUG] _correct_all_bars_open_price: ✓ 执行修正 | bar_dt={bar_dt_str}, old_open={old_open_price} -> new_open={correct_open_price}, 差异={price_diff}")
+                    # 执行修正K线开盘价
 
                     # 暂时注释掉开盘价修正日志，减少日志输出
                     # self.main_engine.write_log(
@@ -5702,7 +6523,8 @@ class ChartWindow(QtWidgets.QWidget):
                     #     f"开盘价已修正: {old_open_price} -> {correct_open_price}"
                     # )
                 else:
-                    print(f"[DEBUG] _correct_all_bars_open_price: - 无需修正 | bar_dt={bar_dt_str}, open_price={bar.open_price} == correct_open_price={correct_open_price}")
+                    # 无需修正，开盘价已正确
+                    pass
 
             if corrected_count > 0:
                 self.main_engine.write_log(
@@ -5807,7 +6629,7 @@ class ChartWindow(QtWidgets.QWidget):
             # 获取当前时间所属的周期开始时间
             _, exchange = extract_vt_symbol(self.history_data[-1].vt_symbol)
             current_period_start = get_period_start(now, interval, exchange)
-            
+
             if not current_period_start:
                 return
 
@@ -5817,16 +6639,16 @@ class ChartWindow(QtWidgets.QWidget):
             if interval == Interval.MINUTE:
                 self._removed_minute_bar_open_price = None
                 self._removed_minute_bar_datetime = None
-            
+
             while self.history_data:
                 last_bar = self.history_data[-1]
                 last_bar_period_start = get_period_start(last_bar.datetime, interval, exchange)
-                
+
                 # 如果最后一根K线是当前时间周期的，删除它
                 if last_bar_period_start and last_bar_period_start == current_period_start:
                     removed_bar = self.history_data.pop()
                     removed_count += 1
-                    
+
                     # ✅ 对于1分钟周期，保存被删除K线的开盘价和datetime
                     if interval == Interval.MINUTE and removed_bar.open_price > 0:
                         self._removed_minute_bar_open_price = removed_bar.open_price
@@ -5886,27 +6708,58 @@ class ChartWindow(QtWidgets.QWidget):
             self.chart.get_drawing_order_controller().update_line_from_order(order)
 
     def toggle_drawing_mode(self) -> None:
-        """切换画线下单模式"""
-        if not self.chart:
-            self.drawing_mode_button.setChecked(False)
-            return
+        """切换画线下单模式（T053）"""
+        # 根据当前模式选择对应的 controller
+        if self.display_mode == "multi" and self.multi_timeframe_widget:
+            # 多周期模式：使用 MultiTimeframeWidget 的 controller
+            self.main_engine.write_log("[画线模式] 切换画线模式 (多周期模式)")
+            self.main_engine.write_log(f"[画线模式] 当前合约: {self.current_vt_symbol}")
+            
+            controller = self.multi_timeframe_widget.get_drawing_order_controller()
+            chart_widget = self.multi_timeframe_widget._chart if hasattr(self.multi_timeframe_widget, '_chart') else None
+            
+            # 重新设置参数，确保正确
+            if chart_widget:
+                self.main_engine.write_log("[画线模式] 设置 chart_widget 参数")
+                chart_widget.set_main_engine(self.main_engine)
+                chart_widget.set_vt_symbol(self.current_vt_symbol)
+                
+                if controller:
+                    # 确保 controller 也设置了参数
+                    if hasattr(controller, 'set_vt_symbol'):
+                        controller.set_vt_symbol(self.current_vt_symbol)
+                        self.main_engine.write_log(f"[画线模式] 已设置 controller.vt_symbol: {self.current_vt_symbol}")
+                    if hasattr(controller, 'set_main_engine'):
+                        controller.set_main_engine(self.main_engine)
+                        self.main_engine.write_log("[画线模式] 已设置 controller.main_engine")
+                    
+                    self.main_engine.write_log(f"[画线模式] 验证: controller._vt_symbol = {getattr(controller, '_vt_symbol', 'NOT SET')}")
+                    self.main_engine.write_log(f"[画线模式] 验证: controller._main_engine = {getattr(controller, '_main_engine', 'NOT SET')}")
+        else:
+            # 单周期模式：使用 ChartWidget 的 controller
+            controller = self.chart.get_drawing_order_controller() if self.chart else None
+            chart_widget = self.chart
 
-        controller = self.chart.get_drawing_order_controller()
         if not controller:
+            self.main_engine.write_log("[画线模式] 错误: controller 为 None，无法切换画线模式")
             self.drawing_mode_button.setChecked(False)
             return
 
         if self.drawing_mode_button.isChecked():
+            self.main_engine.write_log("[画线模式] 启用画线模式")
             controller.enable()
             self.drawing_mode_button.setText(_("画线下单 (已启用)"))
             self.drawing_mode_button.setStyleSheet("background-color: #4CAF50; color: white;")
             # 让图表获得焦点，以便接收键盘事件（如ESC键）
-            if self.chart:
-                self.chart.setFocus()
+            if chart_widget:
+                chart_widget.setFocus()
+            self.main_engine.write_log("[画线模式] 画线模式已启用")
         else:
+            self.main_engine.write_log("[画线模式] 禁用画线模式")
             controller.disable()
             self.drawing_mode_button.setText(_("画线下单"))
             self.drawing_mode_button.setStyleSheet("")
+            self.main_engine.write_log("[画线模式] 画线模式已禁用")
 
     def _on_drawing_mode_changed(self, enabled: bool) -> None:
         """画线下单模式状态变化回调（由ChartWidget调用，例如按下ESC键时）"""
@@ -6065,9 +6918,24 @@ class ChartWindow(QtWidgets.QWidget):
             self.main_engine.write_log(f"合约 {vt_symbol} 未找到，无法创建挂单线")
             return
 
+        # 根据当前显示模式选择正确的图表（重要！）
+        if self.display_mode == "multi" and self.multi_timeframe_widget:
+            # 多周期模式：使用 MultiTimeframeWidget 的图表
+            chart = self.multi_timeframe_widget._chart if hasattr(self.multi_timeframe_widget, '_chart') else None
+            self.main_engine.write_log("[画线下单] 多周期模式：使用 multi_timeframe_widget._chart 创建价格线")
+        else:
+            # 单周期模式：使用 ChartWindow 的图表
+            chart = self.chart
+            self.main_engine.write_log("[画线下单] 单周期模式：使用 self.chart 创建价格线")
+        
+        if not chart:
+            self.main_engine.write_log("[画线下单] 错误: chart 为 None")
+            return
+        
         # 添加挂单线到图表
-        controller = self.chart.get_drawing_order_controller()
+        controller = chart.get_drawing_order_controller()
         if not controller:
+            self.main_engine.write_log("[画线下单] 错误: controller 为 None")
             return
 
         # 将Direction枚举转换为"long"或"short"字符串
@@ -6099,7 +6967,7 @@ class ChartWindow(QtWidgets.QWidget):
         }
 
         # 设置挂单参数到价格线对象（持久化到数据库）
-        line = self.chart._price_line_manager.get_line(line_id)
+        line = chart._price_line_manager.get_line(line_id)
         if line:
             # 设置挂单参数
             line.set_order_volume(params["volume"])
@@ -6107,23 +6975,24 @@ class ChartWindow(QtWidgets.QWidget):
 
             # 获取价格精度并设置到chart和价格线
             price_precision = params.get("price_precision", 0)
-            self.chart._price_precision = price_precision
+            chart._price_precision = price_precision
             line.set_price_precision(price_precision)
 
             # 保存到数据库（PriceLineManager会自动保存）
             # 通过更新价格来触发保存（因为create_line已经保存了基本信息）
-            self.chart._price_line_manager.update_line_price(line_id, params["price"])
+            chart._price_line_manager.update_line_price(line_id, params["price"])
 
         # 注册到价格突破监控
         # 使用ChartWidget的通用方法，与真实tickdata触发共用逻辑
-        if line and self.chart._breakthrough_monitor:
-            self.chart._breakthrough_monitor.register_line(
+        if line and chart._breakthrough_monitor:
+            chart._breakthrough_monitor.register_line(
                 line_id,
                 line,
-                self.chart._on_price_breakthrough
+                chart._on_price_breakthrough
             )
 
         # 格式化价格显示
+        price_precision = params.get("price_precision", 0)
         if price_precision == 0:
             price_str = f"{int(params['price'])}"
         else:
@@ -6133,6 +7002,8 @@ class ChartWindow(QtWidgets.QWidget):
             f"创建挂单线: {vt_symbol} {params['direction'].value} "
             f"{params['volume']}@{price_str} (等待价格突破触发)"
         )
+        
+        self.main_engine.write_log(f"[画线下单] 挂单线已创建: line_id={line_id}, 使用图表: {'multi' if self.display_mode == 'multi' else 'single'}")
 
         # 如果设置了止损，创建止损线
         stop_loss_price = params.get("stop_loss")
@@ -6141,21 +7012,21 @@ class ChartWindow(QtWidgets.QWidget):
             # 获取方向字符串
             direction_str = params["direction"].value if hasattr(params["direction"], "value") else str(params["direction"])
             # 获取价格精度（从chart获取，如果chart有设置的话）
-            price_precision = getattr(self.chart, '_price_precision', 0)
-            stop_loss_line_id = self.chart._price_line_manager.create_line(
+            price_precision = getattr(chart, '_price_precision', 0)
+            stop_loss_line_id = chart._price_line_manager.create_line(
                 price=stop_loss_price,
                 line_type=PriceLineType.STOP_LOSS,
                 direction=direction_str,
                 movable=True,
                 price_precision=price_precision
             )
-            stop_loss_line = self.chart._price_line_manager.get_line(stop_loss_line_id)
-            if stop_loss_line and self.chart._first_plot:
-                self.chart._first_plot.addItem(stop_loss_line)
+            stop_loss_line = chart._price_line_manager.get_line(stop_loss_line_id)
+            if stop_loss_line and chart._first_plot:
+                chart._first_plot.addItem(stop_loss_line)
                 # ✅ 挂单线的止损止盈线在创建后立即将创建时间设置为None，表示"未激活"
                 # 只有在挂单成交后才会激活（设置创建时间），此时才会被触发检查
                 stop_loss_line.set_creation_time_explicit(None)  # 设置为None，表示未激活
-                
+
                 # 建立关联关系（保存止损线ID和点数）
                 stop_loss_points = params.get("stop_loss_points", 50)
                 controller._pending_line_relations[line_id]["stop_loss"] = {
@@ -6192,20 +7063,20 @@ class ChartWindow(QtWidgets.QWidget):
             direction_str = params["direction"].value if hasattr(params["direction"], "value") else str(params["direction"])
             # 获取价格精度（从chart获取，如果chart有设置的话）
             price_precision = getattr(self.chart, '_price_precision', 0)
-            take_profit_line_id = self.chart._price_line_manager.create_line(
+            take_profit_line_id = chart._price_line_manager.create_line(
                 price=take_profit_price,
                 line_type=PriceLineType.TAKE_PROFIT,
                 direction=direction_str,
                 movable=True,
                 price_precision=price_precision
             )
-            take_profit_line = self.chart._price_line_manager.get_line(take_profit_line_id)
-            if take_profit_line and self.chart._first_plot:
-                self.chart._first_plot.addItem(take_profit_line)
+            take_profit_line = chart._price_line_manager.get_line(take_profit_line_id)
+            if take_profit_line and chart._first_plot:
+                chart._first_plot.addItem(take_profit_line)
                 # ✅ 挂单线的止损止盈线在创建后立即将创建时间设置为None，表示"未激活"
                 # 只有在挂单成交后才会激活（设置创建时间），此时才会被触发检查
                 take_profit_line.set_creation_time_explicit(None)  # 设置为None，表示未激活
-                
+
                 # 建立关联关系（保存止盈线ID和点数）
                 take_profit_points = params.get("take_profit_points", 50)
                 controller._pending_line_relations[line_id]["take_profit"] = {
@@ -6256,12 +7127,22 @@ class ChartWindow(QtWidgets.QWidget):
         """
         self.main_engine.write_log("[模拟成交] 方法被调用")
 
-        if not self.chart:
+        # 根据当前显示模式选择正确的图表
+        if self.display_mode == "multi" and self.multi_timeframe_widget:
+            # 多周期模式：使用 MultiTimeframeWidget 的图表
+            chart = self.multi_timeframe_widget._chart if hasattr(self.multi_timeframe_widget, '_chart') else None
+            self.main_engine.write_log("[模拟成交] 使用多周期图表")
+        else:
+            # 单周期模式：使用 ChartWindow 的图表
+            chart = self.chart
+            self.main_engine.write_log("[模拟成交] 使用单周期图表")
+
+        if not chart:
             self.main_engine.write_log("[模拟成交] 图表未初始化，无法模拟成交")
             return
 
         # 获取所有挂单线
-        price_line_manager = self.chart._price_line_manager
+        price_line_manager = chart._price_line_manager
         if not price_line_manager:
             self.main_engine.write_log("[模拟成交] 价格线管理器未初始化")
             return
@@ -6412,7 +7293,7 @@ class ChartWindow(QtWidgets.QWidget):
             )
 
             # 确保挂单线已注册到价格突破监控
-            controller = self.chart.get_drawing_order_controller()
+            controller = chart.get_drawing_order_controller()
             if not controller:
                 self.main_engine.write_log("模拟成交失败: 无法获取画线订单控制器")
                 continue
@@ -6450,13 +7331,14 @@ class ChartWindow(QtWidgets.QWidget):
                 )
 
             # 检查挂单线是否已注册到价格突破监控
-            if not self.chart._breakthrough_monitor:
+            if not chart._breakthrough_monitor:
                 self.main_engine.write_log("模拟成交失败: 价格突破监控未初始化")
                 continue
 
             # 直接调用ChartWidget的通用触发方法（与真实tickdata触发共用逻辑）
             # 不再通过PriceBreakthroughMonitor，直接调用trigger_pending_order_breakthrough
             direction_display = "多" if direction == "long" else "空"
+            
             self.main_engine.write_log(
                 f"模拟成交: {vt_symbol} {direction_display} 挂单线 {line_price_int} "
                 f"准备触发突破 (last_price={last_price:.2f}, current_price={current_price:.2f}, "
@@ -6464,11 +7346,8 @@ class ChartWindow(QtWidgets.QWidget):
             )
 
             # 调用ChartWidget的通用触发方法
-            # 直接调用方法，如果不存在会抛出AttributeError，我们捕获它
             try:
-                # 直接调用方法（不使用getattr，避免PyQtGraph的PlotWidget的__getattr__问题）
-                # 如果方法不存在，会抛出AttributeError
-                result = self.chart.trigger_pending_order_breakthrough(line_id, line, simulate_tick)
+                result = chart.trigger_pending_order_breakthrough(line_id, line, simulate_tick)
                 if result:
                     triggered_count += 1
                     self.main_engine.write_log(
@@ -6557,7 +7436,7 @@ class ChartWindow(QtWidgets.QWidget):
         all_lines = price_line_manager.get_all_lines()
         self.main_engine.write_log(f"[模拟止损] 找到 {len(all_lines)} 条价格线")
 
-        # 筛选出止损线
+        # 筛选出止损线（包括所有类型的止损线）
         from vnpy.chart.price_line import PriceLineType
         stop_loss_lines = {
             line_id: line
@@ -6566,6 +7445,42 @@ class ChartWindow(QtWidgets.QWidget):
         }
 
         self.main_engine.write_log(f"[模拟止损] 找到 {len(stop_loss_lines)} 条止损线")
+        
+        # 如果当前图表中没有止损线，尝试从另一个图表加载
+        if not stop_loss_lines and self.display_mode == "multi":
+            # 多周期模式：尝试从单周期图表加载
+            if self.chart and self.chart._price_line_manager:
+                single_chart_lines = self.chart._price_line_manager.get_all_lines()
+                stop_loss_lines = {
+                    line_id: line
+                    for line_id, line in single_chart_lines.items()
+                    if line.get_line_type() == PriceLineType.STOP_LOSS
+                }
+                if stop_loss_lines:
+                    self.main_engine.write_log(f"[模拟止损] 从单周期图表找到 {len(stop_loss_lines)} 条止损线，正在同步到多周期图表")
+                    # 将止损线添加到多周期图表
+                    for line_id, line in stop_loss_lines.items():
+                        chart._price_line_manager.add_line(line_id, line)
+                        if chart._first_plot:
+                            chart._first_plot.addItem(line)
+        elif not stop_loss_lines and self.display_mode == "single":
+            # 单周期模式：尝试从多周期图表加载
+            if self.multi_timeframe_widget and hasattr(self.multi_timeframe_widget, '_chart'):
+                multi_chart = self.multi_timeframe_widget._chart
+                if multi_chart and multi_chart._price_line_manager:
+                    multi_chart_lines = multi_chart._price_line_manager.get_all_lines()
+                    stop_loss_lines = {
+                        line_id: line
+                        for line_id, line in multi_chart_lines.items()
+                        if line.get_line_type() == PriceLineType.STOP_LOSS
+                    }
+                    if stop_loss_lines:
+                        self.main_engine.write_log(f"[模拟止损] 从多周期图表找到 {len(stop_loss_lines)} 条止损线，正在同步到单周期图表")
+                        # 将止损线添加到单周期图表
+                        for line_id, line in stop_loss_lines.items():
+                            chart._price_line_manager.add_line(line_id, line)
+                            if chart._first_plot:
+                                chart._first_plot.addItem(line)
 
         if not stop_loss_lines:
             self.main_engine.write_log("[模拟止损] 没有找到止损线，无法模拟止损")
@@ -6652,7 +7567,13 @@ class ChartWindow(QtWidgets.QWidget):
                     f"[模拟止损] 准备触发止损线 {line_id}: "
                     f"价格={line_price:.2f}, 方向={line_direction}, 模拟价格={simulate_price:.2f}"
                 )
-                result = self.chart.trigger_stop_loss_close(line_id, line, simulate_tick)
+                # 根据当前模式选择正确的图表
+                if self.display_mode == "多周期叠加":
+                    chart = self.multi_timeframe_widget._chart
+                else:
+                    chart = self.chart
+                
+                result = chart.trigger_stop_loss_close(line_id, line, simulate_tick)
                 if result:
                     triggered_count += 1
                     self.main_engine.write_log(f"[模拟止损] 止损线 {line_id} 触发成功")
@@ -6690,18 +7611,34 @@ class ChartWindow(QtWidgets.QWidget):
         """
         self.main_engine.write_log("[模拟止盈] 方法被调用")
 
-        if not self.chart:
+        # 根据当前显示模式选择正确的图表
+        if self.display_mode == "multi" and self.multi_timeframe_widget:
+            # 多周期模式：使用 MultiTimeframeWidget 的图表
+            chart = self.multi_timeframe_widget._chart if hasattr(self.multi_timeframe_widget, '_chart') else None
+            self.main_engine.write_log("[模拟止盈] 使用多周期图表")
+        else:
+            # 单周期模式：使用 ChartWindow 的图表
+            chart = self.chart
+            self.main_engine.write_log("[模拟止盈] 使用单周期图表")
+
+        if not chart:
             self.main_engine.write_log("[模拟止盈] 图表未初始化，无法模拟止盈")
             return
 
         # 获取所有价格线
-        price_line_manager = self.chart._price_line_manager
+        price_line_manager = chart._price_line_manager
         if not price_line_manager:
             self.main_engine.write_log("[模拟止盈] 价格线管理器未初始化，无法模拟止盈")
             return
 
         all_lines = price_line_manager.get_all_lines()
         self.main_engine.write_log(f"[模拟止盈] 找到 {len(all_lines)} 条价格线")
+        
+        # 添加详细调试信息
+        for line_id, line in all_lines.items():
+            line_type = line.get_line_type()
+            line_price = line.get_price()
+            self.main_engine.write_log(f"[模拟止盈] 价格线详情: id={line_id}, type={line_type}, price={line_price}")
 
         # 筛选出止盈线
         from vnpy.chart.price_line import PriceLineType
@@ -6798,7 +7735,13 @@ class ChartWindow(QtWidgets.QWidget):
                     f"[模拟止盈] 准备触发止盈线 {line_id}: "
                     f"价格={line_price:.2f}, 方向={line_direction}, 模拟价格={simulate_price:.2f}"
                 )
-                result = self.chart.trigger_take_profit_close(line_id, line, simulate_tick)
+                # 根据当前模式选择正确的图表
+                if self.display_mode == "多周期叠加":
+                    chart = self.multi_timeframe_widget._chart
+                else:
+                    chart = self.chart
+                
+                result = chart.trigger_take_profit_close(line_id, line, simulate_tick)
                 if result:
                     triggered_count += 1
                     self.main_engine.write_log(f"[模拟止盈] 止盈线 {line_id} 触发成功")
@@ -6942,13 +7885,13 @@ class ChartWindow(QtWidgets.QWidget):
         finally:
             # Clean up cache (注意：不再需要关闭 Datafeed，因为使用全局单例)
             # Datafeed 连接由 DatafeedManager 管理，程序退出时自动关闭
-            
+
             self._open_price_cache.clear()
             if self.main_engine:
                 self.main_engine.write_log(
                     f"[ChartWindow-{id(self)}] 已清空开盘价缓存"
                 )
-            
+
             # Ensure parent class method is called
             super().closeEvent(event)
 
@@ -6961,6 +7904,6 @@ class ChartWindow(QtWidgets.QWidget):
         """
         # 重新注册事件监听器（如果已注册会先注销再注册，避免重复）
         self.register_event()
-        
+
         # 调用父类方法
         super().showEvent(event)
