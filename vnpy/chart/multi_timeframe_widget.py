@@ -327,13 +327,27 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
                 )
                 return download_start, True
             
-            # 策略3：用户起始时间 < 数据库最早时间 → 全量下载
+            # 策略3：用户起始时间 < 数据库最早时间
+            # 如果差距很小（< 1小时），只下载缺口部分
+            # 如果差距很大（>= 1小时），全量下载
             if user_start < db_earliest:
-                logger.info(
-                    f"[多周期] 用户选择时间 {user_start} 早于数据库最早时间 {db_earliest}，"
-                    f"全量下载: {user_start} ~ {user_end}"
-                )
-                return user_start, True
+                time_gap = db_earliest - user_start
+                if time_gap.total_seconds() < 3600:  # 差距 < 1小时
+                    # 只下载缺口部分（从用户起始到数据库最早）
+                    if hasattr(self, '_main_engine') and self._main_engine:
+                        self._main_engine.write_log(
+                            f"[多周期] 用户选择时间 {user_start} 早于数据库最早时间 {db_earliest}，"
+                            f"但差距很小（{time_gap.total_seconds()/60:.1f} 分钟），只下载缺口: {user_start} ~ {db_earliest}"
+                        )
+                    return user_start, True  # 下载缺口部分
+                else:
+                    # 差距很大，全量下载
+                    if hasattr(self, '_main_engine') and self._main_engine:
+                        self._main_engine.write_log(
+                            f"[多周期] 用户选择时间 {user_start} 早于数据库最早时间 {db_earliest}，"
+                            f"差距较大（{time_gap.total_seconds()/3600:.1f} 小时），全量下载: {user_start} ~ {user_end}"
+                        )
+                    return user_start, True
             
             # 策略4：数据库数据较新 → 跳过下载
             logger.info(f"[多周期] 数据库数据足够新（< 1小时），跳过下载")
