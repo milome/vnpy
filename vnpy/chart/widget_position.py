@@ -355,13 +355,23 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
             for line_id in lines_to_delete:
                 line = self._price_line_manager.get_line(line_id)
                 if line:
-                    # 删除关联的止损线和止盈线
+                    # ✅ 正确顺序：先清理关联关系，再删除线本身
                     # 方法1：从 _entry_line_relations 查找关联关系
                     relations_found = False
+                    relations = None
                     if hasattr(self, '_entry_line_relations') and line_id in self._entry_line_relations:
                         relations = self._entry_line_relations[line_id]
                         relations_found = True
+                        
+                        # ✅ 步骤1：先删除关联关系（内存）
+                        self._entry_line_relations.pop(line_id, None)
+                        
+                        # ✅ 步骤2：再删除关联关系（数据库）
+                        if self._price_line_database:
+                            self._price_line_database.delete_relation(line_id)
                     
+                    # ✅ 步骤3：删除关联的止损线和止盈线
+                    if relations:
                         # 删除止损线
                         stop_loss_line_id = relations.get("stop_loss")
                         if stop_loss_line_id:
@@ -408,13 +418,6 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                                             "Chart"
                                         )
                     
-                        # 清理关联关系
-                        self._entry_line_relations.pop(line_id, None)
-                    
-                        # 从数据库删除关联关系
-                        if self._price_line_database:
-                            self._price_line_database.delete_relation(line_id)
-                    
                     # 方法2：如果没有找到关联关系（例如恢复的入场线），从数据库查找
                     if not relations_found and self._price_line_database:
                         if hasattr(self, '_main_engine') and self._main_engine:
@@ -431,6 +434,10 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                                     "Chart"
                                 )
                             
+                            # ✅ 步骤1：先删除关联关系（数据库）
+                            self._price_line_database.delete_relation(line_id)
+                            
+                            # ✅ 步骤2：删除关联的止损线和止盈线
                             # 删除止损线
                             stop_loss_line_id = db_relations.get("stop_loss")
                             if stop_loss_line_id:
@@ -467,13 +474,11 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                                         deleted_count += 1
                                         if hasattr(self, '_main_engine') and self._main_engine:
                                             self._main_engine.write_log(
-                                                f"[持仓同步] 已删除关联止盈线（从数据库找到）: {take_profit_line_id}",
-                                                "Chart"
-                                            )
-                            
-                            # 从数据库删除关联关系
-                            self._price_line_database.delete_relation(line_id)
+                                            f"[持仓同步] 已删除关联止盈线（从数据库找到）: {take_profit_line_id}",
+                                            "Chart"
+                                        )
                 
+                    # ✅ 步骤4：删除入场线本身
                     # 先从 plot 中移除（如果存在）
                     if self._first_plot:
                         try:
