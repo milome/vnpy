@@ -232,13 +232,21 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         """
         检查数据完整性，决定是否需要从FUTU下载
         
-        策略（与单周期相同）：
-        1. 如果数据库无数据 → 下载最近7天
-        2. 如果数据库最新数据 < 1小时前 → 下载最近7天
-        3. 如果用户起始时间 < 数据库最早时间：
-           - 差距 < 1小时 → 只下载缺口（user_start ~ db_earliest）
-           - 差距 >= 1小时 → 全量下载（user_start ~ user_end）
-        4. 如果数据库数据较新 → 跳过下载
+        智能下载策略：
+        
+        情况1：user_start >= db_earliest（用户选择的起始时间晚于或等于数据库最早时间）
+          - 说明数据已经下载过了
+          - 如果数据年龄 (user_end - db_latest) >= 1小时：
+            → 下载最近7天的数据（保险起见，不是全量）
+          - 如果数据年龄 (user_end - db_latest) < 1小时：
+            → 只下载缺口数据（db_latest ~ user_end）
+        
+        情况2：user_start < db_earliest（用户选择的起始时间早于数据库最早时间）
+          - 说明数据不全
+          - 如果差距 (db_earliest - user_start) >= 1小时：
+            → 全量下载（user_start ~ user_end）
+          - 如果差距 < 1小时：
+            → 只下载缺口（user_start ~ db_earliest）
         
         Returns:
             (download_start, download_end, need_download): 下载起始时间、结束时间和是否需要下载
@@ -319,41 +327,52 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
                 self._main_engine.write_log(f"[多周期] 数据库范围: {db_earliest} ~ {db_latest}")
                 self._main_engine.write_log(f"[多周期] 用户选择范围: {user_start} ~ {user_end}")
             
-            # 策略2：数据库最新数据 < 1小时前 → 下载最近7天
-            data_age = user_end - db_latest
-            if data_age.total_seconds() > 3600:  # 1小时
-                download_start = user_end - timedelta(days=7)
-                logger.info(
-                    f"[多周期] 数据库数据较旧（最新数据距今 {data_age.total_seconds()/3600:.1f} 小时），"
-                    f"下载最近7天: {download_start} ~ {user_end}"
-                )
-                return download_start, user_end, True
-            
-            # 策略3：用户起始时间 < 数据库最早时间
-            # 如果差距很小（< 1小时），只下载缺口部分（user_start ~ db_earliest）
-            # 如果差距很大（>= 1小时），全量下载（user_start ~ user_end）
-            if user_start < db_earliest:
-                time_gap = db_earliest - user_start
-                if time_gap.total_seconds() < 3600:  # 差距 < 1小时
-                    # 只下载缺口部分（从用户起始到数据库最早）
+            # ============================================================
+            # 情况1：user_start >= db_earliest（数据已经下载过了）
+            # ============================================================
+            if user_start >= db_earliest:
+                data_age = user_end - db_latest
+                
+                if data_age.total_seconds() >= 3600:  # 数据年龄 >= 1小时
+                    # 下载最近7天的数据（保险起见，不是全量）
+                    download_start = user_end - timedelta(days=7)
                     if hasattr(self, '_main_engine') and self._main_engine:
                         self._main_engine.write_log(
-                            f"[多周期] 用户选择时间 {user_start} 早于数据库最早时间 {db_earliest}，"
-                            f"但差距很小（{time_gap.total_seconds()/60:.1f} 分钟），只下载缺口: {user_start} ~ {db_earliest}"
+                            f"[多周期] 情况1：数据已下载过，但数据年龄 {data_age.total_seconds()/3600:.1f} 小时 >= 1小时，"
+                            f"下载最近7天: {download_start} ~ {user_end}"
                         )
-                    return user_start, db_earliest, True  # 只下载缺口部分
+                    return download_start, user_end, True
                 else:
-                    # 差距很大，全量下载
+                    # 数据年龄 < 1小时，只下载缺口数据
                     if hasattr(self, '_main_engine') and self._main_engine:
                         self._main_engine.write_log(
-                            f"[多周期] 用户选择时间 {user_start} 早于数据库最早时间 {db_earliest}，"
-                            f"差距较大（{time_gap.total_seconds()/3600:.1f} 小时），全量下载: {user_start} ~ {user_end}"
+                            f"[多周期] 情况1：数据已下载过，数据年龄 {data_age.total_seconds()/60:.1f} 分钟 < 1小时，"
+                            f"只下载缺口: {db_latest} ~ {user_end}"
+                        )
+                    return db_latest, user_end, True  # 只下载缺口
+            
+            # ============================================================
+            # 情况2：user_start < db_earliest（数据不全）
+            # ============================================================
+            else:
+                time_gap = db_earliest - user_start
+                
+                if time_gap.total_seconds() >= 3600:  # 差距 >= 1小时
+                    # 全量下载
+                    if hasattr(self, '_main_engine') and self._main_engine:
+                        self._main_engine.write_log(
+                            f"[多周期] 情况2：数据不全，差距 {time_gap.total_seconds()/3600:.1f} 小时 >= 1小时，"
+                            f"全量下载: {user_start} ~ {user_end}"
                         )
                     return user_start, user_end, True
-            
-            # 策略4：数据库数据较新 → 跳过下载
-            logger.info(f"[多周期] 数据库数据足够新（< 1小时），跳过下载")
-            return user_start, user_end, False
+                else:
+                    # 差距 < 1小时，只下载缺口
+                    if hasattr(self, '_main_engine') and self._main_engine:
+                        self._main_engine.write_log(
+                            f"[多周期] 情况2：数据不全，但差距 {time_gap.total_seconds()/60:.1f} 分钟 < 1小时，"
+                            f"只下载缺口: {user_start} ~ {db_earliest}"
+                        )
+                    return user_start, db_earliest, True  # 只下载缺口
             
         except Exception as e:
             logger.warning(f"[多周期] 检查数据完整性失败: {e}，跳过下载")
