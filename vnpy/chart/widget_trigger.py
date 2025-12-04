@@ -35,6 +35,31 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
         """
         # 使用RLock保护，确保一次只有一个挂单线触发下单
         with self._pending_order_trigger_lock:
+            # ✅ 防重复触发机制：检查挂单线是否已经关联了订单（防止重复触发）
+            controller = self.get_drawing_order_controller()
+            if controller and hasattr(controller, 'get_order_id_for_line'):
+                existing_order_id = controller.get_order_id_for_line(line_id)
+                if existing_order_id:
+                    # 检查订单是否仍然活跃（未成交、未撤销）
+                    main_engine = self._main_engine
+                    if not main_engine and controller and hasattr(controller, '_main_engine'):
+                        main_engine = controller._main_engine
+                    
+                    if main_engine:
+                        try:
+                            order = main_engine.get_order(existing_order_id)
+                            if order and order.is_active():
+                                # 挂单线已经关联了活跃订单，跳过触发（防止重复下单）
+                                if main_engine:
+                                    main_engine.write_log(
+                                        f"[ChartWidget] [挂单触发跳过] 挂单线 {line_id[-8:]} 已关联活跃订单 {existing_order_id[-8:]}, 跳过重复触发",
+                                        "ChartWidget"
+                                    )
+                                return False
+                        except Exception:
+                            # 如果获取订单失败，继续执行（可能是订单已不存在，允许重新触发）
+                            pass
+            
             # 从价格线对象获取参数（减少对内存中_pending_order_params的依赖）
             # 优先从价格线对象获取，如果不存在则从内存中的_pending_order_params获取（向后兼容）
             order_volume = line.get_order_volume()
@@ -42,7 +67,6 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
             
             # 如果价格线对象中没有挂单参数，尝试从内存中获取（向后兼容）
             if order_volume is None or order_offset_str is None:
-                controller = self.get_drawing_order_controller()
                 if controller and hasattr(controller, '_pending_order_params'):
                     if line_id in controller._pending_order_params:
                         order_data = controller._pending_order_params[line_id]
@@ -67,7 +91,8 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
                 contract = None  # 稍后从main_engine获取
             
             # 从controller或ChartWidget获取main_engine
-            controller = self.get_drawing_order_controller()
+            if not controller:
+                controller = self.get_drawing_order_controller()
             main_engine = self._main_engine
             if not main_engine and controller and hasattr(controller, '_main_engine'):
                 main_engine = controller._main_engine
