@@ -33,6 +33,10 @@ from vnpy.chart.multi_timeframe_settings_dialog import (
     MultiTimeframeSettings,
     show_settings_dialog
 )
+from vnpy.chart.drawing_animation import (
+    DrawingAnimationManager,
+    AnimationLineDirection
+)
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +141,12 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         # 开盘价修正缓存：避免重复查询（性能优化）
         self._open_price_cache: dict[datetime, float] = {}  # 1分钟开盘价
         self._large_timeframe_open_price_cache: dict[tuple[Interval, datetime], float] = {}  # 大周期开盘价
+        
+        # 动画管理器相关（实时4小时K线边框和开盘价跑马灯）
+        self._animation_manager: DrawingAnimationManager | None = None
+        self._current_4h_rect_id: str | None = None       # 当前4小时边框ID
+        self._current_4h_open_line_id: str | None = None  # 4小时开盘价线ID
+        self._last_4h_period_start: datetime | None = None  # 上一个4小时周期起始时间
         self._last_corrected_minute: datetime | None = None
         self._logged_open_prices: set[tuple[Interval, datetime]] = set()  # 已打印日志的开盘价
         
@@ -232,6 +242,9 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         self._label_val_4h = label_val_4h
         self._label_val_1h = label_val_1h
         self._label_val_5m = label_val_5m
+        
+        # 初始化动画管理器
+        self._init_animation_manager()
 
     # ---------------------------------------------------------------------
     # 辅助方法：起始时间优化
@@ -1427,6 +1440,22 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
             # 由于 MultiTimeframeWidget 使用自己的 update_tick，需要确保 ChartWidget 也能接收到 tick
             if hasattr(self._chart, 'update_tick'):
                 self._chart.update_tick(tick)
+        
+        # ✅ 节流更新4小时边框（每5个tick更新一次，提高实时性）
+        # 这样可以确保在1分钟K线构建期间，边框也能根据最新价格实时更新
+        if not hasattr(self, '_tick_count_for_animation'):
+            self._tick_count_for_animation = 0
+        
+        self._tick_count_for_animation += 1
+        if self._tick_count_for_animation % 5 == 0:  # 每5个tick更新一次（更频繁，提高实时性）
+            try:
+                self._update_4h_candle_border()
+            except Exception as e:
+                if hasattr(self, '_main_engine') and self._main_engine:
+                    self._main_engine.write_log(
+                        f"[多周期] Tick更新边框失败: {e}",
+                        "MultiTimeframe"
+                    )
 
     def _on_1m_bar(self, bar: BarData) -> None:
         """
@@ -1444,6 +1473,17 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         
         # 更新主图（1分钟K线）
         self._chart.update_bar(bar)
+        
+        # ✅ 更新4小时动画边框和开盘价线
+        try:
+            self._update_4h_candle_border()
+            self._update_4h_open_price_line_animated()
+        except Exception as e:
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log(
+                    f"[多周期] 更新动画失败: {e}",
+                    "MultiTimeframe"
+                )
         
         # ✅ 强制刷新图表显示
         candle_plot = self._chart.get_plot("candle")
@@ -1847,77 +1887,273 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
     # ---------------------------------------------------------------------
     def _update_4h_open_price_line(self) -> None:
         """
-        更新4小时开盘价参考线
+        更新4小时开盘价参考线（已替换为动画版本）
         
-        从当前1分钟K线位置向右延伸1小时（60根K线），画黄色虚线
+        注意：此方法现在调用新的动画版本 _update_4h_open_price_line_animated()
+        保留此方法是为了兼容性，避免破坏现有调用。
         """
-        if not self._current_4h_open_price or not self._chart:
+        # 移除旧的静态参考线（如果存在）
+        if self._4h_open_price_line:
+            try:
+                candle_plot = self._chart.get_plot("candle")
+                if candle_plot:
+                    candle_plot.removeItem(self._4h_open_price_line)
+            except Exception:
+                pass
+            self._4h_open_price_line = None
+        
+        # 调用新的动画版本
+        self._update_4h_open_price_line_animated()
+    
+    # =========================================================================
+    # 动画管理器相关方法（实时4小时K线边框和开盘价跑马灯）
+    # =========================================================================
+    
+    def _init_animation_manager(self) -> None:
+        """初始化动画管理器"""
+        if not self._chart:
             return
         
         try:
-            import pyqtgraph as pg
-            from vnpy.trader.ui import QtGui, QtCore
-            
-            # 获取candle plot
-            candle_plot = self._chart.get_plot("candle")
-            if not candle_plot:
+            # 获取主图表的 plot
+            first_plot = self._chart._first_plot
+            if not first_plot:
                 return
             
-            # 移除旧的参考线
-            if self._4h_open_price_line:
-                try:
-                    candle_plot.removeItem(self._4h_open_price_line)
-                except Exception:
-                    pass
-                self._4h_open_price_line = None
-            
-            # 获取当前1分钟K线的索引范围
-            if not self._main_manager:
-                return
-            
-            all_bars = self._main_manager.get_all_bars()
-            if not all_bars:
-                return
-            
-            # 当前最后一根K线的索引
-            current_ix = len(all_bars) - 1
-            
-            # 向右延伸60根K线（1小时）
-            end_ix = current_ix + 60
-            
-            # 创建黄色虚线（使用pg.mkPen确保cosmetic pen属性）
-            pen = pg.mkPen(
-                color=(255, 215, 0),  # 金黄色
-                width=PEN_WIDTH,  # 线宽=1（基础线宽，最细）
-                style=QtCore.Qt.DashLine  # 虚线
+            # 创建动画管理器
+            self._animation_manager = DrawingAnimationManager(
+                widget=self._chart,
+                plot=first_plot
             )
-            
-            # 创建水平线（使用InfiniteLine，但限制span范围）
-            # span=(start_ratio, end_ratio)，需要计算相对于x轴范围的比例
-            # 但InfiniteLine的span是相对于plot范围的，不是索引范围
-            # 所以我们使用PlotCurveItem画一条线段
-            
-            # 画一条从current_ix到end_ix的水平线
-            line_item = pg.PlotCurveItem(
-                x=[current_ix, end_ix],
-                y=[self._current_4h_open_price, self._current_4h_open_price],
-                pen=pen
-            )
-            
-            candle_plot.addItem(line_item)
-            self._4h_open_price_line = line_item
             
             if hasattr(self, '_main_engine') and self._main_engine:
                 self._main_engine.write_log(
-                    f"[4H参考线] 已画4小时开盘价参考线: {self._current_4h_open_price}, "
-                    f"从索引 {current_ix} 到 {end_ix}"
+                    "[多周期] 动画管理器已初始化",
+                    "MultiTimeframe"
                 )
-        
         except Exception as e:
             if hasattr(self, '_main_engine') and self._main_engine:
-                self._main_engine.write_log(f"[4H参考线] 更新失败: {e}")
+                self._main_engine.write_log(
+                    f"[多周期] 动画管理器初始化失败: {e}",
+                    "MultiTimeframe"
+                )
     
+    def _get_current_4h_data(self) -> dict | None:
+        """
+        获取当前4小时K线数据（包含正在构建的实时K线）
+        
+        Returns:
+            包含以下字段的字典：
+            - start_index: 4小时起始索引
+            - current_index: 当前索引
+            - open_price: 4小时开盘价
+            - current_close: 当前收盘价
+            - period_start: 周期起始时间
+            - period_end: 周期结束时间
+            - is_bullish: 是否为阳线
+            - is_building: 是否为正在构建的K线
+        """
+        try:
+            # 1. 获取已完成的K线（内存中的历史 + 已完成的实时K线）
+            all_bars = self._main_manager.get_all_bars()
+            if not all_bars:
+                return None
+            
+            # 2. 获取正在构建的K线（最新的实时数据，可能为None）
+            building_bar = self._bg_1m.bar if self._bg_1m else None
+            
+            # 3. 确定最新的K线和索引
+            if building_bar:
+                # 有正在构建的K线，使用它作为最新数据（更实时）
+                latest_bar = building_bar
+                latest_index = len(all_bars)  # 正在构建的K线的虚拟索引
+                is_building = True
+            else:
+                # 没有正在构建的K线，使用最后一根已完成的K线
+                latest_bar = all_bars[-1]
+                latest_index = len(all_bars) - 1
+                is_building = False
+            
+            # 4. 计算当前4小时周期的起始时间
+            period_start, period_end = get_hkfe_4hour_period(latest_bar.datetime)
+            
+            # 5. 查找4小时周期的第一根1分钟K线
+            start_index = None
+            start_bar = None
+            for i, bar in enumerate(all_bars):
+                if bar.datetime >= period_start:
+                    start_index = i
+                    start_bar = bar
+                    break
+            
+            if start_index is None or start_bar is None:
+                return None
+            
+            # 6. 4小时开盘价（第一根1分钟K线的开盘价）
+            open_price = start_bar.open_price
+            
+            # 7. 当前收盘价（最新K线的收盘价，可能是正在构建的）
+            current_close = latest_bar.close_price
+            
+            return {
+                'start_index': start_index,
+                'current_index': latest_index,
+                'open_price': open_price,
+                'current_close': current_close,
+                'period_start': period_start,
+                'period_end': period_end,
+                'is_bullish': current_close >= open_price,
+                'is_building': is_building  # 标记是否包含正在构建的K线
+            }
+        except Exception as e:
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log(
+                    f"[多周期] 获取4小时数据失败: {e}",
+                    "MultiTimeframe"
+                )
+            return None
+    
+    def _update_4h_candle_border(self) -> None:
+        """更新4小时K线矩形边框"""
+        if not self._animation_manager:
+            return
+        
+        try:
+            # 获取当前4小时数据
+            four_hour_data = self._get_current_4h_data()
+            if not four_hour_data:
+                return
+            
+            # 检查是否跨越周期（周期切换时删除旧边框）
+            current_period_start = four_hour_data['period_start']
+            if (self._last_4h_period_start and 
+                current_period_start != self._last_4h_period_start):
+                # 周期切换，删除旧边框
+                if self._current_4h_rect_id:
+                    self._animation_manager.remove_line(self._current_4h_rect_id)
+                    self._current_4h_rect_id = None
+                    
+                    if hasattr(self, '_main_engine') and self._main_engine:
+                        self._main_engine.write_log(
+                            "[多周期] 4小时周期切换，已删除旧边框",
+                            "MultiTimeframe"
+                        )
+            
+            self._last_4h_period_start = current_period_start
+            
+            # 删除旧边框（实时更新）
+            if self._current_4h_rect_id:
+                self._animation_manager.remove_line(self._current_4h_rect_id)
+            
+            # 提取数据
+            start_index = four_hour_data['start_index']
+            current_index = four_hour_data['current_index']
+            open_price = four_hour_data['open_price']
+            current_close = four_hour_data['current_close']
+            is_bullish = four_hour_data['is_bullish']
+            
+            # 计算边框位置
+            center_index = (start_index + current_index) / 2
+            width = current_index - start_index + 1  # +1 确保包含当前K线
+            
+            # 根据阳线/阴线设置参数
+            if is_bullish:
+                # 阳线：红色顺时针
+                color = (255, 75, 75)
+                direction = AnimationLineDirection.BACKWARD
+                high_price = current_close
+                low_price = open_price
+                bar_type = "阳线"
+            else:
+                # 阴线：青色逆时针
+                color = (0, 255, 255)
+                direction = AnimationLineDirection.FORWARD
+                high_price = open_price
+                low_price = current_close
+                bar_type = "阴线"
+            
+            # 创建新边框
+            self._current_4h_rect_id = self._animation_manager.create_rectangle_border(
+                time_index=center_index,
+                high_price=high_price,
+                low_price=low_price,
+                width=width,
+                color=color,
+                animation_direction=direction,
+                dash_pattern=[8, 4],
+                line_width=3.5,  # 按需求设置为3.5像素
+                rect_id="realtime_4h_candle"
+            )
+            
+            # 日志输出
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log(
+                    f"[多周期] 4H边框更新: {bar_type} "
+                    f"索引[{start_index}~{current_index}] "
+                    f"价格[{low_price:.0f}~{high_price:.0f}] "
+                    f"宽度={width}",
+                    "MultiTimeframe"
+                )
+            
+            # ✅ 强制刷新图表显示（确保边框立即显示）
+            if self._chart:
+                candle_plot = self._chart.get_plot("candle")
+                if candle_plot:
+                    candle_plot.update()
+                self._chart.update()
+                
+        except Exception as e:
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log(
+                    f"[多周期] 更新4小时边框失败: {e}",
+                    "MultiTimeframe"
+                )
+    
+    def _update_4h_open_price_line_animated(self) -> None:
+        """
+        更新4小时开盘价跑马灯线（替换原有的静态虚线）
+        """
+        if not self._animation_manager:
+            return
+        
+        try:
+            # 获取当前4小时数据
+            four_hour_data = self._get_current_4h_data()
+            if not four_hour_data:
+                return
+            
+            # 删除旧线
+            if self._current_4h_open_line_id:
+                self._animation_manager.remove_line(self._current_4h_open_line_id)
+            
+            # 创建新的开盘价跑马灯线
+            self._current_4h_open_line_id = self._animation_manager.create_horizontal_line(
+                price=four_hour_data['open_price'],
+                color=(255, 255, 0),  # 黄色
+                width=1.5,  # 保持原线宽
+                animation_direction=AnimationLineDirection.FORWARD,  # 向右（正向）
+                dash_pattern=[15, 8],  # 慢速：更长的虚线样式
+                line_id="realtime_4h_open"
+            )
+            
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log(
+                    f"[多周期] 4H开盘价线更新: {four_hour_data['open_price']:.0f} "
+                    f"(黄色慢速跑马灯)",
+                    "MultiTimeframe"
+                )
+                
+        except Exception as e:
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log(
+                    f"[多周期] 更新4小时开盘价线失败: {e}",
+                    "MultiTimeframe"
+                )
+    
+    # =========================================================================
     # 画线交易功能
+    # =========================================================================
+    
     def enable_drawing_order(
         self,
         main_engine: object,
