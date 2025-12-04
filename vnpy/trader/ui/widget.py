@@ -4329,9 +4329,9 @@ class ChartWindow(QtWidgets.QWidget):
         多周期模式下独立加载数据
         
         不依赖单周期数据，完全独立加载：
-        1. 获取用户选择的时间范围
+        1. 从UI控件读取当前设置的起始时间（保留用户在单周期的设置）
         2. 调用 MultiTimeframeWidget.switch_symbol 独立加载
-        3. MultiTimeframeWidget 内部会检查数据完整性并下载
+        3. MultiTimeframeWidget 内部会检查数据完整性并使用智能下载策略
         """
         if not self.multi_timeframe_widget:
             self.main_engine.write_log("[多周期加载] MultiTimeframeWidget 未初始化", "ChartWindow")
@@ -4345,7 +4345,9 @@ class ChartWindow(QtWidgets.QWidget):
         from vnpy.trader.utility import extract_vt_symbol
         symbol, exchange = extract_vt_symbol(self.current_vt_symbol)
         
-        # 获取用户选择的时间范围（从UI控件）
+        # 从UI控件读取当前设置的起始时间
+        # 注意：这个时间可能是默认的（7天前），也可能是用户在单周期模式设定的
+        # 多周期会保留并使用这个时间作为加载范围
         user_start = self.start_datetime.dateTime().toPython()
         end = datetime.now()
         
