@@ -138,6 +138,11 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         self._open_price_cache: dict[datetime, float] = {}  # 1分钟开盘价
         self._large_timeframe_open_price_cache: dict[tuple[Interval, datetime], float] = {}  # 大周期开盘价
         self._last_corrected_minute: datetime | None = None
+        
+        # 4小时开盘价参考线
+        self._current_4h_open_price: float | None = None  # 当前4小时周期的开盘价
+        self._current_4h_start_datetime: datetime | None = None  # 当前4小时周期的开始时间
+        self._4h_open_price_line: object | None = None  # 4小时开盘价参考线对象
 
         self._init_ui()
         self._load_data_and_build_items()
@@ -1787,6 +1792,11 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         if existing_bar:
             # 优先使用BarManager中已存在的开盘价（已验证正确）
             preserved_open_price = existing_bar.open_price
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log(
+                    f"[多周期开盘价] {interval.value} K线({large_bar.datetime.strftime('%H:%M')}) "
+                    f"从历史数据获取开盘价: {preserved_open_price}"
+                )
         else:
             # 如果BarManager中没有，尝试从数据库或1分钟数据获取正确的开盘价
             preserved_open_price = self._get_large_timeframe_open_price(
@@ -1802,6 +1812,15 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         if large_bar.datetime in manager._bars:
             manager._bars[large_bar.datetime].open_price = preserved_open_price
         large_bar.open_price = preserved_open_price
+        
+        # ✅ 记录4小时开盘价（用于画参考线）
+        if interval == Interval.HOUR_4:
+            if (self._current_4h_start_datetime != large_bar.datetime or 
+                self._current_4h_open_price != preserved_open_price):
+                self._current_4h_start_datetime = large_bar.datetime
+                self._current_4h_open_price = preserved_open_price
+                # 更新4小时开盘价参考线
+                self._update_4h_open_price_line()
         
         # 清除索引范围缓存（因为最后一根K线的范围会不断变化）
         if large_bar.datetime in item._bar_range_cache:
@@ -1819,6 +1838,78 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         item.update_bar(large_bar)
 
     # ---------------------------------------------------------------------
+    def _update_4h_open_price_line(self) -> None:
+        """
+        更新4小时开盘价参考线
+        
+        从当前1分钟K线位置向右延伸1小时（60根K线），画黄色虚线
+        """
+        if not self._current_4h_open_price or not self._chart:
+            return
+        
+        try:
+            import pyqtgraph as pg
+            from vnpy.trader.ui import QtGui, QtCore
+            
+            # 获取candle plot
+            candle_plot = self._chart.get_plot("candle")
+            if not candle_plot:
+                return
+            
+            # 移除旧的参考线
+            if self._4h_open_price_line:
+                try:
+                    candle_plot.removeItem(self._4h_open_price_line)
+                except Exception:
+                    pass
+                self._4h_open_price_line = None
+            
+            # 获取当前1分钟K线的索引范围
+            if not self._main_manager:
+                return
+            
+            all_bars = self._main_manager.get_all_bars()
+            if not all_bars:
+                return
+            
+            # 当前最后一根K线的索引
+            current_ix = len(all_bars) - 1
+            
+            # 向右延伸60根K线（1小时）
+            end_ix = current_ix + 60
+            
+            # 创建黄色虚线
+            pen = QtGui.QPen(
+                QtGui.QColor(255, 215, 0),  # 金黄色
+                2,  # 线宽
+                QtCore.Qt.DashLine  # 虚线
+            )
+            
+            # 创建水平线（使用InfiniteLine，但限制span范围）
+            # span=(start_ratio, end_ratio)，需要计算相对于x轴范围的比例
+            # 但InfiniteLine的span是相对于plot范围的，不是索引范围
+            # 所以我们使用PlotCurveItem画一条线段
+            
+            # 画一条从current_ix到end_ix的水平线
+            line_item = pg.PlotCurveItem(
+                x=[current_ix, end_ix],
+                y=[self._current_4h_open_price, self._current_4h_open_price],
+                pen=pen
+            )
+            
+            candle_plot.addItem(line_item)
+            self._4h_open_price_line = line_item
+            
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log(
+                    f"[4H参考线] 已画4小时开盘价参考线: {self._current_4h_open_price}, "
+                    f"从索引 {current_ix} 到 {end_ix}"
+                )
+        
+        except Exception as e:
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log(f"[4H参考线] 更新失败: {e}")
+    
     # 画线交易功能
     def enable_drawing_order(
         self,
