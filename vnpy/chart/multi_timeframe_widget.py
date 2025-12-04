@@ -1303,8 +1303,15 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         # 更新主图（1分钟K线）
         self._chart.update_bar(bar)
         
+        # ✅ 强制刷新图表显示
+        candle_plot = self._chart.get_plot("candle")
+        if candle_plot:
+            candle_plot.update()
+        self._chart.update()
+        self._chart.repaint()
+        
         if hasattr(self, '_main_engine') and self._main_engine:
-            self._main_engine.write_log("[多周期Bar] 主图已更新")
+            self._main_engine.write_log("[多周期Bar] 主图已更新并刷新显示")
 
         # 传递给大周期BarGenerator
         if self._bg_5m:
