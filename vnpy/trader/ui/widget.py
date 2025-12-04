@@ -4368,7 +4368,8 @@ class ChartWindow(QtWidgets.QWidget):
         
         def progress_callback(message: str, percent: int):
             """进度回调"""
-            progress.update_progress(message, percent)
+            progress.set_status(message)
+            progress.set_progress(percent)
             QtWidgets.QApplication.processEvents()
         
         # 异步调用 switch_symbol（避免UI卡顿）
