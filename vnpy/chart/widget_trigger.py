@@ -188,6 +188,42 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
             # 发送订单
             vt_orderid = None
             try:
+                # ✅ 调试：打印当前所有挂单线的信息（用于诊断隐藏挂单线问题）
+                try:
+                    if self._price_line_manager:
+                        from .price_line import PriceLineType
+                        all_lines = self._price_line_manager.get_all_lines()
+                        pending_lines = [
+                            (lid, l) for lid, l in all_lines.items()
+                            if l.get_line_type() == PriceLineType.PENDING
+                        ]
+                        
+                        if pending_lines:
+                            pending_info = []
+                            for lid, l in pending_lines:
+                                price = l.get_price()
+                                direction = l.get_direction()
+                                volume = l.get_order_volume()
+                                # 标记当前触发的挂单线
+                                marker = " ⬅️ 当前触发" if lid == line_id else ""
+                                pending_info.append(f"{direction} {volume}手@{price:.0f} (ID:{lid[-8:]}){marker}")
+                            
+                            main_engine.write_log(
+                                f"[挂单触发] 当前所有挂单线({len(pending_lines)}条): {', '.join(pending_info)}",
+                                "Chart"
+                            )
+                        else:
+                            main_engine.write_log(
+                                f"[挂单触发] 当前没有挂单线（异常：挂单线 {line_id} 应该存在）",
+                                "Chart"
+                            )
+                except Exception as pending_log_error:
+                    if main_engine:
+                        main_engine.write_log(
+                            f"[ChartWidget] 打印挂单线信息失败: {str(pending_log_error)}",
+                            "ChartWidget"
+                        )
+                
                 # 发送订单前打印当前活动订单（用于调试）
                 try:
                     all_active_orders = main_engine.get_all_active_orders()
@@ -472,26 +508,10 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
         
         # 使用RLock保护，确保一次只有一个止损线触发平仓
         with self._stop_loss_trigger_lock:
-            # ✅ 检查是否正在拖拽价格线：如果正在拖拽，跳过触发（防止拖拽时误触发）
-            if hasattr(self, '_price_line_drag_handler') and self._price_line_drag_handler:
-                if self._price_line_drag_handler.is_dragging():
-                    # 静默跳过，不记录日志（避免拖拽时刷屏）
-                    return False
-            
-            # ✅ 检查拖拽保护期：如果拖拽结束后价格已突破，设置500ms保护期，防止拖拽后立即触发
-            from time import time
-            current_time = time()
-            if hasattr(self, '_drag_protection_times') and self._drag_protection_times:
-                protection_end_time = self._drag_protection_times.get(line_id)
-                if protection_end_time and current_time < protection_end_time:
-                    # 在保护期内，跳过触发
-                    return False
-                elif protection_end_time and current_time >= protection_end_time:
-                    # 保护期已过，清除记录
-                    del self._drag_protection_times[line_id]
-            
             # ✅ 防重复触发机制：检查是否已经触发过（防止短时间内重复触发）
+            from time import time
             trigger_key = f"stop_loss_{line_id}"
+            current_time = time()
             
             # 检查是否已有触发记录（防抖：30秒内不重复触发，但要先检查未成交订单）
             if hasattr(self, '_trigger_records'):
@@ -805,26 +825,10 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
         
         # 使用RLock保护，确保一次只有一个止盈线触发平仓
         with self._take_profit_trigger_lock:
-            # ✅ 检查是否正在拖拽价格线：如果正在拖拽，跳过触发（防止拖拽时误触发）
-            if hasattr(self, '_price_line_drag_handler') and self._price_line_drag_handler:
-                if self._price_line_drag_handler.is_dragging():
-                    # 静默跳过，不记录日志（避免拖拽时刷屏）
-                    return False
-            
-            # ✅ 检查拖拽保护期：如果拖拽结束后价格已突破，设置500ms保护期，防止拖拽后立即触发
-            from time import time
-            current_time = time()
-            if hasattr(self, '_drag_protection_times') and self._drag_protection_times:
-                protection_end_time = self._drag_protection_times.get(line_id)
-                if protection_end_time and current_time < protection_end_time:
-                    # 在保护期内，跳过触发
-                    return False
-                elif protection_end_time and current_time >= protection_end_time:
-                    # 保护期已过，清除记录
-                    del self._drag_protection_times[line_id]
-            
             # ✅ 防重复触发机制：检查是否已经触发过（防止短时间内重复触发）
+            from time import time
             trigger_key = f"take_profit_{line_id}"
+            current_time = time()
             
             # 检查是否已有触发记录（防抖：30秒内不重复触发，但要先检查未成交订单）
             if hasattr(self, '_trigger_records'):

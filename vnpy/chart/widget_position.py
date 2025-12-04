@@ -1625,15 +1625,95 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
             if len(matching_entry_lines) > 1:
                 if hasattr(self, '_main_engine') and self._main_engine:
                     self._main_engine.write_log(
-                        f"[持仓同步] 发现 {len(matching_entry_lines)} 条匹配方向的入场线，将更新第一条，删除其他",
+                        f"[持仓同步] 发现 {len(matching_entry_lines)} 条匹配方向的入场线，将更新第一条，迁移止损/止盈线到第一条，删除其他",
                         "Chart"
                     )
-                # 只保留第一条，其他标记为删除
+                
+                # 获取保留的第一条入场线ID
+                kept_entry_line_id, kept_entry_line = matching_entry_lines[0]
+                
+                # 只保留第一条，其他标记为删除（并迁移止损/止盈线）
                 for i, (line_id, line) in enumerate(matching_entry_lines[1:], start=1):
+                    # ✅ 在删除重复入场线之前，先迁移其止损/止盈线到保留的入场线
+                    if hasattr(self, '_entry_line_relations') and line_id in self._entry_line_relations:
+                        relations = self._entry_line_relations[line_id]
+                        
+                        # 迁移止损线
+                        stop_loss_line_id = relations.get("stop_loss")
+                        if stop_loss_line_id:
+                            # 检查保留的入场线是否已有止损线
+                            if kept_entry_line_id not in self._entry_line_relations:
+                                self._entry_line_relations[kept_entry_line_id] = {}
+                            
+                            existing_stop_loss = self._entry_line_relations[kept_entry_line_id].get("stop_loss")
+                            if not existing_stop_loss:
+                                # 保留的入场线没有止损线，迁移过去
+                                self._entry_line_relations[kept_entry_line_id]["stop_loss"] = stop_loss_line_id
+                                
+                                # 更新止损线的 entry_line_id 属性
+                                stop_loss_line = self._price_line_manager.get_line(stop_loss_line_id)
+                                if stop_loss_line and hasattr(stop_loss_line, 'set_associated_entry_line_id'):
+                                    stop_loss_line.set_associated_entry_line_id(kept_entry_line_id)
+                                
+                                # 保存关联关系到数据库
+                                if hasattr(self, '_price_line_database') and self._price_line_database:
+                                    self._price_line_database.save_relation(kept_entry_line_id, stop_loss_line_id, "stop_loss")
+                                
+                                if hasattr(self, '_main_engine') and self._main_engine:
+                                    self._main_engine.write_log(
+                                        f"[持仓同步] 迁移止损线: {stop_loss_line_id} 从 {line_id} -> {kept_entry_line_id}",
+                                        "Chart"
+                                    )
+                            else:
+                                if hasattr(self, '_main_engine') and self._main_engine:
+                                    self._main_engine.write_log(
+                                        f"[持仓同步] 保留的入场线已有止损线 {existing_stop_loss}，跳过迁移 {stop_loss_line_id}",
+                                        "Chart"
+                                    )
+                        
+                        # 迁移止盈线
+                        take_profit_line_id = relations.get("take_profit")
+                        if take_profit_line_id:
+                            # 检查保留的入场线是否已有止盈线
+                            if kept_entry_line_id not in self._entry_line_relations:
+                                self._entry_line_relations[kept_entry_line_id] = {}
+                            
+                            existing_take_profit = self._entry_line_relations[kept_entry_line_id].get("take_profit")
+                            if not existing_take_profit:
+                                # 保留的入场线没有止盈线，迁移过去
+                                self._entry_line_relations[kept_entry_line_id]["take_profit"] = take_profit_line_id
+                                
+                                # 更新止盈线的 entry_line_id 属性
+                                take_profit_line = self._price_line_manager.get_line(take_profit_line_id)
+                                if take_profit_line and hasattr(take_profit_line, 'set_associated_entry_line_id'):
+                                    take_profit_line.set_associated_entry_line_id(kept_entry_line_id)
+                                
+                                # 保存关联关系到数据库
+                                if hasattr(self, '_price_line_database') and self._price_line_database:
+                                    self._price_line_database.save_relation(kept_entry_line_id, take_profit_line_id, "take_profit")
+                                
+                                if hasattr(self, '_main_engine') and self._main_engine:
+                                    self._main_engine.write_log(
+                                        f"[持仓同步] 迁移止盈线: {take_profit_line_id} 从 {line_id} -> {kept_entry_line_id}",
+                                        "Chart"
+                                    )
+                            else:
+                                if hasattr(self, '_main_engine') and self._main_engine:
+                                    self._main_engine.write_log(
+                                        f"[持仓同步] 保留的入场线已有止盈线 {existing_take_profit}，跳过迁移 {take_profit_line_id}",
+                                        "Chart"
+                                    )
+                        
+                        # 清理被删除入场线的关联关系
+                        del self._entry_line_relations[line_id]
+                        if hasattr(self, '_price_line_database') and self._price_line_database:
+                            self._price_line_database.delete_relation(line_id)
+                    
+                    # 标记删除重复入场线（只删除入场线本身，不删除止损/止盈线）
                     lines_to_delete.append((line_id, position_direction))
                     if hasattr(self, '_main_engine') and self._main_engine:
                         self._main_engine.write_log(
-                            f"[持仓同步] 标记删除重复入场线 {line_id} (保留第一条)",
+                            f"[持仓同步] 标记删除重复入场线 {line_id} (保留第一条，止损/止盈线已迁移)",
                             "Chart"
                         )
         
@@ -1713,9 +1793,20 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
         deleted_take_profit_count = 0
         
         for line_id, line_direction in lines_to_delete:
+            # ✅ 检查是否是重复入场线（从matching_entry_lines中删除的）
+            # 如果是重复入场线，其止损/止盈线已经被迁移到保留的入场线，不应该删除
+            is_duplicate_entry = False
+            if matching_entry_lines and len(matching_entry_lines) > 1:
+                for dup_line_id, dup_line in matching_entry_lines[1:]:
+                    if dup_line_id == line_id:
+                        is_duplicate_entry = True
+                        break
+            
             # 先通过关联关系查找并标记关联的止损线和止盈线
             related_lines_to_delete = []
-            if hasattr(self, '_entry_line_relations') and line_id in self._entry_line_relations:
+            if not is_duplicate_entry and hasattr(self, '_entry_line_relations') and line_id in self._entry_line_relations:
+                # ✅ 只有非重复入场线才删除关联的止损/止盈线
+                # 重复入场线的止损/止盈线已经迁移，不应该删除
                 relations = self._entry_line_relations[line_id]
             
                 # 标记止损线
@@ -1737,6 +1828,13 @@ class ChartWidgetPositionMixin(ChartWidgetMixinBase):
                             f"[持仓同步] 通过关联关系标记删除止盈线: {take_profit_line_id} (关联到入场线 {line_id})",
                             "Chart"
                         )
+            elif is_duplicate_entry:
+                # 重复入场线，不删除止损/止盈线（已迁移到保留的入场线）
+                if hasattr(self, '_main_engine') and self._main_engine:
+                    self._main_engine.write_log(
+                        f"[持仓同步] 重复入场线 {line_id} 的止损/止盈线已迁移，不删除",
+                        "Chart"
+                    )
         
             # 先删除关联的止损线和止盈线
             for relation_type, related_line_id in related_lines_to_delete:
