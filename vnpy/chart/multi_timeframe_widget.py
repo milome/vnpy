@@ -679,7 +679,17 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
                 
                 if downloaded_bars:
                     database.save_bar_data(downloaded_bars)
-                    logger.info(f"[多周期] 已下载并保存 {len(downloaded_bars)} 条数据")
+                    if hasattr(self, '_main_engine') and self._main_engine:
+                        self._main_engine.write_log(f"[多周期] 已下载并保存 {len(downloaded_bars)} 条数据")
+                    
+                    # ✅ 数据保存完成后，立即启用实时更新（在聚合大周期数据之前）
+                    if hasattr(self, '_main_engine') and self._main_engine:
+                        self._main_engine.write_log("[多周期] 数据保存完成，立即启用实时更新")
+                    
+                    if not self._realtime_enabled:
+                        self.enable_realtime()
+                        if hasattr(self, '_main_engine') and self._main_engine:
+                            self._main_engine.write_log("[多周期] 实时更新已在数据保存后启用")
                     
                     # 步骤4：重新从数据库加载用户指定的完整范围
                     one_minute_bars = database.load_bar_data(
@@ -689,7 +699,8 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
                         start=self._start,  # ✅ 重新加载完整范围
                         end=self._end,
                     )
-                    logger.info(f"[多周期] 重新加载完整范围: {len(one_minute_bars) if one_minute_bars else 0} 条")
+                    if hasattr(self, '_main_engine') and self._main_engine:
+                        self._main_engine.write_log(f"[多周期] 重新加载完整范围: {len(one_minute_bars) if one_minute_bars else 0} 条")
             
             if progress_callback:
                 progress_callback(f"1分钟数据加载完成: {len(one_minute_bars) if one_minute_bars else 0} 条", 25)
@@ -1272,10 +1283,25 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
             return
 
         # 传递给1分钟BarGenerator，触发级联更新
-        # if hasattr(self, '_main_engine') and self._main_engine:
-        #     self._main_engine.write_log("[多周期Tick] 传递给 bg_1m.update_tick()")
+        if hasattr(self, '_main_engine') and self._main_engine:
+            self._main_engine.write_log(
+                f"[多周期Tick处理] 传递给 bg_1m.update_tick() - "
+                f"tick时间: {tick.datetime}, 价格: {tick.last_price}"
+            )
         
         self._bg_1m.update_tick(tick)
+        
+        # 检查BarGenerator的状态
+        if hasattr(self, '_main_engine') and self._main_engine:
+            if self._bg_1m.bar:
+                self._main_engine.write_log(
+                    f"[多周期Tick处理] bg_1m.bar 存在 - "
+                    f"时间: {self._bg_1m.bar.datetime}, "
+                    f"开: {self._bg_1m.bar.open_price}, "
+                    f"收: {self._bg_1m.bar.close_price}"
+                )
+            else:
+                self._main_engine.write_log("[多周期Tick处理] ⚠️ bg_1m.bar 为 None")
 
         # 确保 tick 数据传递给价格突破监控（T055, T056）
         if self._chart and hasattr(self._chart, '_breakthrough_monitor') and self._chart._breakthrough_monitor:
