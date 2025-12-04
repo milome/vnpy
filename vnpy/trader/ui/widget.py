@@ -4384,6 +4384,12 @@ class ChartWindow(QtWidgets.QWidget):
                 )
                 progress.close()
                 self.main_engine.write_log("[多周期加载] 数据加载完成", "ChartWindow")
+                
+                # 数据加载完成后，启用实时更新（T037）
+                if hasattr(self.multi_timeframe_widget, 'enable_realtime'):
+                    self.multi_timeframe_widget.enable_realtime()
+                    self.main_engine.write_log("[多周期加载] 实时更新已启用", "ChartWindow")
+                
             except Exception as e:
                 progress.close()
                 import traceback
