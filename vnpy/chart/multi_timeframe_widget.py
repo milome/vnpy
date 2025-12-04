@@ -132,8 +132,9 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         # 是否启用实时更新
         self._realtime_enabled: bool = False
         
-        # 开盘价修正缓存：避免同一分钟重复查询（性能优化）
-        self._open_price_cache: dict[datetime, float] = {}
+        # 开盘价修正缓存：避免重复查询（性能优化）
+        self._open_price_cache: dict[datetime, float] = {}  # 1分钟开盘价
+        self._large_timeframe_open_price_cache: dict[tuple[Interval, datetime], float] = {}  # 大周期开盘价
         self._last_corrected_minute: datetime | None = None
 
         self._init_ui()
@@ -1148,6 +1149,8 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         # ✅ 清理开盘价缓存
         if hasattr(self, '_open_price_cache'):
             self._open_price_cache.clear()
+        if hasattr(self, '_large_timeframe_open_price_cache'):
+            self._large_timeframe_open_price_cache.clear()
         if hasattr(self, '_last_corrected_minute'):
             self._last_corrected_minute = None
 
@@ -1634,6 +1637,7 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         获取大周期K线的正确开盘价
         
         优先级：
+        0. 缓存中的开盘价（性能优化）✅
         1. 数据库中该周期的历史K线开盘价
         2. 该周期第一根1分钟K线的开盘价
         3. BarGenerator给出的开盘价（备用）
@@ -1648,6 +1652,17 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         """
         from vnpy.trader.database import get_database
         from datetime import timedelta
+        
+        # ✅ 优先级0：检查缓存，避免重复查询
+        cache_key = (interval, large_bar_datetime)
+        if cache_key in self._large_timeframe_open_price_cache:
+            cached_price = self._large_timeframe_open_price_cache[cache_key]
+            # if hasattr(self, '_main_engine') and self._main_engine:
+            #     self._main_engine.write_log(
+            #         f"[性能优化] {interval.value} K线({large_bar_datetime.strftime('%H:%M')}) "
+            #         f"从缓存获取开盘价: {cached_price}"
+            #     )
+            return cached_price
         
         # 方法1：从数据库查询该周期的K线
         try:
@@ -1676,12 +1691,17 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
             
             if db_bars and len(db_bars) > 0:
                 # 找到了历史K线，使用其开盘价
+                open_price = db_bars[0].open_price
+                
+                # ✅ 缓存结果
+                self._large_timeframe_open_price_cache[cache_key] = open_price
+                
                 if hasattr(self, '_main_engine') and self._main_engine:
                     self._main_engine.write_log(
                         f"[多周期开盘价] {interval.value} K线({large_bar_datetime.strftime('%H:%M')}) "
-                        f"从数据库获取开盘价: {db_bars[0].open_price}"
+                        f"从数据库获取开盘价: {open_price} (已缓存)"
                     )
-                return db_bars[0].open_price
+                return open_price
         
         except Exception as e:
             if hasattr(self, '_main_engine') and self._main_engine:
@@ -1703,12 +1723,17 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
             
             if bars_1m and len(bars_1m) > 0:
                 # 该周期的第一根1分钟K线的开盘价就是该周期的开盘价
+                open_price = bars_1m[0].open_price
+                
+                # ✅ 缓存结果
+                self._large_timeframe_open_price_cache[cache_key] = open_price
+                
                 if hasattr(self, '_main_engine') and self._main_engine:
                     self._main_engine.write_log(
                         f"[多周期开盘价] {interval.value} K线({large_bar_datetime.strftime('%H:%M')}) "
-                        f"从1分钟数据获取开盘价: {bars_1m[0].open_price}"
+                        f"从1分钟数据获取开盘价: {open_price} (已缓存)"
                     )
-                return bars_1m[0].open_price
+                return open_price
         
         except Exception as e:
             if hasattr(self, '_main_engine') and self._main_engine:
