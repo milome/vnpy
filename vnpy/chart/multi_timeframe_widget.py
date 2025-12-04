@@ -253,16 +253,39 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         from vnpy.trader.setting import SETTINGS
         
         try:
+            # ============================================================
+            # 查询数据库的实际最早和最新数据（不依赖传入的 existing_bars）
+            # ============================================================
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log("[时区调试] 开始查询数据库的实际最早和最新数据...")
+            
+            # 查询最近180天的数据来确定数据库范围（覆盖大部分情况）
+            query_start = user_end - timedelta(days=180)
+            all_bars = database.load_bar_data(
+                symbol=self._vt_symbol,
+                exchange=self._exchange,
+                interval=Interval.MINUTE,
+                start=query_start,
+                end=user_end
+            )
+            
             # 策略1：数据库无数据 → 下载最近7天
-            if not existing_bars:
+            if not all_bars:
                 download_start = user_end - timedelta(days=7)
-                logger.info(f"[多周期] 数据库无数据，下载最近7天: {download_start} ~ {user_end}")
+                if hasattr(self, '_main_engine') and self._main_engine:
+                    self._main_engine.write_log(f"[多周期] 数据库无数据，下载最近7天: {download_start} ~ {user_end}")
                 return download_start, user_end, True
             
-            # 查询数据库中的最早和最新数据
-            existing_bars.sort(key=lambda x: x.datetime)
-            db_earliest_raw = existing_bars[0].datetime
-            db_latest_raw = existing_bars[-1].datetime
+            # 查询数据库中的实际最早和最新数据
+            all_bars.sort(key=lambda x: x.datetime)
+            db_earliest_raw = all_bars[0].datetime
+            db_latest_raw = all_bars[-1].datetime
+            
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log(
+                    f"[时区调试] 查询范围: 最近180天（{query_start} ~ {user_end}），"
+                    f"找到 {len(all_bars)} 条数据"
+                )
             
             # 打印原始时间戳（转换前）
             if hasattr(self, '_main_engine') and self._main_engine:
