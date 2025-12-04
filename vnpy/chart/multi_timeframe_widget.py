@@ -131,6 +131,10 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
 
         # 是否启用实时更新
         self._realtime_enabled: bool = False
+        
+        # 开盘价修正缓存：避免同一分钟重复查询（性能优化）
+        self._open_price_cache: dict[datetime, float] = {}
+        self._last_corrected_minute: datetime | None = None
 
         self._init_ui()
         self._load_data_and_build_items()
@@ -1140,6 +1144,12 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
             self._manager_1h.clear_all()
         if self._manager_4h:
             self._manager_4h.clear_all()
+        
+        # ✅ 清理开盘价缓存
+        if hasattr(self, '_open_price_cache'):
+            self._open_price_cache.clear()
+        if hasattr(self, '_last_corrected_minute'):
+            self._last_corrected_minute = None
 
         # 清理ChartItem数据
         candle_plot = self._chart.get_plot("candle")
@@ -1306,12 +1316,17 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
             correct_open_price = None
             need_correct = False
             
-            # 判断是否需要修正：如果tick的秒数>0，说明该分钟已经开始
-            tick_second = tick.datetime.second
-            if tick_second > 0:
-                need_correct = True
+            # ✅ 性能优化：检查缓存，避免同一分钟重复查询
+            if bar_minute_start in self._open_price_cache:
+                correct_open_price = self._open_price_cache[bar_minute_start]
+                need_correct = False
             else:
-                need_correct = True  # 仍然检查是否有更准确的参照物
+                # 判断是否需要修正：如果tick的秒数>0，说明该分钟已经开始
+                tick_second = tick.datetime.second
+                if tick_second > 0:
+                    need_correct = True
+                else:
+                    need_correct = True  # 仍然检查是否有更准确的参照物
             
             # 查找正确的开盘价
             if need_correct:
@@ -1354,6 +1369,14 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
                                 )
                     except Exception:
                         pass
+                
+                # ✅ 缓存开盘价，避免同一分钟重复查询
+                if correct_open_price:
+                    self._open_price_cache[bar_minute_start] = correct_open_price
+                    if hasattr(self, '_main_engine') and self._main_engine:
+                        self._main_engine.write_log(
+                            f"[性能优化] 已缓存 {bar_minute_start.strftime('%H:%M')} 的开盘价"
+                        )
             
             # 应用修正后的开盘价
             if correct_open_price:
