@@ -235,11 +235,13 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         策略（与单周期相同）：
         1. 如果数据库无数据 → 下载最近7天
         2. 如果数据库最新数据 < 1小时前 → 下载最近7天
-        3. 如果用户起始时间 < 数据库最早时间 → 全量下载
+        3. 如果用户起始时间 < 数据库最早时间：
+           - 差距 < 1小时 → 只下载缺口（user_start ~ db_earliest）
+           - 差距 >= 1小时 → 全量下载（user_start ~ user_end）
         4. 如果数据库数据较新 → 跳过下载
         
         Returns:
-            (download_start, need_download): 下载起始时间和是否需要下载
+            (download_start, download_end, need_download): 下载起始时间、结束时间和是否需要下载
         """
         from datetime import timedelta
         import pytz
@@ -250,7 +252,7 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
             if not existing_bars:
                 download_start = user_end - timedelta(days=7)
                 logger.info(f"[多周期] 数据库无数据，下载最近7天: {download_start} ~ {user_end}")
-                return download_start, True
+                return download_start, user_end, True
             
             # 查询数据库中的最早和最新数据
             existing_bars.sort(key=lambda x: x.datetime)
@@ -325,11 +327,11 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
                     f"[多周期] 数据库数据较旧（最新数据距今 {data_age.total_seconds()/3600:.1f} 小时），"
                     f"下载最近7天: {download_start} ~ {user_end}"
                 )
-                return download_start, True
+                return download_start, user_end, True
             
             # 策略3：用户起始时间 < 数据库最早时间
-            # 如果差距很小（< 1小时），只下载缺口部分
-            # 如果差距很大（>= 1小时），全量下载
+            # 如果差距很小（< 1小时），只下载缺口部分（user_start ~ db_earliest）
+            # 如果差距很大（>= 1小时），全量下载（user_start ~ user_end）
             if user_start < db_earliest:
                 time_gap = db_earliest - user_start
                 if time_gap.total_seconds() < 3600:  # 差距 < 1小时
@@ -339,7 +341,7 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
                             f"[多周期] 用户选择时间 {user_start} 早于数据库最早时间 {db_earliest}，"
                             f"但差距很小（{time_gap.total_seconds()/60:.1f} 分钟），只下载缺口: {user_start} ~ {db_earliest}"
                         )
-                    return user_start, True  # 下载缺口部分
+                    return user_start, db_earliest, True  # 只下载缺口部分
                 else:
                     # 差距很大，全量下载
                     if hasattr(self, '_main_engine') and self._main_engine:
@@ -347,15 +349,15 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
                             f"[多周期] 用户选择时间 {user_start} 早于数据库最早时间 {db_earliest}，"
                             f"差距较大（{time_gap.total_seconds()/3600:.1f} 小时），全量下载: {user_start} ~ {user_end}"
                         )
-                    return user_start, True
+                    return user_start, user_end, True
             
             # 策略4：数据库数据较新 → 跳过下载
             logger.info(f"[多周期] 数据库数据足够新（< 1小时），跳过下载")
-            return user_start, False
+            return user_start, user_end, False
             
         except Exception as e:
             logger.warning(f"[多周期] 检查数据完整性失败: {e}，跳过下载")
-            return user_start, False
+            return user_start, user_end, False
     
     def _download_from_futu(
         self,
@@ -628,19 +630,20 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
                 self._main_engine.write_log(f"[多周期] 从数据库加载: {len(one_minute_bars) if one_minute_bars else 0} 条")
             
             # 步骤2：分析数据库状态，决定是否需要从FUTU下载
-            download_start, need_download = self._check_data_completeness(
+            download_start, download_end, need_download = self._check_data_completeness(
                 database, one_minute_bars, self._start, self._end
             )
             
             if need_download:
                 if progress_callback:
-                    progress_callback(f"数据不完整，正在从FUTU下载 ({download_start} ~ {self._end})...", 10)
+                    progress_callback(f"数据不完整，正在从FUTU下载 ({download_start} ~ {download_end})...", 10)
                 
-                logger.info(f"[多周期] 需要从FUTU下载: {download_start} ~ {self._end}")
+                if hasattr(self, '_main_engine') and self._main_engine:
+                    self._main_engine.write_log(f"[多周期] 需要从FUTU下载: {download_start} ~ {download_end}")
                 
-                # 步骤3：从FUTU下载并保存到数据库
+                # 步骤3：从FUTU下载并保存到数据库（使用精确的下载范围）
                 downloaded_bars = self._download_from_futu(
-                    self._vt_symbol, self._exchange, download_start, self._end
+                    self._vt_symbol, self._exchange, download_start, download_end
                 )
                 
                 if downloaded_bars:
