@@ -1363,6 +1363,41 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
             # 更新主图（实时显示正在构建的K线）
             self._chart.update_bar(bar)
             
+            # ✅ 清除正在构建的大周期K线的索引范围缓存和图片缓存
+            # 因为1分钟K线更新了，大周期K线的索引范围（end_ix）也需要更新
+            if self._bg_5m and self._bg_5m.window_bar and self._item_5m:
+                if self._bg_5m.window_bar.datetime in self._item_5m._bar_range_cache:
+                    del self._item_5m._bar_range_cache[self._bg_5m.window_bar.datetime]
+                ix = self._manager_5m.get_index(self._bg_5m.window_bar.datetime) if self._manager_5m else None
+                if ix is not None and ix in self._item_5m._bar_picutures:
+                    old_picture = self._item_5m._bar_picutures.get(ix)
+                    if old_picture is not None:
+                        del old_picture
+                    self._item_5m._bar_picutures[ix] = None
+                    self._item_5m.update()
+            
+            if self._bg_1h and self._bg_1h.hour_bar and self._item_1h:
+                if self._bg_1h.hour_bar.datetime in self._item_1h._bar_range_cache:
+                    del self._item_1h._bar_range_cache[self._bg_1h.hour_bar.datetime]
+                ix = self._manager_1h.get_index(self._bg_1h.hour_bar.datetime) if self._manager_1h else None
+                if ix is not None and ix in self._item_1h._bar_picutures:
+                    old_picture = self._item_1h._bar_picutures.get(ix)
+                    if old_picture is not None:
+                        del old_picture
+                    self._item_1h._bar_picutures[ix] = None
+                    self._item_1h.update()
+            
+            if self._bg_4h and self._bg_4h.window_bar and self._item_4h:
+                if self._bg_4h.window_bar.datetime in self._item_4h._bar_range_cache:
+                    del self._item_4h._bar_range_cache[self._bg_4h.window_bar.datetime]
+                ix = self._manager_4h.get_index(self._bg_4h.window_bar.datetime) if self._manager_4h else None
+                if ix is not None and ix in self._item_4h._bar_picutures:
+                    old_picture = self._item_4h._bar_picutures.get(ix)
+                    if old_picture is not None:
+                        del old_picture
+                    self._item_4h._bar_picutures[ix] = None
+                    self._item_4h.update()
+            
             # 强制刷新显示
             candle_plot = self._chart.get_plot("candle")
             if candle_plot:
@@ -1440,9 +1475,17 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
                         # 如果是最后一根K线，清除其缓存
                         if self._bg_5m.window_bar.datetime in self._item_5m._bar_range_cache:
                             del self._item_5m._bar_range_cache[self._bg_5m.window_bar.datetime]
+                
                 # 再更新绘制项（BarManager.update_bar已经建立了索引）
                 ix = self._manager_5m.get_index(self._bg_5m.window_bar.datetime)
                 if ix is not None:
+                    # ✅ 强制清除图片缓存，确保重绘时重新计算索引范围（包含最新的1分钟K线）
+                    if ix in self._item_5m._bar_picutures:
+                        old_picture = self._item_5m._bar_picutures.get(ix)
+                        if old_picture is not None:
+                            del old_picture
+                        self._item_5m._bar_picutures[ix] = None
+                    
                     self._item_5m.update_bar(self._bg_5m.window_bar)
                     # 触发图表更新
                     candle_plot = self._chart.get_plot("candle")
@@ -1475,6 +1518,15 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
                     if all_bars and all_bars[-1].datetime == self._bg_1h.hour_bar.datetime:
                         if self._bg_1h.hour_bar.datetime in self._item_1h._bar_range_cache:
                             del self._item_1h._bar_range_cache[self._bg_1h.hour_bar.datetime]
+                
+                # ✅ 强制清除图片缓存，确保重绘时重新计算索引范围（包含最新的1分钟K线）
+                ix = self._manager_1h.get_index(self._bg_1h.hour_bar.datetime)
+                if ix is not None and ix in self._item_1h._bar_picutures:
+                    old_picture = self._item_1h._bar_picutures.get(ix)
+                    if old_picture is not None:
+                        del old_picture
+                    self._item_1h._bar_picutures[ix] = None
+                
                 self._item_1h.update_bar(self._bg_1h.hour_bar)
                 candle_plot = self._chart.get_plot("candle")
                 candle_plot.update()
@@ -1506,6 +1558,15 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
                     if all_bars and all_bars[-1].datetime == self._bg_4h.window_bar.datetime:
                         if self._bg_4h.window_bar.datetime in self._item_4h._bar_range_cache:
                             del self._item_4h._bar_range_cache[self._bg_4h.window_bar.datetime]
+                
+                # ✅ 强制清除图片缓存，确保重绘时重新计算索引范围（包含最新的1分钟K线）
+                ix = self._manager_4h.get_index(self._bg_4h.window_bar.datetime)
+                if ix is not None and ix in self._item_4h._bar_picutures:
+                    old_picture = self._item_4h._bar_picutures.get(ix)
+                    if old_picture is not None:
+                        del old_picture
+                    self._item_4h._bar_picutures[ix] = None
+                
                 self._item_4h.update_bar(self._bg_4h.window_bar)
                 candle_plot = self._chart.get_plot("candle")
                 candle_plot.update()
