@@ -1885,10 +1885,10 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
             # 向右延伸60根K线（1小时）
             end_ix = current_ix + 60
             
-            # 创建黄色虚线（线宽与4小时K线一致）
+            # 创建黄色虚线（使用基础线宽）
             pen = QtGui.QPen(
                 QtGui.QColor(255, 215, 0),  # 金黄色
-                PEN_WIDTH + 2,  # 线宽与4小时K线一致（PEN_WIDTH=1, 所以线宽=3）
+                PEN_WIDTH,  # 线宽=1（基础线宽，最细）
                 QtCore.Qt.DashLine  # 虚线
             )
             
