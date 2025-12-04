@@ -932,43 +932,20 @@ class FutuGateway(BaseGateway):
                     chase_order.just_cancelled = True
                     self.write_log(f"订单{original_orderid}撤单成功，标记为刚刚撤单，准备重新委托")
                 
-                # ✅ 重新查询订单状态，确认是否已成交（多次查询，防止FUTU延迟推送成交消息）
-                # 等待时间增加到0.5秒，并分3次查询（每次0.2秒间隔），总计0.6秒
-                for check_attempt in range(3):
-                    sleep(0.2)  # 每次等待0.2秒
-                    new_status = self._get_order_status(original_orderid)
-                    
-                    if new_status == Status.ALLTRADED:
-                        # 订单已成交，移除（撤单前订单已经成交，或撤单后延迟推送成交）
-                        self.write_log(f"订单{original_orderid}已完全成交（第{check_attempt + 1}次查询），停止重委托并从追价列表中移除")
-                        self._safe_del_chase_order(original_orderid)
-                        return
-                    elif new_status == Status.CANCELLED:
-                        # 订单已取消（是我们刚才撤单成功的，这是正常情况）
-                        if check_attempt == 0:
-                            self.write_log(f"订单{original_orderid}撤单成功（第{check_attempt + 1}次查询，状态=CANCELLED）")
-                        # 继续查询，确保没有延迟推送的成交
-                        continue
-                    elif new_status is None:
-                        # 无法查询状态，可能是订单不存在
-                        self.write_log(f"订单{original_orderid}状态无法查询（第{check_attempt + 1}次查询）")
-                        break
-                    else:
-                        # 其他状态（如部分成交、未成交等）
-                        self.write_log(f"订单{original_orderid}状态={new_status}（第{check_attempt + 1}次查询）")
-                        break
-                
-                # 最后一次确认：如果状态是ALLTRADED，停止重委托
-                final_status = self._get_order_status(original_orderid)
-                if final_status == Status.ALLTRADED:
-                    self.write_log(f"订单{original_orderid}已完全成交（最终确认），停止重委托并从追价列表中移除")
+                # 重新查询订单状态，确认是否已成交（撤单成功后状态应该是CANCELLED，这是正常的）
+                new_status = self._get_order_status(original_orderid)
+                if new_status == Status.ALLTRADED:
+                    # 订单已成交，移除（撤单前订单已经成交）
+                    self.write_log(f"订单{original_orderid}已完全成交，停止重委托并从追价列表中移除")
                     self._safe_del_chase_order(original_orderid)
                     return
-                elif final_status == Status.CANCELLED:
-                    # 确认撤单成功，继续重新委托
-                    self.write_log(f"订单{original_orderid}撤单成功（最终确认），继续重新委托")
-                else:
-                    self.write_log(f"订单{original_orderid}最终状态={final_status}，继续尝试重新委托")
+                elif new_status == Status.CANCELLED:
+                    # 订单已取消（是我们刚才撤单成功的，这是正常情况，继续重新委托）
+                    # 注意：just_cancelled 标志已经在上面设置，所以后续检查时会继续执行
+                    self.write_log(f"订单{original_orderid}撤单成功，继续重新委托")
+                elif new_status is None:
+                    # 无法查询状态，可能是订单不存在，继续尝试重新委托
+                    self.write_log(f"订单{original_orderid}状态无法查询，继续尝试重新委托")
             
             # 3. 获取最新tick（支持主力合约到实际合约的映射）
             tick = self._get_tick_for_chase(chase_order.symbol, chase_order.exchange)
