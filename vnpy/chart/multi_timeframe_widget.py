@@ -1363,40 +1363,19 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
             # 更新主图（实时显示正在构建的K线）
             self._chart.update_bar(bar)
             
-            # ✅ 清除正在构建的大周期K线的索引范围缓存和图片缓存
-            # 因为1分钟K线更新了，大周期K线的索引范围（end_ix）也需要更新
-            if self._bg_5m and self._bg_5m.window_bar and self._item_5m:
-                if self._bg_5m.window_bar.datetime in self._item_5m._bar_range_cache:
-                    del self._item_5m._bar_range_cache[self._bg_5m.window_bar.datetime]
-                ix = self._manager_5m.get_index(self._bg_5m.window_bar.datetime) if self._manager_5m else None
-                if ix is not None and ix in self._item_5m._bar_picutures:
-                    old_picture = self._item_5m._bar_picutures.get(ix)
-                    if old_picture is not None:
-                        del old_picture
-                    self._item_5m._bar_picutures[ix] = None
-                    self._item_5m.update()
-            
-            if self._bg_1h and self._bg_1h.hour_bar and self._item_1h:
-                if self._bg_1h.hour_bar.datetime in self._item_1h._bar_range_cache:
-                    del self._item_1h._bar_range_cache[self._bg_1h.hour_bar.datetime]
-                ix = self._manager_1h.get_index(self._bg_1h.hour_bar.datetime) if self._manager_1h else None
-                if ix is not None and ix in self._item_1h._bar_picutures:
-                    old_picture = self._item_1h._bar_picutures.get(ix)
-                    if old_picture is not None:
-                        del old_picture
-                    self._item_1h._bar_picutures[ix] = None
-                    self._item_1h.update()
-            
-            if self._bg_4h and self._bg_4h.window_bar and self._item_4h:
-                if self._bg_4h.window_bar.datetime in self._item_4h._bar_range_cache:
-                    del self._item_4h._bar_range_cache[self._bg_4h.window_bar.datetime]
-                ix = self._manager_4h.get_index(self._bg_4h.window_bar.datetime) if self._manager_4h else None
-                if ix is not None and ix in self._item_4h._bar_picutures:
-                    old_picture = self._item_4h._bar_picutures.get(ix)
-                    if old_picture is not None:
-                        del old_picture
-                    self._item_4h._bar_picutures[ix] = None
-                    self._item_4h.update()
+            # ✅ 更新大周期K线（价格 + 索引范围 + 开盘价修正）
+            self._update_large_timeframe_bar(
+                bar, self._bg_5m, self._manager_5m, self._item_5m, 
+                "window_bar", Interval.MINUTE_5
+            )
+            self._update_large_timeframe_bar(
+                bar, self._bg_1h, self._manager_1h, self._item_1h, 
+                "hour_bar", Interval.HOUR
+            )
+            self._update_large_timeframe_bar(
+                bar, self._bg_4h, self._manager_4h, self._item_4h, 
+                "window_bar", Interval.HOUR_4
+            )
             
             # 强制刷新显示
             candle_plot = self._chart.get_plot("candle")
@@ -1622,6 +1601,173 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         if not all_bars:
             return None
         return all_bars[-1]
+    
+    def _get_large_timeframe_open_price(
+        self,
+        large_bar_datetime: datetime,
+        interval: Interval,
+        current_open_price: float
+    ) -> float:
+        """
+        获取大周期K线的正确开盘价
+        
+        优先级：
+        1. 数据库中该周期的历史K线开盘价
+        2. 该周期第一根1分钟K线的开盘价
+        3. BarGenerator给出的开盘价（备用）
+        
+        Args:
+            large_bar_datetime: 大周期K线的datetime
+            interval: 周期（5m/1H/4H）
+            current_open_price: BarGenerator给出的开盘价（备用）
+        
+        Returns:
+            正确的开盘价
+        """
+        from vnpy.trader.database import get_database
+        from datetime import timedelta
+        
+        # 方法1：从数据库查询该周期的K线
+        try:
+            database = get_database()
+            
+            # 计算周期结束时间（用于查询范围）
+            if interval == Interval.MINUTE_5:
+                period_end = large_bar_datetime + timedelta(minutes=5)
+            elif interval == Interval.HOUR:
+                period_end = large_bar_datetime + timedelta(hours=1)
+            elif interval == Interval.HOUR_4:
+                # 4小时周期比较复杂，需要根据HKFE规则计算
+                from vnpy.trader.period_utils import get_hkfe_4hour_period
+                _, period_end = get_hkfe_4hour_period(large_bar_datetime)
+            else:
+                period_end = large_bar_datetime + timedelta(minutes=5)
+            
+            # 查询数据库中该周期的K线
+            db_bars = database.load_bar_data(
+                symbol=self._vt_symbol,
+                exchange=self._exchange,
+                interval=interval,
+                start=large_bar_datetime,
+                end=period_end
+            )
+            
+            if db_bars and len(db_bars) > 0:
+                # 找到了历史K线，使用其开盘价
+                if hasattr(self, '_main_engine') and self._main_engine:
+                    self._main_engine.write_log(
+                        f"[多周期开盘价] {interval.value} K线({large_bar_datetime.strftime('%H:%M')}) "
+                        f"从数据库获取开盘价: {db_bars[0].open_price}"
+                    )
+                return db_bars[0].open_price
+        
+        except Exception as e:
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log(
+                    f"[多周期开盘价] 从数据库查询失败: {e}"
+                )
+        
+        # 方法2：从该周期的第一根1分钟K线获取开盘价
+        try:
+            database = get_database()
+            # 查询该周期内的第一根1分钟K线
+            bars_1m = database.load_bar_data(
+                symbol=self._vt_symbol,
+                exchange=self._exchange,
+                interval=Interval.MINUTE,
+                start=large_bar_datetime,
+                end=large_bar_datetime + timedelta(minutes=1)
+            )
+            
+            if bars_1m and len(bars_1m) > 0:
+                # 该周期的第一根1分钟K线的开盘价就是该周期的开盘价
+                if hasattr(self, '_main_engine') and self._main_engine:
+                    self._main_engine.write_log(
+                        f"[多周期开盘价] {interval.value} K线({large_bar_datetime.strftime('%H:%M')}) "
+                        f"从1分钟数据获取开盘价: {bars_1m[0].open_price}"
+                    )
+                return bars_1m[0].open_price
+        
+        except Exception as e:
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log(
+                    f"[多周期开盘价] 从1分钟数据查询失败: {e}"
+                )
+        
+        # 方法3：使用BarGenerator给出的开盘价（可能不准确）
+        if hasattr(self, '_main_engine') and self._main_engine:
+            self._main_engine.write_log(
+                f"[多周期开盘价] {interval.value} K线({large_bar_datetime.strftime('%H:%M')}) "
+                f"使用BarGenerator开盘价: {current_open_price}"
+            )
+        return current_open_price
+    
+    def _update_large_timeframe_bar(
+        self,
+        bar_1m: BarData,
+        bg: HKFEBarGenerator | None,
+        manager: BarManager | None,
+        item: CrossIndexCandleItem | None,
+        bar_attr: str,
+        interval: Interval
+    ) -> None:
+        """
+        更新大周期K线（5m/1H/4H）
+        
+        Args:
+            bar_1m: 1分钟K线
+            bg: 大周期BarGenerator
+            manager: 大周期BarManager
+            item: 大周期绘制项
+            bar_attr: BarGenerator中的bar属性名（"window_bar" 或 "hour_bar"）
+            interval: 周期（用于开盘价修正）
+        """
+        if not bg or not manager or not item:
+            return
+        
+        # 传递1分钟bar给大周期BarGenerator
+        bg.update_bar(bar_1m)
+        
+        # 获取大周期bar
+        large_bar = getattr(bg, bar_attr, None)
+        if not large_bar:
+            return
+        
+        # ✅ 修正开盘价
+        existing_bar = manager._bars.get(large_bar.datetime)
+        if existing_bar:
+            # 优先使用BarManager中已存在的开盘价（已验证正确）
+            preserved_open_price = existing_bar.open_price
+        else:
+            # 如果BarManager中没有，尝试从数据库或1分钟数据获取正确的开盘价
+            preserved_open_price = self._get_large_timeframe_open_price(
+                large_bar.datetime,
+                interval,
+                large_bar.open_price  # 备用
+            )
+        
+        # 更新 BarManager
+        manager.update_bar(large_bar)
+        
+        # 恢复/应用修正后的开盘价
+        if large_bar.datetime in manager._bars:
+            manager._bars[large_bar.datetime].open_price = preserved_open_price
+        large_bar.open_price = preserved_open_price
+        
+        # 清除索引范围缓存（因为最后一根K线的范围会不断变化）
+        if large_bar.datetime in item._bar_range_cache:
+            del item._bar_range_cache[large_bar.datetime]
+        
+        # 清除图片缓存
+        ix = manager.get_index(large_bar.datetime)
+        if ix is not None and ix in item._bar_picutures:
+            old_picture = item._bar_picutures.get(ix)
+            if old_picture is not None:
+                del old_picture
+            item._bar_picutures[ix] = None
+        
+        # 更新绘制项
+        item.update_bar(large_bar)
 
     # ---------------------------------------------------------------------
     # 画线交易功能
