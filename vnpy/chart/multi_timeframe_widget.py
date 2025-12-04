@@ -254,37 +254,39 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         
         try:
             # ============================================================
-            # 查询数据库的实际最早和最新数据（不依赖传入的 existing_bars）
+            # 使用 get_bar_overview() 直接查询数据库的实际最早和最新时间
+            # 这比加载所有数据更高效（只查询元数据，不加载数据）
             # ============================================================
             if hasattr(self, '_main_engine') and self._main_engine:
-                self._main_engine.write_log("[时区调试] 开始查询数据库的实际最早和最新数据...")
+                self._main_engine.write_log("[时区调试] 使用 get_bar_overview() 查询数据库元数据...")
             
-            # 查询最近180天的数据来确定数据库范围（覆盖大部分情况）
-            query_start = user_end - timedelta(days=180)
-            all_bars = database.load_bar_data(
-                symbol=self._vt_symbol,
-                exchange=self._exchange,
-                interval=Interval.MINUTE,
-                start=query_start,
-                end=user_end
-            )
+            # 获取数据库中所有K线数据的概览
+            overviews = database.get_bar_overview()
+            
+            # 筛选出当前合约和周期的概览
+            target_overview = None
+            for overview in overviews:
+                if (overview.symbol == self._vt_symbol and 
+                    overview.exchange == self._exchange and 
+                    overview.interval == Interval.MINUTE):
+                    target_overview = overview
+                    break
             
             # 策略1：数据库无数据 → 下载最近7天
-            if not all_bars:
+            if not target_overview or target_overview.count == 0:
                 download_start = user_end - timedelta(days=7)
                 if hasattr(self, '_main_engine') and self._main_engine:
                     self._main_engine.write_log(f"[多周期] 数据库无数据，下载最近7天: {download_start} ~ {user_end}")
                 return download_start, user_end, True
             
-            # 查询数据库中的实际最早和最新数据
-            all_bars.sort(key=lambda x: x.datetime)
-            db_earliest_raw = all_bars[0].datetime
-            db_latest_raw = all_bars[-1].datetime
+            # 获取数据库的实际最早和最新时间
+            db_earliest_raw = target_overview.start
+            db_latest_raw = target_overview.end
             
             if hasattr(self, '_main_engine') and self._main_engine:
                 self._main_engine.write_log(
-                    f"[时区调试] 查询范围: 最近180天（{query_start} ~ {user_end}），"
-                    f"找到 {len(all_bars)} 条数据"
+                    f"[时区调试] 数据库元数据: 共 {target_overview.count} 条，"
+                    f"范围 {db_earliest_raw} ~ {db_latest_raw}"
                 )
             
             # 打印原始时间戳（转换前）
