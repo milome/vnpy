@@ -4347,7 +4347,7 @@ class ChartWindow(QtWidgets.QWidget):
         symbol, exchange = extract_vt_symbol(self.current_vt_symbol)
         
         # 获取用户选择的时间范围（从UI控件）
-        user_start = self.start_date_edit.dateTime().toPython()
+        user_start = self.start_datetime.dateTime().toPython()
         end = datetime.now()
         
         self.main_engine.write_log(
