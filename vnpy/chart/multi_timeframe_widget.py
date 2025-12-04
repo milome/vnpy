@@ -1047,27 +1047,46 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         progress_callback=None
     ) -> None:
         """
-        切换合约（T030）
+        切换合约或重新加载数据（T030）
 
-        清理现有数据，重新加载新合约的数据，并重新初始化BarGenerator
+        如果合约改变：清理所有数据（包括 BarGenerator）
+        如果合约未变：只清理历史数据（保留 BarGenerator）
 
         Args:
-            vt_symbol: 新的合约代码
+            vt_symbol: 合约代码
             exchange: 交易所
             start: 开始时间
             end: 结束时间
             progress_callback: 进度回调函数，接受 (message: str, progress: int) 参数
         """
+        # 检查合约是否改变
+        symbol_changed = (
+            vt_symbol != self._vt_symbol or 
+            exchange != self._exchange
+        )
+        
+        if hasattr(self, '_main_engine') and self._main_engine:
+            if symbol_changed:
+                self._main_engine.write_log(
+                    f"[多周期切换] 合约改变: {self._vt_symbol} → {vt_symbol}，清理所有数据",
+                    "MultiTimeframeWidget"
+                )
+            else:
+                self._main_engine.write_log(
+                    f"[多周期切换] 合约未变: {vt_symbol}，只清理历史数据（保留 BarGenerator）",
+                    "MultiTimeframeWidget"
+                )
+        
         # 更新合约信息
         self._vt_symbol = vt_symbol
         self._exchange = exchange
         self._start = start
         self._end = end
 
-        # 清理现有数据（T031）
+        # 清理数据（T031）
         if progress_callback:
             progress_callback("正在清理旧数据...", 5)
-        self._cleanup_data()
+        self._cleanup_data(symbol_changed=symbol_changed)
 
         # 重新加载数据（传递进度回调）
         self._load_data_and_build_items(progress_callback)
@@ -1081,12 +1100,26 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         if progress_callback:
             progress_callback("加载完成！", 100)
 
-    def _cleanup_data(self) -> None:
+    def _cleanup_data(self, symbol_changed: bool = True) -> None:
         """
         清理现有数据（T031）
 
-        清理所有周期的BarManager、ChartItem、BarGenerator和价格线
+        Args:
+            symbol_changed: 合约是否改变
+                - True: 清理所有数据（包括 BarGenerator）
+                - False: 只清理历史数据（保留 BarGenerator）
+        
+        原因：
+        - 如果合约改变，需要完全清理并重新初始化
+        - 如果合约未变（只是重新加载时间范围），保留 BarGenerator
+        - 保留 BarGenerator 可以在数据加载期间继续处理实时 tick
         """
+        if hasattr(self, '_main_engine') and self._main_engine:
+            if symbol_changed:
+                self._main_engine.write_log("[多周期清理] 合约改变，清理所有数据（包括 BarGenerator）")
+            else:
+                self._main_engine.write_log("[多周期清理] 合约未变，只清理历史数据（保留 BarGenerator）")
+        
         # 清理BarManager数据
         if self._main_manager:
             self._main_manager.clear_all()
@@ -1109,13 +1142,6 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
             candle_plot.removeItem(self._item_4h)
             self._item_4h = None
 
-        # 清理BarGenerator实例
-        self._bg_1m = None
-        self._bg_5m = None
-        self._bg_1h = None
-        self._bg_4h = None
-        self._realtime_enabled = False
-
         # 清理图表
         self._chart.clear_all()
 
@@ -1124,6 +1150,17 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
             price_line_manager = self._chart.get_price_line_manager()
             if price_line_manager:
                 price_line_manager.clear_all()
+        
+        # 只在合约改变时清理 BarGenerator
+        if symbol_changed:
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log("[多周期清理] 清理 BarGenerator 实例")
+            
+            self._bg_1m = None
+            self._bg_5m = None
+            self._bg_1h = None
+            self._bg_4h = None
+            self._realtime_enabled = False
 
     def _reinitialize_bar_generators(self) -> None:
         """
