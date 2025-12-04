@@ -328,8 +328,10 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
                                         if take_profit_line:
                                             take_profit_info = f" 止盈@{take_profit_line.get_price():.0f}"
                         
+                        # ✅ 兼容处理：direction 可能是字符串或枚举
+                        direction_display = direction.value if hasattr(direction, 'value') else direction
                         main_engine.write_log(
-                            f"[挂单触发] {current_time} {vt_symbol} {direction.value} "
+                            f"[挂单触发] {current_time} {vt_symbol} {direction_display} "
                             f"{order_volume}手@{price}{stop_loss_info}{take_profit_info} "
                             f"(挂单线:{line_id} -> 订单:{vt_orderid}, 对手价+智能追价)",
                             "Chart"
@@ -409,8 +411,10 @@ class ChartWidgetTriggerMixin(ChartWidgetMixinBase):
             except Exception as e:
                 # 记录发送订单时的异常
                 if main_engine:
+                    # ✅ 兼容处理：direction 可能是字符串或枚举
+                    direction_display = direction.value if hasattr(direction, 'value') else direction
                     main_engine.write_log(
-                        f"[ChartWidget] [实时挂单触发失败] 发送订单时发生异常: {vt_symbol} {direction.value} "
+                        f"[ChartWidget] [实时挂单触发失败] 发送订单时发生异常: {vt_symbol} {direction_display} "
                         f"{order_volume}手@{price} (挂单线: {line_id}, 错误: {str(e)}, 当前价格: {tick.last_price})",
                         "ChartWidget"
                     )
