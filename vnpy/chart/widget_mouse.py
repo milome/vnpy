@@ -841,43 +841,6 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                             # 设置创建时间（用于防止创建后立即触发）
                             if new_line:
                                 new_line.set_creation_time()
-                                
-                                # ✅ 检查拖拽结束后，当前价格是否已经突破了新位置
-                                # 如果已经突破，设置一个拖拽保护期（1秒），防止拖拽后立即触发
-                                if hasattr(self, '_main_engine') and self._main_engine:
-                                    if hasattr(self, '_vt_symbol') and self._vt_symbol:
-                                        tick = self._main_engine.get_tick(self._vt_symbol)
-                                        if tick and tick.last_price > 0:
-                                            line_price = new_line.get_price()
-                                            line_type = new_line.get_line_type()
-                                            line_direction = new_line.get_direction()
-                                            
-                                            # 判断当前价格是否已经突破了新位置
-                                            is_breakthrough = False
-                                            if line_type == PriceLineType.STOP_LOSS:
-                                                # 止损线：多仓时价格跌破止损价，空仓时价格涨破止损价
-                                                if line_direction == "long" and tick.last_price <= line_price:
-                                                    is_breakthrough = True
-                                                elif line_direction == "short" and tick.last_price >= line_price:
-                                                    is_breakthrough = True
-                                            elif line_type == PriceLineType.TAKE_PROFIT:
-                                                # 止盈线：多仓时价格涨破止盈价，空仓时价格跌破止盈价
-                                                if line_direction == "long" and tick.last_price >= line_price:
-                                                    is_breakthrough = True
-                                                elif line_direction == "short" and tick.last_price <= line_price:
-                                                    is_breakthrough = True
-                                            
-                                            # 如果已经突破，设置拖拽保护期（500ms）
-                                            if is_breakthrough:
-                                                from time import time
-                                                if not hasattr(self, '_drag_protection_times'):
-                                                    self._drag_protection_times = {}
-                                                self._drag_protection_times[new_line_id] = time() + 0.5  # 500ms保护期
-                                                self._main_engine.write_log(
-                                                    f"[ChartWidget] 从入场线拖拽创建后检测到价格已突破，设置500ms保护期: {new_line_id} "
-                                                    f"(当前价: {tick.last_price:.2f}, 线价: {line_price:.2f})",
-                                                    "ChartWidget"
-                                                )
                             if new_line and self._first_plot:
                                 self._first_plot.addItem(new_line)
                                 
@@ -1083,43 +1046,6 @@ class ChartWidgetMouseMixin(ChartWidgetMixinBase):
                             # 无论是刚创建的（已激活）还是之前创建的，
                             # 拖拽后都重新设置 creation_time（防止拖拽后立即触发）
                             dragging_line.set_creation_time()
-                            
-                            # ✅ 检查拖拽结束后，当前价格是否已经突破了新位置
-                            # 如果已经突破，设置一个拖拽保护期（1秒），防止拖拽后立即触发
-                            if dragged_line_id and hasattr(self, '_main_engine') and self._main_engine:
-                                if hasattr(self, '_vt_symbol') and self._vt_symbol:
-                                    tick = self._main_engine.get_tick(self._vt_symbol)
-                                    if tick and tick.last_price > 0:
-                                        line_price = dragging_line.get_price()
-                                        line_type = dragging_line.get_line_type()
-                                        line_direction = dragging_line.get_direction()
-                                        
-                                        # 判断当前价格是否已经突破了新位置
-                                        is_breakthrough = False
-                                        if line_type == PriceLineType.STOP_LOSS:
-                                            # 止损线：多仓时价格跌破止损价，空仓时价格涨破止损价
-                                            if line_direction == "long" and tick.last_price <= line_price:
-                                                is_breakthrough = True
-                                            elif line_direction == "short" and tick.last_price >= line_price:
-                                                is_breakthrough = True
-                                        elif line_type == PriceLineType.TAKE_PROFIT:
-                                            # 止盈线：多仓时价格涨破止盈价，空仓时价格跌破止盈价
-                                            if line_direction == "long" and tick.last_price >= line_price:
-                                                is_breakthrough = True
-                                            elif line_direction == "short" and tick.last_price <= line_price:
-                                                is_breakthrough = True
-                                        
-                                        # 如果已经突破，设置拖拽保护期（500ms）
-                                        if is_breakthrough:
-                                            from time import time
-                                            if not hasattr(self, '_drag_protection_times'):
-                                                self._drag_protection_times = {}
-                                            self._drag_protection_times[dragged_line_id] = time() + 0.5  # 500ms保护期
-                                            self._main_engine.write_log(
-                                                f"[ChartWidget] 拖拽结束检测到价格已突破，设置500ms保护期: {dragged_line_id} "
-                                                f"(当前价: {tick.last_price:.2f}, 线价: {line_price:.2f})",
-                                                "ChartWidget"
-                                            )
             
             event.accept()
             return
