@@ -3049,14 +3049,14 @@ class ChartWindow(QtWidgets.QWidget):
 
         # 如果当前是多周期模式，将tick数据路由到MultiTimeframeWidget（T035, T036）
         if self.display_mode == "multi" and self.multi_timeframe_widget:
-            self.main_engine.write_log(
-                f"[Tick路由] 多周期模式，路由tick到MultiTimeframeWidget - "
-                f"价格: {tick.last_price}, 时间: {tick.datetime}",
-                "ChartWindow"
-            )
+            # self.main_engine.write_log(
+            #     f"[Tick路由] 多周期模式，路由tick到MultiTimeframeWidget - "
+            #     f"价格: {tick.last_price}, 时间: {tick.datetime}",
+            #     "ChartWindow"
+            # )
             if hasattr(self.multi_timeframe_widget, 'update_tick'):
                 self.multi_timeframe_widget.update_tick(tick)
-                self.main_engine.write_log("[Tick路由] update_tick() 已调用", "ChartWindow")
+                # self.main_engine.write_log("[Tick路由] update_tick() 已调用", "ChartWindow")
             else:
                 self.main_engine.write_log("[Tick路由] ⚠️ MultiTimeframeWidget 没有 update_tick 方法", "ChartWindow")
             # 注意：多周期模式下，单周期模式的实时更新逻辑仍然执行

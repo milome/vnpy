@@ -1146,13 +1146,29 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         创建多级BarGenerator，用于从Tick数据实时合成各周期K线
         """
         if self._realtime_enabled:
+            if hasattr(self, '_main_engine') and self._main_engine:
+                self._main_engine.write_log("[多周期实时] 实时更新已启用，跳过重复初始化")
             return
+        
+        if hasattr(self, '_main_engine') and self._main_engine:
+            self._main_engine.write_log(
+                f"[多周期实时] 开始启用实时更新 - "
+                f"manager_5m: {self._manager_5m is not None}, "
+                f"manager_1h: {self._manager_1h is not None}, "
+                f"manager_4h: {self._manager_4h is not None}"
+            )
 
         # 创建1分钟BarGenerator
         self._bg_1m = BarGenerator(
             on_bar=self._on_1m_bar,
             interval=Interval.MINUTE
         )
+        
+        if hasattr(self, '_main_engine') and self._main_engine:
+            self._main_engine.write_log(
+                f"[多周期实时] 创建1分钟BarGenerator - "
+                f"on_bar: {self._on_1m_bar.__name__}, interval: {Interval.MINUTE}"
+            )
 
         # 创建5分钟BarGenerator
         # 注意：on_bar是1分钟K线回调（这里不需要），on_window_bar是合成K线回调
@@ -1205,11 +1221,11 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         Args:
             tick: Tick数据
         """
-        if hasattr(self, '_main_engine') and self._main_engine:
-            self._main_engine.write_log(
-                f"[多周期Tick] 收到tick - 价格: {tick.last_price}, 时间: {tick.datetime}, "
-                f"realtime_enabled: {self._realtime_enabled}, bg_1m: {self._bg_1m is not None}"
-            )
+        # if hasattr(self, '_main_engine') and self._main_engine:
+        #     self._main_engine.write_log(
+        #         f"[多周期Tick] 收到tick - 价格: {tick.last_price}, 时间: {tick.datetime}, "
+        #         f"realtime_enabled: {self._realtime_enabled}, bg_1m: {self._bg_1m is not None}"
+        #     )
         
         if not self._realtime_enabled or not self._bg_1m:
             if hasattr(self, '_main_engine') and self._main_engine:
@@ -1219,8 +1235,8 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
             return
 
         # 传递给1分钟BarGenerator，触发级联更新
-        if hasattr(self, '_main_engine') and self._main_engine:
-            self._main_engine.write_log("[多周期Tick] 传递给 bg_1m.update_tick()")
+        # if hasattr(self, '_main_engine') and self._main_engine:
+        #     self._main_engine.write_log("[多周期Tick] 传递给 bg_1m.update_tick()")
         
         self._bg_1m.update_tick(tick)
 
