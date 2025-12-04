@@ -138,6 +138,7 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
         self._open_price_cache: dict[datetime, float] = {}  # 1分钟开盘价
         self._large_timeframe_open_price_cache: dict[tuple[Interval, datetime], float] = {}  # 大周期开盘价
         self._last_corrected_minute: datetime | None = None
+        self._logged_open_prices: set[tuple[Interval, datetime]] = set()  # 已打印日志的开盘价
         
         # 4小时开盘价参考线
         self._current_4h_open_price: float | None = None  # 当前4小时周期的开盘价
@@ -1788,15 +1789,19 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
             return
         
         # ✅ 修正开盘价
+        log_key = (interval, large_bar.datetime)
         existing_bar = manager._bars.get(large_bar.datetime)
         if existing_bar:
             # 优先使用BarManager中已存在的开盘价（已验证正确）
             preserved_open_price = existing_bar.open_price
-            if hasattr(self, '_main_engine') and self._main_engine:
-                self._main_engine.write_log(
-                    f"[多周期开盘价] {interval.value} K线({large_bar.datetime.strftime('%H:%M')}) "
-                    f"从历史数据获取开盘价: {preserved_open_price}"
-                )
+            # 只在第一次打印日志（避免每个tick都打印）
+            if log_key not in self._logged_open_prices:
+                self._logged_open_prices.add(log_key)
+                if hasattr(self, '_main_engine') and self._main_engine:
+                    self._main_engine.write_log(
+                        f"[多周期开盘价] {interval.value} K线({large_bar.datetime.strftime('%H:%M')}) "
+                        f"从历史数据获取开盘价: {preserved_open_price}"
+                    )
         else:
             # 如果BarManager中没有，尝试从数据库或1分钟数据获取正确的开盘价
             preserved_open_price = self._get_large_timeframe_open_price(
@@ -1804,6 +1809,8 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
                 interval,
                 large_bar.open_price  # 备用
             )
+            # 标记为已打印（_get_large_timeframe_open_price内部已打印）
+            self._logged_open_prices.add(log_key)
         
         # 更新 BarManager
         manager.update_bar(large_bar)
@@ -1878,10 +1885,10 @@ class MultiTimeframeWidget(QtWidgets.QWidget):
             # 向右延伸60根K线（1小时）
             end_ix = current_ix + 60
             
-            # 创建黄色虚线
+            # 创建黄色虚线（线宽与4小时K线一致）
             pen = QtGui.QPen(
                 QtGui.QColor(255, 215, 0),  # 金黄色
-                2,  # 线宽
+                PEN_WIDTH + 2,  # 线宽与4小时K线一致（PEN_WIDTH=1, 所以线宽=3）
                 QtCore.Qt.DashLine  # 虚线
             )
             
